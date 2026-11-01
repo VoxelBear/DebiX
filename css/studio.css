@@ -133,9 +133,41 @@ input[type="color"].ed-color{
   border:1.5px solid var(--ed-border);border-radius:99px;padding:5px 14px;
   font:700 11px var(--f);color:#cbd5e1;white-space:nowrap;
   box-shadow:0 4px 16px rgba(0,0,0,.4);max-width:calc(100vw - 650px);
-  overflow:hidden;text-overflow:ellipsis;
+  overflow:hidden;text-overflow:ellipsis;z-index:30;
 }
 .ed-helpbar b{color:#56f0ff}
+
+/* 3D Item & Accessory Studio Viewport Frame (like 2D Studio) */
+#itemStudioOverlay{
+  position:absolute;top:8px;bottom:8px;left:288px;right:358px;
+  border:2px solid #00a2ff;border-radius:14px;
+  box-shadow:0 0 0 9999px rgba(8,10,16,.42), inset 0 0 28px rgba(0,162,255,.18);
+  pointer-events:none;z-index:28;display:flex;flex-direction:column;
+  justify-content:space-between;overflow:hidden;
+}
+#itemStudioOverlay[hidden]{display:none !important}
+.item-studio-header{
+  pointer-events:auto;background:rgba(17,20,29,.94);
+  border-bottom:1.5px solid rgba(0,162,255,.45);padding:7px 12px;
+  display:flex;align-items:center;justify-content:space-between;
+  gap:8px;flex-wrap:wrap;backdrop-filter:blur(8px);
+}
+.item-studio-title{
+  display:flex;align-items:center;gap:8px;font:900 12px var(--f);color:#fff;
+}
+.badge-3d{
+  background:linear-gradient(135deg,#00a2ff,#8e44ad);color:#fff;
+  padding:3px 7px;border-radius:5px;font:900 10px var(--f);letter-spacing:.05em;
+}
+.item-studio-actions{
+  display:flex;align-items:center;gap:5px;flex-wrap:wrap;
+}
+.item-studio-subbar{
+  pointer-events:none;background:rgba(14,17,25,.88);
+  border-top:1px solid rgba(0,162,255,.3);padding:5px 12px;
+  font:700 10.5px var(--f);color:#94a3b8;text-align:center;
+}
+.item-studio-subbar b{color:#56f0ff}
 
 /* 2D Print Studio Modal (With Eyedropper, Flood Fill & Alpha Support) */
 #paintModal{

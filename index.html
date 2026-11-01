@@ -82,6 +82,7 @@
       <button class="ed-btn" id="gizmoScale" type="button" title="Масштаб / Размер (R)">📐 Размер (R)</button>
       <button class="ed-btn" id="btnSnapToggle" type="button" title="Привязка к сетке">🧲 Сетка: 🔴</button>
       <button class="ed-btn" id="btnColliderVis" type="button" title="Показать 3D коллайдеры">🔲 Коллайдеры: 🔴</button>
+      <button class="ed-btn" id="openItemStudioBtn" type="button" title="Открыть изолированную 3D Студию предметов и аксессуаров">🛠️ 3D Студия</button>
       <button class="ed-btn" id="openFacePaintBtn" type="button" title="Открыть 2D Студию принтов и партиклов">🎨 2D Студия</button>
       <button class="ed-btn icon-only" id="dupObjBtn" type="button" title="Дублировать (Ctrl+D)">📋</button>
       <button class="ed-btn danger icon-only" id="delObjBtn" type="button" title="Удалить выбранный объект (Delete)">🗑️</button>
@@ -140,6 +141,27 @@
     <!-- Center Viewport Help Bar -->
     <div class="ed-helpbar">
       <b>ЛКМ</b> — выбрать · <b>СКМ (Зажать)</b> — панорама · <b>ПКМ + WASD/QE</b> — полёт · <b>W/E/R</b> — Гизмо · <b>Ctrl+Z</b> — Отмена
+    </div>
+
+    <!-- Isolated 3D Item & Accessory Studio Viewport Frame (like 2D Studio) -->
+    <div id="itemStudioOverlay" hidden>
+      <div class="item-studio-header">
+        <div class="item-studio-title">
+          <span class="badge-3d">3D STUDIO</span>
+          <b id="itemStudioSubjectTitle">🗡️ Редактор Предмета</b>
+        </div>
+        <div class="item-studio-actions">
+          <button class="ed-btn" id="btnISCamFront" type="button" title="Вид спереди">👁️ Спереди</button>
+          <button class="ed-btn" id="btnISCamSide" type="button" title="Вид сбоку">👁️ Сбоку</button>
+          <button class="ed-btn" id="btnISCamIso" type="button" title="Изометрический вид 3/4">🎥 Вид 3/4</button>
+          <button class="ed-btn active" id="btnISMannequin" type="button" title="Показать/скрыть манекен для примерки в руке или на теле">🧍 Манекен: 🟢</button>
+          <button class="ed-btn" id="btnISPlaceInWorld" type="button" title="Перейти к перемещению предмета на карте мира">📍 На карте</button>
+          <button class="ed-btn apply-oneclick" id="btnCloseItemStudio" type="button">✅ Готово (В Мир)</button>
+        </div>
+      </div>
+      <div class="item-studio-subbar">
+        <span>💡 Изолированное 3D-пространство: моделируй до 16 примитивов, настраивай <b>Настоящий/Псевдо-свет</b>, <b>Частицы</b> и <b>Точки хвата</b> без помех сцены!</span>
+      </div>
     </div>
 
     <!-- Right Sidebar: Inspector -->

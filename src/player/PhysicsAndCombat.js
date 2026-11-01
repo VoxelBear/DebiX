@@ -944,7 +944,7 @@ export function releaseChargedThrow() {
   if (!item || item.useType !== 'throwable') return;
 
   const maxChg = Math.max(0.25, Number(item.maxChargeTime) || 1.1);
-  const ratio = clamp(S.throwChargeT / maxChg, 0.1, 1.0);
+  const ratio = clamp(S.throwChargeT / maxChg, 0.0, 1.0);
   S.throwChargeT = 0;
 
   const minSpd = Number(item.minThrowSpeed) || 8;
@@ -1019,11 +1019,16 @@ export function performPlayerMeleeAttack(isSpecialKey = false) {
 
   // 3. Факел (включение/выключение свечения)
   if (item && item.useType === 'torch') {
-    item.lightData.enabled = !item.lightData.enabled;
+    const nextState = !(item.lightData && (item.lightData.realLight || item.lightData.pseudoLight || item.lightData.enabled));
+    if (!item.lightData) item.lightData = {};
+    item.lightData.enabled = nextState;
+    item.lightData.realLight = nextState;
+    item.lightData.pseudoLight = nextState;
+    syncEntityHeldItemMesh(player);
     sfx.jump();
-    showBanner(`🔦 Факел «${item.name}»: ${item.lightData.enabled ? 'Включён 💡' : 'Погашен'}`, '#ffce3a');
+    showBanner(`🔦 Факел «${item.name}»: ${nextState ? 'Включён 💡' : 'Погашен'}`, '#ffce3a');
     player.attackCooldown = 0.25;
-    if (item.lightData.enabled) {
+    if (nextState) {
       consumeItemDurability(player, item, Number(item.durabilityCostPerUse) || 2);
     }
     return;
@@ -1337,11 +1342,12 @@ function updateAimTrajectoryAndTorch(player, dt) {
       updateShopUI();
     }
 
-    if ((held.passiveDecayPerSec || 0) > 0 && (!held.lightData || held.lightData.enabled !== false)) {
+    const isLightActive = !!(held.lightData && (held.lightData.realLight || held.lightData.enabled));
+    if ((held.passiveDecayPerSec || 0) > 0 && isLightActive) {
       consumeItemDurability(player, held, held.passiveDecayPerSec * dt);
     }
 
-    if (held.lightData && held.lightData.enabled) {
+    if (isLightActive) {
       tLight.color.set(held.lightData.color || '#ff9f43');
       tLight.intensity = Number(held.lightData.intensity) || 2.0;
       tLight.distance = Number(held.lightData.distance) || 16;
@@ -1365,12 +1371,12 @@ function updateAimTrajectoryAndTorch(player, dt) {
     ch.classList.toggle('firing', !!(player.attackAnimT > 0.1 && player.attackStyle === 'shoot'));
   }
 
-  // Шкала замаха метательного предмета при удержании ЛКМ
-  let chargeRatio = 1.0;
+  // Шкала замаха метательного предмета: изначально 0% (минимальная траектория), растёт при удержании ЛКМ
+  let chargeRatio = 0.0;
   if (S.isChargingThrow && held && held.useType === 'throwable' && S.state === 'play' && !S.playerDead) {
     S.throwChargeT += dt;
     const maxChg = Math.max(0.25, Number(held.maxChargeTime) || 1.1);
-    chargeRatio = clamp(S.throwChargeT / maxChg, 0.1, 1.0);
+    chargeRatio = clamp(S.throwChargeT / maxChg, 0.0, 1.0);
     const pct = Math.min(100, Math.round((S.throwChargeT / maxChg) * 100));
     hud.hidden = false;
     $('throwChargeLbl').textContent = `🎯 СИЛА БРОСКА: ${pct}%`;
@@ -1397,11 +1403,9 @@ function updateAimTrajectoryAndTorch(player, dt) {
   }
 
   const { origin, dir } = computeMuzzleAndAim(player, held);
-  let spd = Number(held.projSpeed) || 30;
-  if (S.isChargingThrow) {
-    const minSpd = Number(held.minThrowSpeed) || 8;
-    spd = minSpd + (spd - minSpd) * chargeRatio;
-  }
+  const minSpd = Number(held.minThrowSpeed) || 8;
+  const maxSpd = Math.max(minSpd + 2, Number(held.projSpeed) || 26);
+  const spd = minSpd + (maxSpd - minSpd) * chargeRatio;
 
   const vx = dir.x * spd;
   const vy = dir.y * spd;

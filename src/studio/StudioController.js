@@ -8,7 +8,9 @@ import {
   normalizeCosmeticItem,
   normalizeItemData,
   normalizeCharacterGripPoints,
-  buildItemGroup
+  buildItemGroup,
+  createRobloxRig,
+  createStarterItemTemplate
 } from '../core/CharacterRig.js';
 import { addSceneBlock, rebuildPhysicsArrays } from '../core/WorldRegistry.js';
 import {
@@ -40,6 +42,337 @@ const MAX_UNDO_STEPS = 25;
 // Отдельные изолированные стеки отмены для конструктора аксессуаров и конструктора предметов
 const cosmeticUndoStack = [];
 const itemUndoStack = [];
+
+// Изолированная 3D-Студия предметов и аксессуаров (на манер 2D STUDIO)
+export const ITEM_STUDIO_ORIGIN = new THREE.Vector3(0, 650, 0);
+let itemStudioStageGroup = null;
+let studioMannequinRig = null;
+let savedMapCamera = null;
+let activeStudioWorldEntry = null;
+let activeStudioCharEnt = null;
+
+function ensureItemStudioStage() {
+  if (itemStudioStageGroup) return itemStudioStageGroup;
+
+  itemStudioStageGroup = new THREE.Group();
+  itemStudioStageGroup.position.copy(ITEM_STUDIO_ORIGIN);
+  itemStudioStageGroup.visible = false;
+
+  // 1. Изолированный купол 3D-мастерской (отсекает основной мир от камеры)
+  const domeGeo = new THREE.SphereGeometry(42, 28, 20);
+  const domeMat = new THREE.MeshBasicMaterial({
+    color: 0x0b0f19,
+    side: THREE.BackSide
+  });
+  const dome = new THREE.Mesh(domeGeo, domeMat);
+  dome.userData.noCollider = true;
+  itemStudioStageGroup.add(dome);
+
+  // 2. Подиум-пьедестал с неоновым ободом и координатной сеткой
+  const pedGeo = new THREE.CylinderGeometry(3.5, 3.9, 0.36, 40);
+  const pedMat = new THREE.MeshStandardMaterial({
+    color: 0x151b29,
+    roughness: 0.45,
+    metalness: 0.25
+  });
+  const pedestal = new THREE.Mesh(pedGeo, pedMat);
+  pedestal.position.set(0, -0.18, 0);
+  pedestal.receiveShadow = true;
+  pedestal.userData.noCollider = true;
+  itemStudioStageGroup.add(pedestal);
+
+  const rimGeo = new THREE.TorusGeometry(3.52, 0.045, 12, 48);
+  const rimMat = new THREE.MeshBasicMaterial({ color: 0x00a2ff });
+  const rim = new THREE.Mesh(rimGeo, rimMat);
+  rim.rotation.x = Math.PI / 2;
+  rim.position.set(0, 0.01, 0);
+  rim.userData.noCollider = true;
+  itemStudioStageGroup.add(rim);
+
+  const grid = new THREE.GridHelper(6.6, 16, 0x00a2ff, 0x26334d);
+  grid.position.set(0, 0.015, 0);
+  grid.userData.noCollider = true;
+  itemStudioStageGroup.add(grid);
+
+  // 3. Собственное студийное освещение внутри 3D-мастерской
+  const keyLight = new THREE.PointLight(0xffffff, 1.35, 34);
+  keyLight.position.set(4.5, 6.5, 5.5);
+  itemStudioStageGroup.add(keyLight);
+
+  const fillLight = new THREE.PointLight(0x70cfff, 0.85, 30);
+  fillLight.position.set(-4.5, 4.0, -4.5);
+  itemStudioStageGroup.add(fillLight);
+
+  // 4. Манекен R6 для наглядной примерки оружия (1 и 2 руки) на пьедестале
+  studioMannequinRig = createRobloxRig(
+    {
+      head: 0x94a3b8,
+      torso: 0x334155,
+      armL: 0x94a3b8,
+      armR: 0x94a3b8,
+      legL: 0x1e293b,
+      legR: 0x1e293b
+    },
+    1.0,
+    false
+  );
+  studioMannequinRig.g.position.set(-1.95, 0.02, 0);
+  studioMannequinRig.g.rotation.y = 0.25;
+  studioMannequinRig.g.traverse(o => {
+    o.userData.noCollider = true;
+  });
+  itemStudioStageGroup.add(studioMannequinRig.g);
+
+  scene.add(itemStudioStageGroup);
+  return itemStudioStageGroup;
+}
+
+function setCharacterBodyMeshesVisible(rig, visible) {
+  if (!rig) return;
+  const limbs = [rig.head, rig.torso, rig.armL, rig.armR, rig.legL, rig.legR];
+  for (const limb of limbs) {
+    if (!limb) continue;
+    for (const ch of limb.children) {
+      // Оставляем сокеты аксессуаров видимыми, скрывая только саму геометрию тела
+      if (ch.isMesh && !ch.userData?.cosmeticItem) {
+        ch.visible = visible;
+      }
+    }
+  }
+}
+
+export function syncItemStudioPreview() {
+  if (!S.itemStudioOpen) return;
+  ensureItemStudioStage();
+  const showMannequin = S.itemStudioShowMannequin !== false;
+  const btnMan = $('btnISMannequin');
+  if (btnMan) {
+    btnMan.textContent = showMannequin ? '🧍 Манекен: 🟢' : '🧍 Манекен: 🔴';
+    btnMan.classList.toggle('active', showMannequin);
+  }
+
+  if (S.workbenchPreviewGroup && S.workbenchPreviewGroup.parent) {
+    S.workbenchPreviewGroup.parent.remove(S.workbenchPreviewGroup);
+  }
+  S.workbenchPreviewGroup = null;
+
+  const ref = S.selectedRef;
+  if (!ref) return;
+
+  if (ref.kind === 'world_item' && ref.worldEntry) {
+    const wi = ref.worldEntry;
+    const item = normalizeItemData(wi.item);
+    activeStudioWorldEntry = wi;
+
+    // Центрируем редактируемый предмет на пьедестале 3D STUDIO (не меняя его мировые координаты wi.x/y/z!)
+    if (wi.group) {
+      wi.group.position.set(ITEM_STUDIO_ORIGIN.x, ITEM_STUDIO_ORIGIN.y + 1.25, ITEM_STUDIO_ORIGIN.z);
+      wi.group.rotation.set(0, 0, 0);
+      wi.group.updateMatrixWorld(true);
+    }
+    if (wi.tag) wi.tag.visible = false;
+
+    if ($('itemStudioSubjectTitle')) {
+      $('itemStudioSubjectTitle').textContent = `${item.icon || '🗡️'} ${item.name} — 3D STUDIO`;
+    }
+    if ($('btnISPlaceInWorld')) {
+      $('btnISPlaceInWorld').hidden = false;
+    }
+
+    // Показываем манекен рядом с предметом с живым превью хвата в руке / 2 руках
+    if (studioMannequinRig) {
+      studioMannequinRig.g.visible = showMannequin;
+      if (showMannequin) {
+        const previewMesh = buildItemGroup(item, {
+          isProjectile: false,
+          showMarkers: false,
+          applyGripOffset: true
+        });
+        if (item.holdMode === 'carried') {
+          studioMannequinRig.armL.rotation.set(-1.35, -0.28, 0.08);
+          studioMannequinRig.armR.rotation.set(-1.35, 0.28, -0.08);
+          studioMannequinRig.carrySocket.add(previewMesh);
+        } else {
+          studioMannequinRig.armL.rotation.set(0, 0, 0);
+          studioMannequinRig.armR.rotation.set(-Math.PI / 2, 0, 0);
+          studioMannequinRig.handSocketR.add(previewMesh);
+        }
+        studioMannequinRig.g.updateMatrixWorld(true);
+        S.workbenchPreviewGroup = previewMesh;
+      }
+    }
+  } else if (ref.kind === 'cosmetic' && ref.ent && ref.item) {
+    const { ent, item } = ref;
+    activeStudioCharEnt = ent;
+    if (studioMannequinRig) studioMannequinRig.g.visible = false;
+    if ($('btnISPlaceInWorld')) $('btnISPlaceInWorld').hidden = true;
+    if ($('itemStudioSubjectTitle')) {
+      const ico = item.parentSlot === 'pet' ? '🐾' : '🎩';
+      $('itemStudioSubjectTitle').textContent = `${ico} ${item.name} (${ent.name}) — 3D STUDIO`;
+    }
+
+    if (ent.rig && ent.rig.g) {
+      ent.rig.g.position.set(ITEM_STUDIO_ORIGIN.x, ITEM_STUDIO_ORIGIN.y + 0.02, ITEM_STUDIO_ORIGIN.z);
+      ent.rig.g.rotation.set(0, 0, 0);
+      setCharacterBodyMeshesVisible(ent.rig, showMannequin);
+      if (ent.tag) ent.tag.visible = false;
+
+      // Если редактируем питомца и манекен выключен — ставим питомца прямо в центр пьедестала
+      if (item.parentSlot === 'pet' && ref.group) {
+        const sc = Math.max(0.1, ent.rig.g.scale.x || 1);
+        if (showMannequin) {
+          const dist = Math.max(0.8, Number(item.petDistance) ?? 2.2);
+          const height = Number(item.petHeight) ?? 1.5;
+          ref.group.position.set(dist / sc, height / sc, 0);
+        } else {
+          ref.group.position.set(0, 1.25 / sc, 0);
+        }
+        ref.group.rotation.set(0, 0, 0);
+      }
+      ent.rig.g.updateMatrixWorld(true);
+    }
+  }
+}
+
+export function setItemStudioCameraPreset(preset = 'iso') {
+  ensureItemStudioStage();
+  let focusTarget = new THREE.Vector3(ITEM_STUDIO_ORIGIN.x, ITEM_STUDIO_ORIGIN.y + 1.35, ITEM_STUDIO_ORIGIN.z);
+
+  if (S.selectedRef && S.selectedRef.kind === 'cosmetic' && S.selectedRef.group) {
+    S.selectedRef.group.updateMatrixWorld(true);
+    S.selectedRef.group.getWorldPosition(focusTarget);
+  }
+
+  if (preset === 'front') {
+    S.edYaw = 0;
+    S.edPitch = -0.12;
+    S.edCamPos.set(focusTarget.x, focusTarget.y + 0.35, focusTarget.z + 3.2);
+  } else if (preset === 'side') {
+    S.edYaw = Math.PI / 2;
+    S.edPitch = -0.12;
+    S.edCamPos.set(focusTarget.x + 3.2, focusTarget.y + 0.35, focusTarget.z);
+  } else {
+    S.edYaw = 0.48;
+    S.edPitch = -0.26;
+    const dist = 3.4;
+    const fwd = new THREE.Vector3(
+      -Math.sin(S.edYaw) * Math.cos(S.edPitch),
+      Math.sin(S.edPitch),
+      -Math.cos(S.edYaw) * Math.cos(S.edPitch)
+    );
+    S.edCamPos.copy(focusTarget).addScaledVector(fwd, -dist);
+  }
+}
+
+export function restoreItemStudioSubjectsToWorld() {
+  if (S.workbenchPreviewGroup && S.workbenchPreviewGroup.parent) {
+    S.workbenchPreviewGroup.parent.remove(S.workbenchPreviewGroup);
+  }
+  S.workbenchPreviewGroup = null;
+
+  if (activeStudioWorldEntry) {
+    const wi = activeStudioWorldEntry;
+    activeStudioWorldEntry = null;
+    if (S.worldItems.includes(wi)) {
+      if (wi.tag) wi.tag.visible = true;
+      rebuildWorldItemVisual(wi, false);
+    }
+  }
+
+  if (activeStudioCharEnt) {
+    const ent = activeStudioCharEnt;
+    activeStudioCharEnt = null;
+    if (ent.rig) {
+      setCharacterBodyMeshesVisible(ent.rig, true);
+      if (ent.tag) ent.tag.visible = true;
+      attachRigToEntity(ent);
+    }
+  }
+}
+
+export function openItemStudio3D(ref = S.selectedRef) {
+  ensureItemStudioStage();
+  if (S.itemStudioShowMannequin === undefined) {
+    S.itemStudioShowMannequin = true;
+  }
+
+  const wasOpen = !!S.itemStudioOpen;
+  if (!wasOpen) {
+    savedMapCamera = {
+      pos: S.edCamPos.clone(),
+      yaw: S.edYaw,
+      pitch: S.edPitch
+    };
+  }
+
+  // Если меняем редактируемый объект внутри студии — возвращаем предыдущий на карту
+  if (activeStudioWorldEntry && (!ref || ref.worldEntry !== activeStudioWorldEntry)) {
+    restoreItemStudioSubjectsToWorld();
+  }
+  if (activeStudioCharEnt && (!ref || ref.ent !== activeStudioCharEnt)) {
+    restoreItemStudioSubjectsToWorld();
+  }
+
+  S.itemStudioOpen = true;
+  itemStudioStageGroup.visible = true;
+  if ($('itemStudioOverlay')) $('itemStudioOverlay').hidden = false;
+  if ($('openItemStudioBtn')) $('openItemStudioBtn').classList.add('active');
+
+  syncItemStudioPreview();
+  if (!wasOpen) {
+    setItemStudioCameraPreset('iso');
+  }
+}
+
+export function closeItemStudio3D(switchToMapPlacement = false) {
+  if (!S.itemStudioOpen) return;
+  const prevRef = S.selectedRef;
+
+  S.itemStudioOpen = false;
+  if (itemStudioStageGroup) itemStudioStageGroup.visible = false;
+  if ($('itemStudioOverlay')) $('itemStudioOverlay').hidden = true;
+  if ($('openItemStudioBtn')) $('openItemStudioBtn').classList.remove('active');
+
+  restoreItemStudioSubjectsToWorld();
+
+  if (savedMapCamera) {
+    S.edCamPos.copy(savedMapCamera.pos);
+    S.edYaw = savedMapCamera.yaw;
+    S.edPitch = savedMapCamera.pitch;
+    savedMapCamera = null;
+  }
+
+  if (switchToMapPlacement && prevRef && prevRef.kind === 'world_item' && prevRef.worldEntry) {
+    selectEditorObject({
+      kind: 'world_item',
+      worldEntry: prevRef.worldEntry,
+      item: prevRef.worldEntry.item,
+      editMode: 'root',
+      partIdx: 0,
+      libIdx: prevRef.libIdx,
+      inWorldPlacement: true
+    });
+    focusOnSelected();
+    showBanner('📍 Режим размещения на карте: двигай предмет в мире стрелками Гизмо!', '#00e676');
+    return;
+  }
+
+  if (prevRef && prevRef.kind === 'cosmetic' && prevRef.ent) {
+    selectEditorObject({ kind: 'char', ent: prevRef.ent });
+  } else if (prevRef && prevRef.kind === 'world_item' && prevRef.worldEntry) {
+    selectEditorObject({
+      kind: 'world_item',
+      worldEntry: prevRef.worldEntry,
+      item: prevRef.worldEntry.item,
+      editMode: 'root',
+      partIdx: 0,
+      libIdx: prevRef.libIdx,
+      inWorldPlacement: true
+    });
+  } else {
+    selectEditorObject(null);
+  }
+}
 
 export function clearCosmeticUndoStack() {
   cosmeticUndoStack.length = 0;
@@ -118,7 +451,7 @@ export function pushItemUndoState(actionLabel = 'Изменение предме
     itemUndoStack.push({
       label: actionLabel,
       worldEntry,
-      editMode: editMode || 'root',
+      editMode: editMode || 'part',
       partIdx: partIdx || 0,
       libIdx,
       x: worldEntry.x,
@@ -176,7 +509,7 @@ export function pushUndoState(actionLabel = 'Действие') {
     pushCosmeticUndoState(actionLabel);
     return;
   }
-  if (S.selectedRef && S.selectedRef.kind === 'world_item' && S.selectedRef.editMode !== 'root') {
+  if (S.selectedRef && S.selectedRef.kind === 'world_item' && (S.itemStudioOpen || S.selectedRef.editMode !== 'root')) {
     pushItemUndoState(actionLabel);
     return;
   }
@@ -226,6 +559,10 @@ export function undoLastStudioAction() {
     return;
   }
 
+  if (S.itemStudioOpen) {
+    closeItemStudio3D(false);
+  }
+
   const prev = S.undoStack.pop();
   tControls.detach();
   selBoxHelper.visible = false;
@@ -240,7 +577,16 @@ export function undoLastStudioAction() {
       if (foundBox) restoredRef = { kind: 'block', box: foundBox };
     } else if (prev.selKey.kind === 'world_item') {
       const foundWi = S.worldItems.find(w => w.id === prev.selKey.id);
-      if (foundWi) restoredRef = { kind: 'world_item', worldEntry: foundWi, item: foundWi.item, editMode: 'root', partIdx: 0 };
+      if (foundWi) {
+        restoredRef = {
+          kind: 'world_item',
+          worldEntry: foundWi,
+          item: foundWi.item,
+          editMode: 'root',
+          partIdx: 0,
+          inWorldPlacement: true
+        };
+      }
     } else if (prev.selKey.kind === 'char') {
       if (prev.selKey.isP && S.player) {
         restoredRef = { kind: 'char', ent: S.player };
@@ -278,6 +624,67 @@ export function initStudioController() {
   }
   if ($('btnColliderVis')) {
     $('btnColliderVis').textContent = S.showColliders ? '🔲 Коллайдеры: 🟢' : '🔲 Коллайдеры: 🔴';
+  }
+
+  // Кнопки управления изолированной 3D STUDIO предметов и аксессуаров
+  if ($('openItemStudioBtn')) {
+    $('openItemStudioBtn').onclick = () => {
+      if (S.itemStudioOpen) {
+        closeItemStudio3D(false);
+        return;
+      }
+      if (S.selectedRef && (S.selectedRef.kind === 'world_item' || S.selectedRef.kind === 'cosmetic')) {
+        S.selectedRef.inWorldPlacement = false;
+        if (S.selectedRef.kind === 'world_item' && S.selectedRef.editMode === 'root') {
+          S.selectedRef.editMode = 'part';
+        }
+        selectEditorObject(S.selectedRef, true);
+        return;
+      }
+      if (S.worldItems.length > 0) {
+        const lastWi = S.worldItems[S.worldItems.length - 1];
+        selectEditorObject({
+          kind: 'world_item',
+          worldEntry: lastWi,
+          item: lastWi.item,
+          editMode: 'part',
+          partIdx: 0
+        });
+        return;
+      }
+      // Если в сцене ещё нет предметов — создаём стартовый меч и сразу открываем в 3D STUDIO
+      const itemData = createStarterItemTemplate('sword');
+      const px = S.player ? S.player.x + 2.2 : 0;
+      const py = S.player ? S.player.y + 0.6 : 1.5;
+      const pz = S.player ? S.player.z : 0;
+      const wi = spawnWorldItem(itemData, px, py, pz);
+      selectEditorObject({
+        kind: 'world_item',
+        worldEntry: wi,
+        item: wi.item,
+        editMode: 'part',
+        partIdx: 0
+      });
+    };
+  }
+
+  if ($('btnISCamFront')) $('btnISCamFront').onclick = () => setItemStudioCameraPreset('front');
+  if ($('btnISCamSide')) $('btnISCamSide').onclick = () => setItemStudioCameraPreset('side');
+  if ($('btnISCamIso')) $('btnISCamIso').onclick = () => setItemStudioCameraPreset('iso');
+  if ($('btnISMannequin')) {
+    $('btnISMannequin').onclick = () => {
+      S.itemStudioShowMannequin = S.itemStudioShowMannequin === false;
+      syncItemStudioPreview();
+      if (S.selectedRef && S.selectedRef.mesh) {
+        selBoxHelper.setFromObject(S.selectedRef.mesh);
+      }
+    };
+  }
+  if ($('btnISPlaceInWorld')) {
+    $('btnISPlaceInWorld').onclick = () => closeItemStudio3D(true);
+  }
+  if ($('btnCloseItemStudio')) {
+    $('btnCloseItemStudio').onclick = () => closeItemStudio3D(false);
   }
 
   tControls.addEventListener('dragging-changed', e => {
@@ -365,7 +772,7 @@ export function initStudioController() {
       const { worldEntry, item, editMode, mesh, part } = S.selectedRef;
       if (!worldEntry || !item) return;
 
-      if (!editMode || editMode === 'root') {
+      if ((!editMode || editMode === 'root') && !S.itemStudioOpen) {
         worldEntry.x = worldEntry.group.position.x;
         worldEntry.y = worldEntry.group.position.y;
         worldEntry.z = worldEntry.group.position.z;
@@ -387,6 +794,7 @@ export function initStudioController() {
         part.sz = mesh.scale.z;
         mesh.updateMatrixWorld(true);
         selBoxHelper.setFromObject(mesh);
+        if (S.itemStudioOpen) syncItemStudioPreview();
       } else if (editMode === 'grip' && mesh) {
         item.gripPoint.x = -mesh.position.x;
         item.gripPoint.y = -mesh.position.y;
@@ -396,6 +804,7 @@ export function initStudioController() {
         item.gripPoint.rz = mesh.rotation.z;
         mesh.updateMatrixWorld(true);
         selBoxHelper.visible = false;
+        if (S.itemStudioOpen) syncItemStudioPreview();
       } else if (editMode === 'muzzle' && mesh) {
         item.muzzlePoint.x = mesh.position.x;
         item.muzzlePoint.y = mesh.position.y;
@@ -484,7 +893,7 @@ export function toggleStudioMode(forceState) {
       S.selectedRef.ent.rig.setGripMarkersVisible(true);
     }
 
-    if (S.player) {
+    if (S.player && !S.itemStudioOpen) {
       S.edCamPos.set(S.player.x + 8, S.player.y + 7, S.player.z + 12);
       S.edYaw = 0.55;
       S.edPitch = -0.35;
@@ -493,6 +902,9 @@ export function toggleStudioMode(forceState) {
     renderInspectorUI();
     showBanner('🛠️ DebiX Studio 3D! СКМ — панорама, ПКМ+WASD — полёт, Ctrl+Z — контекстная отмена.', '#56f0ff');
   } else {
+    if (S.itemStudioOpen) {
+      closeItemStudio3D(false);
+    }
     hideAllCharacterGripMarkers();
     for (const wi of S.worldItems) {
       rebuildWorldItemVisual(wi, false);
@@ -537,6 +949,25 @@ export function selectEditorObject(ref, keepUndoStack = false) {
   const nextWiEntry = ref && ref.kind === 'world_item' ? ref.worldEntry : null;
   if (prevWiEntry && prevWiEntry !== nextWiEntry && S.worldItems.includes(prevWiEntry)) {
     rebuildWorldItemVisual(prevWiEntry, false);
+  }
+
+  // Определяем, должно ли быть открыто изолированное окно 3D STUDIO
+  const shouldOpen3DStudio =
+    !!ref &&
+    (ref.kind === 'cosmetic' || (ref.kind === 'world_item' && !ref.inWorldPlacement));
+
+  if (!shouldOpen3DStudio && S.itemStudioOpen) {
+    S.itemStudioOpen = false;
+    if (itemStudioStageGroup) itemStudioStageGroup.visible = false;
+    if ($('itemStudioOverlay')) $('itemStudioOverlay').hidden = true;
+    if ($('openItemStudioBtn')) $('openItemStudioBtn').classList.remove('active');
+    restoreItemStudioSubjectsToWorld();
+    if (savedMapCamera) {
+      S.edCamPos.copy(savedMapCamera.pos);
+      S.edYaw = savedMapCamera.yaw;
+      S.edPitch = savedMapCamera.pitch;
+      savedMapCamera = null;
+    }
   }
 
   hideAllCharacterGripMarkers();
@@ -605,6 +1036,8 @@ export function selectEditorObject(ref, keepUndoStack = false) {
     ref.part = part;
     ref.mesh = mesh;
 
+    openItemStudio3D(ref);
+
     if (mesh) {
       mesh.updateMatrixWorld(true);
       tControls.attach(mesh);
@@ -616,9 +1049,13 @@ export function selectEditorObject(ref, keepUndoStack = false) {
     const { worldEntry } = ref;
     const item = normalizeItemData(worldEntry.item);
     ref.item = item;
-    if (!ref.editMode) ref.editMode = 'root';
+    if (!ref.editMode) ref.editMode = ref.inWorldPlacement ? 'root' : 'part';
 
     rebuildWorldItemVisual(worldEntry, true);
+    if (shouldOpen3DStudio) {
+      openItemStudio3D(ref);
+    }
+
     const rootGroup = worldEntry.group;
 
     // Если редактируем примитивы снаряда (proj_part), создаём наглядное превью снаряда перед дулом
@@ -670,6 +1107,10 @@ export function selectEditorObject(ref, keepUndoStack = false) {
 
 export function focusOnSelected() {
   if (!S.selectedRef) return;
+  if (S.itemStudioOpen) {
+    setItemStudioCameraPreset('iso');
+    return;
+  }
   let obj = null;
   if (S.selectedRef.kind === 'block') obj = S.selectedRef.box.m;
   else if (S.selectedRef.kind === 'char') obj = S.selectedRef.ent.rig.g;
@@ -755,7 +1196,7 @@ export function duplicateSelected() {
     const copyData = JSON.parse(JSON.stringify(item));
     copyData.id = 'item_' + Date.now();
     const newWi = spawnWorldItem(copyData, worldEntry.x + 1.8, worldEntry.y, worldEntry.z);
-    selectEditorObject({ kind: 'world_item', worldEntry: newWi, item: newWi.item, editMode: 'root', partIdx: 0 });
+    selectEditorObject({ kind: 'world_item', worldEntry: newWi, item: newWi.item, editMode: 'part', partIdx: 0 });
     sfx.jump();
   } else if (S.selectedRef.kind === 'char') {
     pushUndoState('Дублирование NPC');
@@ -841,6 +1282,9 @@ export function deleteSelected() {
       }
     }
 
+    if (S.itemStudioOpen) {
+      closeItemStudio3D(false);
+    }
     pushUndoState('Удаление предмета со сцены');
     if (worldEntry.group) scene.remove(worldEntry.group);
     if (worldEntry.tag) scene.remove(worldEntry.tag);
@@ -886,6 +1330,9 @@ export function deleteSelected() {
       return;
     }
 
+    if (S.itemStudioOpen) {
+      closeItemStudio3D(false);
+    }
     S.selectedRef = { kind: 'char', ent };
     pushUndoState('Удаление аксессуара');
     const arr = ent.preset.customCosmetics || [];

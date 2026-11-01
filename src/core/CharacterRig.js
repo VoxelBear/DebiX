@@ -242,10 +242,11 @@ export function getSharedPrimitiveGeo(shape = 'box') {
   return geo;
 }
 
-export function getSharedPrimitiveMat(colorHex = '#ffce3a', emissiveHex = null) {
+export function getSharedPrimitiveMat(colorHex = '#ffce3a', emissiveHex = null, emissiveInt = 1.2) {
   const normCol = (colorHex || '#ffce3a').toLowerCase();
   const normEm = emissiveHex ? emissiveHex.toLowerCase() : '';
-  const key = `${normCol}|${normEm}`;
+  const normInt = normEm ? Number(emissiveInt || 1.2).toFixed(2) : '0';
+  const key = `${normCol}|${normEm}|${normInt}`;
   if (SHARED_MAT_CACHE[key]) return SHARED_MAT_CACHE[key];
 
   const mat = new THREE.MeshStandardMaterial({
@@ -256,10 +257,46 @@ export function getSharedPrimitiveMat(colorHex = '#ffce3a', emissiveHex = null) 
   });
   if (normEm) {
     mat.emissive.set(normEm);
-    mat.emissiveIntensity = 1.2;
+    mat.emissiveIntensity = Number(emissiveInt) || 1.2;
   }
   SHARED_MAT_CACHE[key] = mat;
   return mat;
+}
+
+export function createDefaultPartParticleData(defaultColor = '#ffffff') {
+  return {
+    enabled: false,
+    preset: 'spark',     // 'spark' | 'fire' | 'heart' | 'star' | 'smoke' | 'hit' | 'custom'
+    texDataURL: null,
+    color: defaultColor || '#ffffff',
+    rate: 10,
+    lifetime: 1.1,
+    sizeStart: 0.32,
+    sizeEnd: 0.05,
+    speed: 2.2,
+    dirX: 0,
+    dirY: 1,
+    dirZ: 0,
+    spread: 0.65,
+    gravity: -0.8,
+    rotSpeed: 2.0,
+    flicker: 0.1,
+    fadeOut: true
+  };
+}
+
+export function normalizePartEffects(pt, defaultPseudo = false, defaultReal = false) {
+  if (!pt) return pt;
+  pt.pseudoLight = pt.pseudoLight !== undefined ? !!pt.pseudoLight : !!defaultPseudo;
+  pt.realLight = pt.realLight !== undefined ? !!pt.realLight : !!defaultReal;
+  pt.lightColor = pt.lightColor || pt.color || '#ffce3a';
+  pt.lightIntensity = pt.lightIntensity !== undefined ? Number(pt.lightIntensity) : 1.5;
+  pt.lightDistance = pt.lightDistance !== undefined ? Number(pt.lightDistance) : 14;
+  pt.particleData = Object.assign(
+    createDefaultPartParticleData(pt.color || '#ffffff'),
+    pt.particleData || {}
+  );
+  return pt;
 }
 
 // Кратчайшая угловая интерполяция без скачка через -PI / +PI
@@ -324,6 +361,9 @@ export function normalizeCosmeticItem(item) {
     ];
   } else if (item.parts.length > MAX_COSMETIC_PARTS) {
     item.parts.length = MAX_COSMETIC_PARTS;
+  }
+  for (let i = 0; i < item.parts.length; i++) {
+    normalizePartEffects(item.parts[i], false, false);
   }
   return item;
 }
@@ -455,15 +495,34 @@ export function normalizeItemData(item) {
     };
   }
 
-  // Свечение / Факел
+  // Свечение предмета (Настоящий свет и Псевдо-свет) + Эмиттер частиц предмета
   if (!item.lightData) {
+    const isTorch = item.useType === 'torch';
     item.lightData = {
-      enabled: item.useType === 'torch',
+      enabled: isTorch,
+      realLight: isTorch,
+      pseudoLight: isTorch,
       color: '#ff9f43',
       intensity: 1.8,
       distance: 16
     };
+  } else {
+    if (item.lightData.realLight === undefined) {
+      item.lightData.realLight = !!item.lightData.enabled;
+    }
+    if (item.lightData.pseudoLight === undefined) {
+      item.lightData.pseudoLight = !!item.lightData.enabled;
+    }
+    item.lightData.enabled = !!(item.lightData.realLight || item.lightData.enabled);
+    item.lightData.color = item.lightData.color || '#ff9f43';
+    item.lightData.intensity = Number(item.lightData.intensity) || 1.8;
+    item.lightData.distance = Number(item.lightData.distance) || 16;
   }
+
+  item.particleData = Object.assign(
+    createDefaultPartParticleData(item.lightData.color || '#ff9f43'),
+    item.particleData || {}
+  );
 
   // Примитивы самого предмета (до 16 штук)
   if (!Array.isArray(item.parts) || item.parts.length === 0) {
@@ -482,6 +541,10 @@ export function normalizeItemData(item) {
   } else if (item.parts.length > MAX_ITEM_PARTS) {
     item.parts.length = MAX_ITEM_PARTS;
   }
+  for (let i = 0; i < item.parts.length; i++) {
+    const isTorchTip = item.useType === 'torch' && i === item.parts.length - 1;
+    normalizePartEffects(item.parts[i], isTorchTip, isTorchTip);
+  }
 
   // Примитивы снаряда (до 16 штук) — для огнестрела и метательного оружия
   if (!Array.isArray(item.projectileParts) || item.projectileParts.length === 0) {
@@ -494,11 +557,15 @@ export function normalizeItemData(item) {
         rx: 0, ry: 0, rz: 0,
         sx: 0.45, sy: 0.45, sz: 0.45,
         color: '#ffce3a',
-        texDataURL: null
+        texDataURL: null,
+        pseudoLight: true
       }
     ];
   } else if (item.projectileParts.length > MAX_ITEM_PARTS) {
     item.projectileParts.length = MAX_ITEM_PARTS;
+  }
+  for (let i = 0; i < item.projectileParts.length; i++) {
+    normalizePartEffects(item.projectileParts[i], true, false);
   }
 
   return item;
@@ -555,12 +622,12 @@ export function createStarterItemTemplate(presetType = 'sword') {
       parts: [
         { id: uid(), name: 'Рукоять', shape: 'box', x: 0, y: -0.05, z: 0.06, rx: 0.22, ry: 0, rz: 0, sx: 0.32, sy: 0.72, sz: 0.38, color: '#2c3e50' },
         { id: uid(), name: 'Корпус', shape: 'box', x: 0, y: 0.18, z: -0.32, rx: 0, ry: 0, rz: 0, sx: 0.42, sy: 0.45, sz: 1.4, color: '#ecf0f1' },
-        { id: uid(), name: 'Энерго-ядро', shape: 'cylinder', x: 0, y: 0.22, z: -0.35, rx: Math.PI / 2, ry: 0, rz: 0, sx: 0.48, sy: 0.7, sz: 0.48, color: '#00e676' },
+        { id: uid(), name: 'Энерго-ядро', shape: 'cylinder', x: 0, y: 0.22, z: -0.35, rx: Math.PI / 2, ry: 0, rz: 0, sx: 0.48, sy: 0.7, sz: 0.48, color: '#00e676', pseudoLight: true, lightColor: '#00e676', lightIntensity: 1.6 },
         { id: uid(), name: 'Ствол', shape: 'cylinder', x: 0, y: 0.18, z: -0.78, rx: Math.PI / 2, ry: 0, rz: 0, sx: 0.25, sy: 0.65, sz: 0.25, color: '#56f0ff' }
       ],
       projectileParts: [
-        { id: uid(), name: 'Плазма-заряд', shape: 'cylinder', x: 0, y: 0, z: 0, rx: Math.PI / 2, ry: 0, rz: 0, sx: 0.28, sy: 1.1, sz: 0.28, color: '#00ff88' },
-        { id: uid(), name: 'Ореол', shape: 'sphere', x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 0.45, sy: 0.45, sz: 0.45, color: '#56f0ff' }
+        { id: uid(), name: 'Плазма-заряд', shape: 'cylinder', x: 0, y: 0, z: 0, rx: Math.PI / 2, ry: 0, rz: 0, sx: 0.28, sy: 1.1, sz: 0.28, color: '#00ff88', pseudoLight: true, realLight: true, lightColor: '#00ff88', lightDistance: 10 },
+        { id: uid(), name: 'Ореол', shape: 'sphere', x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 0.45, sy: 0.45, sz: 0.45, color: '#56f0ff', pseudoLight: true }
       ]
     });
   }
@@ -589,11 +656,38 @@ export function createStarterItemTemplate(presetType = 'sword') {
       parts: [
         { id: uid(), name: 'Древко', shape: 'cylinder', x: 0, y: 0.1, z: -0.2, rx: -0.35, ry: 0, rz: 0, sx: 0.22, sy: 2.6, sz: 0.22, color: '#6d4c41' },
         { id: uid(), name: 'Оправа', shape: 'torus', x: 0, y: 0.85, z: -0.45, rx: -0.35, ry: 0, rz: 0, sx: 0.65, sy: 0.65, sz: 0.65, color: '#ffd700' },
-        { id: uid(), name: 'Кристалл Огня', shape: 'sphere', x: 0, y: 0.85, z: -0.45, rx: 0, ry: 0, rz: 0, sx: 0.55, sy: 0.55, sz: 0.55, color: '#ff3e3e' }
+        {
+          id: uid(),
+          name: 'Кристалл Огня',
+          shape: 'sphere',
+          x: 0, y: 0.85, z: -0.45,
+          rx: 0, ry: 0, rz: 0,
+          sx: 0.55, sy: 0.55, sz: 0.55,
+          color: '#ff3e3e',
+          pseudoLight: true,
+          realLight: true,
+          lightColor: '#ff3e3e',
+          lightIntensity: 1.8,
+          lightDistance: 12,
+          particleData: { enabled: true, preset: 'spark', color: '#ff6b6b', rate: 8, lifetime: 0.9, sizeStart: 0.26, sizeEnd: 0.04, speed: 1.6, spread: 0.8, gravity: 0.5 }
+        }
       ],
       projectileParts: [
-        { id: uid(), name: 'Огненное ядро', shape: 'sphere', x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 0.7, sy: 0.7, sz: 0.7, color: '#ff3e3e' },
-        { id: uid(), name: 'Хвост пламени', shape: 'cone', x: 0, y: 0, z: 0.35, rx: Math.PI / 2, ry: 0, rz: 0, sx: 0.55, sy: 0.9, sz: 0.55, color: '#ffce3a' }
+        {
+          id: uid(),
+          name: 'Огненное ядро',
+          shape: 'sphere',
+          x: 0, y: 0, z: 0,
+          rx: 0, ry: 0, rz: 0,
+          sx: 0.7, sy: 0.7, sz: 0.7,
+          color: '#ff3e3e',
+          pseudoLight: true,
+          realLight: true,
+          lightColor: '#ff5252',
+          lightDistance: 14,
+          particleData: { enabled: true, preset: 'fire', color: '#ff9f43', rate: 16, lifetime: 0.55, sizeStart: 0.36, sizeEnd: 0.05, speed: 1.5, spread: 0.9, gravity: 1.0 }
+        },
+        { id: uid(), name: 'Хвост пламени', shape: 'cone', x: 0, y: 0, z: 0.35, rx: Math.PI / 2, ry: 0, rz: 0, sx: 0.55, sy: 0.9, sz: 0.55, color: '#ffce3a', pseudoLight: true }
       ]
     });
   }
@@ -621,11 +715,32 @@ export function createStarterItemTemplate(presetType = 'sword') {
       parts: [
         { id: uid(), name: 'Корпус бомбы', shape: 'sphere', x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 0.65, sy: 0.65, sz: 0.65, color: '#22252a' },
         { id: uid(), name: 'Запал', shape: 'cylinder', x: 0, y: 0.26, z: 0, rx: 0, ry: 0, rz: 0, sx: 0.25, sy: 0.25, sz: 0.25, color: '#ffce3a' },
-        { id: uid(), name: 'Искра', shape: 'sphere', x: 0, y: 0.38, z: 0, rx: 0, ry: 0, rz: 0, sx: 0.22, sy: 0.22, sz: 0.22, color: '#ff3e3e' }
+        {
+          id: uid(),
+          name: 'Искра',
+          shape: 'sphere',
+          x: 0, y: 0.38, z: 0,
+          rx: 0, ry: 0, rz: 0,
+          sx: 0.22, sy: 0.22, sz: 0.22,
+          color: '#ff3e3e',
+          pseudoLight: true,
+          lightColor: '#ffce3a',
+          particleData: { enabled: true, preset: 'spark', color: '#ffce3a', rate: 9, lifetime: 0.55, sizeStart: 0.2, sizeEnd: 0.03, speed: 2.0, spread: 1.0, gravity: -1.5 }
+        }
       ],
       projectileParts: [
-        { id: uid(), name: 'Корпус бомбы', shape: 'sphere', x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 0.65, sy: 0.65, sz: 0.65, color: '#22252a' },
-        { id: uid(), name: 'Искра', shape: 'sphere', x: 0, y: 0.32, z: 0, rx: 0, ry: 0, rz: 0, sx: 0.28, sy: 0.28, sz: 0.28, color: '#ff3e3e' }
+        { id: uid(), name: 'Корпус бомбы', shape: 'sphere', x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 0.65, sy: 0.65, sz: 0.65, color: '#22252a', pseudoLight: false },
+        {
+          id: uid(),
+          name: 'Искра',
+          shape: 'sphere',
+          x: 0, y: 0.32, z: 0,
+          rx: 0, ry: 0, rz: 0,
+          sx: 0.28, sy: 0.28, sz: 0.28,
+          color: '#ff3e3e',
+          pseudoLight: true,
+          particleData: { enabled: true, preset: 'spark', color: '#ffce3a', rate: 14, lifetime: 0.5, sizeStart: 0.24, sizeEnd: 0.04, speed: 2.2, spread: 1.1, gravity: -1.5 }
+        }
       ]
     });
   }
@@ -662,11 +777,25 @@ export function createStarterItemTemplate(presetType = 'sword') {
       maxDurability: 100,
       durability: 100,
       passiveDecayPerSec: 1.5,
-      lightData: { enabled: true, color: '#ff9f43', intensity: 2.2, distance: 18 },
+      lightData: { enabled: true, realLight: true, pseudoLight: true, color: '#ff9f43', intensity: 2.2, distance: 18 },
       gripPoint: { x: 0, y: 0.15, z: 0, rx: -0.25, ry: 0, rz: 0 },
       parts: [
         { id: uid(), name: 'Рукоять факела', shape: 'cylinder', x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 0.26, sy: 1.4, sz: 0.26, color: '#6d4c41' },
-        { id: uid(), name: 'Пламя', shape: 'cone', x: 0, y: 0.55, z: 0, rx: 0, ry: 0, rz: 0, sx: 0.42, sy: 0.65, sz: 0.42, color: '#ff9f43' }
+        {
+          id: uid(),
+          name: 'Пламя',
+          shape: 'cone',
+          x: 0, y: 0.55, z: 0,
+          rx: 0, ry: 0, rz: 0,
+          sx: 0.42, sy: 0.65, sz: 0.42,
+          color: '#ff9f43',
+          pseudoLight: true,
+          realLight: true,
+          lightColor: '#ff9f43',
+          lightIntensity: 2.2,
+          lightDistance: 18,
+          particleData: { enabled: true, preset: 'fire', color: '#ff9f43', rate: 12, lifetime: 0.85, sizeStart: 0.34, sizeEnd: 0.05, speed: 2.0, dirX: 0, dirY: 1, dirZ: 0, spread: 0.45, gravity: 1.2 }
+        }
       ]
     });
   }
@@ -738,23 +867,47 @@ export function buildItemGroup(item, opts = {}) {
 
   const srcParts = isProjectile ? (item.projectileParts || item.parts) : item.parts;
   const count = Math.min(MAX_ITEM_PARTS, srcParts.length);
+  const isTorchOff =
+    item.useType === 'torch' &&
+    item.lightData &&
+    !item.lightData.realLight &&
+    !item.lightData.pseudoLight &&
+    !item.lightData.enabled;
 
   for (let i = 0; i < count; i++) {
-    const pt = srcParts[i];
+    const pt = normalizePartEffects(srcParts[i], isProjectile, false);
     const geo = getSharedPrimitiveGeo(pt.shape || 'box');
-    const isGlowing = isProjectile || (item.lightData && item.lightData.enabled && i === count - 1);
-    const mat = pt.texDataURL
-      ? new THREE.MeshStandardMaterial({ color: pt.color || '#ffce3a', roughness: 0.35, metalness: 0.2, side: THREE.DoubleSide })
-      : getSharedPrimitiveMat(pt.color || '#ffce3a', isGlowing ? (pt.color || '#ffce3a') : null);
+    const itemHasPseudo = !isProjectile && item.lightData && item.lightData.pseudoLight && i === count - 1;
+    const isGlowing = !isTorchOff && (pt.pseudoLight || pt.realLight || itemHasPseudo);
+    const glowHex = isGlowing ? (pt.lightColor || pt.color || item.lightData?.color || '#ffce3a') : null;
+    const glowInt = isGlowing ? (Number(pt.lightIntensity) || Number(item.lightData?.intensity) || 1.4) : 0;
+
+    let mat;
+    if (pt.texDataURL) {
+      mat = new THREE.MeshStandardMaterial({
+        color: pt.color || '#ffce3a',
+        roughness: 0.35,
+        metalness: 0.2,
+        side: THREE.DoubleSide
+      });
+      if (isGlowing && glowHex) {
+        mat.emissive.set(glowHex);
+        mat.emissiveIntensity = glowInt;
+      }
+    } else {
+      mat = getSharedPrimitiveMat(pt.color || '#ffce3a', glowHex, glowInt);
+    }
 
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(pt.x || 0, pt.y || 0, pt.z || 0);
     mesh.rotation.set(pt.rx || 0, pt.ry || 0, pt.rz || 0);
     mesh.scale.set(pt.sx ?? 1, pt.sy ?? 1, pt.sz ?? 1);
-    mesh.castShadow = !isProjectile;
+    mesh.castShadow = !isProjectile && !isGlowing;
     mesh.receiveShadow = !isProjectile;
     mesh.userData.noCollider = true;
     mesh.userData.itemPart = pt;
+    mesh.userData.effectPart = pt;
+    mesh.userData.effectOwnerItem = item;
     mesh.userData.itemPartIdx = i;
     mesh.userData.isProjectilePart = isProjectile;
 
@@ -865,25 +1018,36 @@ export function createStarterPetItem(index = 1) {
 }
 
 export function buildPrimitiveMesh(part, item, partIdx, group) {
+  normalizePartEffects(part, false, false);
   const geo = getSharedPrimitiveGeo(part.shape || 'box');
+  const isGlowing = !!(part.pseudoLight || part.realLight);
+  const glowHex = isGlowing ? (part.lightColor || part.color || '#ffce3a') : null;
+  const glowInt = isGlowing ? (Number(part.lightIntensity) || 1.5) : 0;
+
   const mat = new THREE.MeshStandardMaterial({
     color: part.color || '#ffce3a',
     roughness: 0.35,
     metalness: 0.2,
     side: THREE.DoubleSide
   });
+  if (isGlowing && glowHex) {
+    mat.emissive.set(glowHex);
+    mat.emissiveIntensity = glowInt;
+  }
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(part.x || 0, part.y || 0, part.z || 0);
   mesh.rotation.set(part.rx || 0, part.ry || 0, part.rz || 0);
   mesh.scale.set(part.sx ?? 1, part.sy ?? 1, part.sz ?? 1);
-  mesh.castShadow = true;
+  mesh.castShadow = !isGlowing;
   mesh.receiveShadow = true;
 
   // Строго визуальный меш без физического коллайдера
   mesh.userData.noCollider = true;
   mesh.userData.cosmeticItem = item;
   mesh.userData.cosmeticPart = part;
+  mesh.userData.effectPart = part;
+  mesh.userData.effectOwnerItem = item;
   mesh.userData.cosmeticPartIdx = partIdx;
   mesh.userData.cosmeticGroup = group;
 

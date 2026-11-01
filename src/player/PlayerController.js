@@ -396,7 +396,9 @@ export function initInputControls() {
             return;
           }
         }
-        selectEditorObject(null);
+        if (!S.itemStudioOpen) {
+          selectEditorObject(null);
+        }
       }
       return;
     }

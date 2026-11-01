@@ -4,7 +4,7 @@ import { sfx } from '../core/AudioEngine.js';
 import { createStarterItemTemplate } from '../core/CharacterRig.js';
 import { addSceneBlock, addCheckpointBlock, rebuildPhysicsArrays } from '../core/WorldRegistry.js';
 import { spawnCustomNPC, spawnWorldItem } from '../core/EntityManager.js';
-import { selectEditorObject, focusOnSelected, pushUndoState } from './StudioController.js';
+import { selectEditorObject, focusOnSelected, pushUndoState, closeItemStudio3D } from './StudioController.js';
 
 function getBlockHierarchyIcon(b) {
   if (b.checkpointData && b.checkpointData.enabled) return '⭐';
@@ -51,7 +51,7 @@ export function refreshHierarchyUI() {
     }
   }
 
-  // Предметы, оружие и переносимые контейнеры в мире
+  // Предметы, оружие и переносимых контейнеры в мире
   if (filter === 'all' || filter === 'items') {
     for (let i = S.worldItems.length - 1; i >= 0; i--) {
       const wi = S.worldItems[i];
@@ -100,10 +100,9 @@ export function refreshHierarchyUI() {
             kind: 'world_item',
             worldEntry,
             item: worldEntry.item,
-            editMode: 'root',
+            editMode: 'part',
             partIdx: 0
           });
-          focusOnSelected();
         }
       } else {
         const ent = hid === 'player'
@@ -135,17 +134,34 @@ export function initHierarchyAndSpawn() {
 
   document.querySelectorAll('.spawn-card').forEach(card => {
     card.addEventListener('click', () => {
-      pushUndoState('Спавн объекта');
       const st = card.dataset.spawn;
-      const fwd = new THREE.Vector3(
-        -Math.sin(S.edYaw) * Math.cos(S.edPitch),
-        Math.sin(S.edPitch),
-        -Math.cos(S.edYaw) * Math.cos(S.edPitch)
-      );
-      const sp = S.edCamPos.clone().addScaledVector(fwd, 8);
-      sp.x = Math.round(sp.x * 2) / 2;
-      sp.y = Math.max(1.0, Math.round(sp.y * 2) / 2);
-      sp.z = Math.round(sp.z * 2) / 2;
+      const isItemSpawn = !!(st && st.startsWith('item_'));
+
+      // Если мы были в 3D STUDIO и спавним обычный блок/NPC — сначала закрываем 3D STUDIO, чтобы заспавнить на карте
+      if (S.itemStudioOpen && !isItemSpawn) {
+        closeItemStudio3D(false);
+      }
+
+      pushUndoState('Спавн объекта');
+
+      let sp;
+      if (S.itemStudioOpen && S.player) {
+        sp = new THREE.Vector3(
+          Math.round((S.player.x + 2.2) * 2) / 2,
+          Math.max(1.0, Math.round((S.player.y + 0.5) * 2) / 2),
+          Math.round(S.player.z * 2) / 2
+        );
+      } else {
+        const fwd = new THREE.Vector3(
+          -Math.sin(S.edYaw) * Math.cos(S.edPitch),
+          Math.sin(S.edPitch),
+          -Math.cos(S.edYaw) * Math.cos(S.edPitch)
+        );
+        sp = S.edCamPos.clone().addScaledVector(fwd, 8);
+        sp.x = Math.round(sp.x * 2) / 2;
+        sp.y = Math.max(1.0, Math.round(sp.y * 2) / 2);
+        sp.z = Math.round(sp.z * 2) / 2;
+      }
 
       if (st === 'npc') {
         const npc = spawnCustomNPC({ x: sp.x, y: sp.y, z: sp.z });
@@ -155,8 +171,8 @@ export function initHierarchyAndSpawn() {
         return;
       }
 
-      // Спавн предметов, оружия и переносимых контейнеров (Этап 4)
-      if (st && st.startsWith('item_')) {
+      // Спавн предметов, оружия и переносимых контейнеров (открывает 3D STUDIO!)
+      if (isItemSpawn) {
         const presetKey = st.replace('item_', '');
         const itemData = createStarterItemTemplate(presetKey);
         const worldEntry = spawnWorldItem(itemData, sp.x, sp.y + 0.5, sp.z);
@@ -164,11 +180,11 @@ export function initHierarchyAndSpawn() {
           kind: 'world_item',
           worldEntry,
           item: worldEntry.item,
-          editMode: 'root',
+          editMode: 'part',
           partIdx: 0
         });
         sfx.coil();
-        showBanner(`${itemData.icon} Создан предмет «${itemData.name}»! Настрой его 16 примитивов, снаряд и точки хвата справа.`, '#00e676');
+        showBanner(`${itemData.icon} Открыта 3D STUDIO для «${itemData.name}»! Настрой внешний вид, свечение, частицы и свойства справа.`, '#00e676');
         return;
       }
 

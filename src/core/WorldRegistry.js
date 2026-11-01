@@ -6,8 +6,9 @@ import { makeTagSprite, updateTag } from './CharacterRig.js';
 import { createDefaultParticleData, clearAllParticles } from './ParticleSystem.js';
 
 // Оптимизированный пул реальных источников света (PointLight) — исключает перекомпиляцию шейдеров и просадку FPS
-const MAX_ACTIVE_POINT_LIGHTS = 8;
+const MAX_ACTIVE_POINT_LIGHTS = 12;
 const pointLightPool = [];
+const _vWorldLightPos = new THREE.Vector3();
 
 function ensurePointLightPool() {
   if (pointLightPool.length > 0) return;
@@ -80,11 +81,29 @@ export function syncBlockLightVisuals(box) {
   }
 }
 
-// Обновление пульсации свечения и распределение пула PointLight по ближайшим к камере светящимся блокам
+// Обновление пульсации свечения и распределение пула PointLight по ближайшим к камере светящимся блокам, предметам и аксессуарам
 export function updateWorldLights(camPos) {
   ensurePointLightPool();
   const t = S.time || (performance.now() * 0.001);
   const pointCandidates = [];
+
+  const pushRealLightCandidate = (worldPos, colorHex, intensity, distance, pulseMult = 1.0) => {
+    const dx = camPos ? worldPos.x - camPos.x : 0;
+    const dy = camPos ? worldPos.y - camPos.y : 0;
+    const dz = camPos ? worldPos.z - camPos.z : 0;
+    const distSq = dx * dx + dy * dy + dz * dz;
+    const maxRange = (Number(distance) || 14) + 55;
+    if (distSq <= maxRange * maxRange) {
+      pointCandidates.push({
+        pos: worldPos.clone(),
+        color: colorHex || '#ffffff',
+        intensity: Number(intensity) || 1.5,
+        distance: Number(distance) || 14,
+        distSq,
+        pulseMult
+      });
+    }
+  };
 
   for (let i = 0; i < S.allBlocks.length; i++) {
     const box = S.allBlocks[i];
@@ -102,17 +121,93 @@ export function updateWorldLights(camPos) {
     }
 
     if (ld.mode === 'point') {
-      const p = box.m.position;
-      const dx = camPos ? p.x - camPos.x : 0;
-      const dy = camPos ? p.y - camPos.y : 0;
-      const dz = camPos ? p.z - camPos.z : 0;
-      const distSq = dx * dx + dy * dy + dz * dz;
-      const maxRange = (Number(ld.distance) || 14) + 55;
-      if (distSq <= maxRange * maxRange) {
-        pointCandidates.push({ box, ld, distSq, pulseMult });
-      }
+      pushRealLightCandidate(
+        box.m.position,
+        ld.color || box.colorHex || '#ffffff',
+        ld.intensity,
+        ld.distance,
+        pulseMult
+      );
     }
   }
+
+  // Сбор реальных источников света (realLight) с примитивов предметов, снарядов и аксессуаров
+  const collectGroupRealLights = group => {
+    if (!group || !group.visible) return;
+    const ownerItem = group.userData?.itemData;
+    if (
+      ownerItem &&
+      ownerItem.useType === 'torch' &&
+      ownerItem.lightData &&
+      !ownerItem.lightData.realLight &&
+      !ownerItem.lightData.pseudoLight &&
+      !ownerItem.lightData.enabled
+    ) {
+      return;
+    }
+
+    const partMeshes = group.userData?.partMeshes;
+    let addedFromPart = false;
+    if (Array.isArray(partMeshes)) {
+      for (let i = 0; i < partMeshes.length; i++) {
+        const pm = partMeshes[i];
+        const pt = pm.userData?.effectPart || pm.userData?.itemPart || pm.userData?.cosmeticPart;
+        if (pt && pt.realLight && pm.visible) {
+          pm.getWorldPosition(_vWorldLightPos);
+          pushRealLightCandidate(
+            _vWorldLightPos,
+            pt.lightColor || pt.color || '#ffce3a',
+            pt.lightIntensity || 1.6,
+            pt.lightDistance || 14,
+            1.0
+          );
+          addedFromPart = true;
+        }
+      }
+    }
+
+    if (
+      !addedFromPart &&
+      ownerItem &&
+      ownerItem.lightData &&
+      (ownerItem.lightData.realLight || ownerItem.lightData.enabled)
+    ) {
+      group.getWorldPosition(_vWorldLightPos);
+      pushRealLightCandidate(
+        _vWorldLightPos,
+        ownerItem.lightData.color || '#ff9f43',
+        ownerItem.lightData.intensity || 1.8,
+        ownerItem.lightData.distance || 16,
+        1.0
+      );
+    }
+  };
+
+  for (const wi of S.worldItems) {
+    if (wi && wi.group) collectGroupRealLights(wi.group);
+  }
+  for (const prj of S.projectiles) {
+    if (prj && prj.mesh) collectGroupRealLights(prj.mesh);
+  }
+
+  const collectEntityRealLights = ent => {
+    if (!ent || !ent.rig) return;
+    if (ent.rig.heldItemMesh) collectGroupRealLights(ent.rig.heldItemMesh);
+    if (ent.rig.carriedItemMesh) collectGroupRealLights(ent.rig.carriedItemMesh);
+    if (Array.isArray(ent.rig.customCosMeshes)) {
+      for (const cg of ent.rig.customCosMeshes) {
+        collectGroupRealLights(cg);
+      }
+    }
+  };
+
+  if (S.player) collectEntityRealLights(S.player);
+  for (const npc of S.customNPCs) collectEntityRealLights(npc);
+  for (const q of S.queueLine) {
+    if (!q.isP) collectEntityRealLights(q);
+  }
+  if (S.archangelEnt) collectEntityRealLights(S.archangelEnt);
+  if (S.workbenchPreviewGroup) collectGroupRealLights(S.workbenchPreviewGroup);
 
   if (pointCandidates.length > MAX_ACTIVE_POINT_LIGHTS) {
     pointCandidates.sort((a, b) => a.distSq - b.distSq);
@@ -122,11 +217,10 @@ export function updateWorldLights(camPos) {
     const pl = pointLightPool[i];
     const cand = pointCandidates[i];
     if (cand) {
-      const { box, ld, pulseMult } = cand;
-      pl.color.set(ld.color || box.colorHex || '#ffffff');
-      pl.intensity = clamp(Number(ld.intensity) || 1.4, 0.1, 6.0) * pulseMult;
-      pl.distance = clamp(Number(ld.distance) || 14, 2, 80);
-      pl.position.copy(box.m.position);
+      pl.color.set(cand.color || '#ffffff');
+      pl.intensity = clamp(Number(cand.intensity) || 1.4, 0.1, 6.0) * cand.pulseMult;
+      pl.distance = clamp(Number(cand.distance) || 14, 2, 80);
+      pl.position.copy(cand.pos);
     } else {
       pl.intensity = 0;
       pl.distance = 0.01;

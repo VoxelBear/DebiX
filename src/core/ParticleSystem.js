@@ -6,6 +6,7 @@ import { makeParticleTex } from './TextureFactory.js';
 const activeParticles = [];
 const ragdollLimbs = [];
 const MAX_PARTICLES = 600;
+const _vPartEmitPos = new THREE.Vector3();
 
 export function createDefaultParticleData() {
   return {
@@ -239,6 +240,63 @@ export function spawnDeathShatter(ent) {
   }
 }
 
+function emitFromObjectGroup(group, dt) {
+  if (!group || !group.visible) return;
+  const ownerItem = group.userData?.itemData;
+  if (
+    ownerItem &&
+    ownerItem.useType === 'torch' &&
+    ownerItem.lightData &&
+    !ownerItem.lightData.realLight &&
+    !ownerItem.lightData.pseudoLight &&
+    !ownerItem.lightData.enabled
+  ) {
+    return;
+  }
+
+  const partMeshes = group.userData?.partMeshes;
+  if (Array.isArray(partMeshes)) {
+    for (let i = 0; i < partMeshes.length; i++) {
+      const pm = partMeshes[i];
+      if (!pm || !pm.visible) continue;
+      const pt = pm.userData?.effectPart || pm.userData?.itemPart || pm.userData?.cosmeticPart;
+      const pd = pt && pt.particleData;
+      if (pd && pd.enabled) {
+        pm._pAccum = (pm._pAccum || 0) + dt * clamp(pd.rate || 10, 0.5, 100);
+        while (pm._pAccum >= 1) {
+          pm._pAccum -= 1;
+          pm.getWorldPosition(_vPartEmitPos);
+          const rx = (pt.sx || 0.3) * 0.25;
+          const ry = (pt.sy || 0.3) * 0.25;
+          const rz = (pt.sz || 0.3) * 0.25;
+          spawnSingleParticle(
+            _vPartEmitPos.x + rnd(-rx, rx),
+            _vPartEmitPos.y + rnd(-ry, ry),
+            _vPartEmitPos.z + rnd(-rz, rz),
+            pd
+          );
+        }
+      }
+    }
+  }
+
+  // Эмиттер частиц всего предмета в целом (в разделе «Свойства предмета»)
+  if (ownerItem && ownerItem.particleData && ownerItem.particleData.enabled) {
+    const ipd = ownerItem.particleData;
+    group._pAccum = (group._pAccum || 0) + dt * clamp(ipd.rate || 10, 0.5, 100);
+    while (group._pAccum >= 1) {
+      group._pAccum -= 1;
+      group.getWorldPosition(_vPartEmitPos);
+      spawnSingleParticle(
+        _vPartEmitPos.x + rnd(-0.22, 0.22),
+        _vPartEmitPos.y + rnd(-0.22, 0.22),
+        _vPartEmitPos.z + rnd(-0.22, 0.22),
+        ipd
+      );
+    }
+  }
+}
+
 export function updateParticles(dt) {
   // 1. Спавн новых частиц из эмиттеров блоков
   for (const box of S.allBlocks) {
@@ -255,6 +313,33 @@ export function updateParticles(dt) {
       spawnSingleParticle(pos.x + ox, pos.y + oy, pos.z + oz, pd);
     }
   }
+
+  // 1б. Спавн частиц из частей предметов, оружия, снарядов и аксессуаров/питомцев
+  for (const wi of S.worldItems) {
+    if (wi && wi.group) emitFromObjectGroup(wi.group, dt);
+  }
+  for (const prj of S.projectiles) {
+    if (prj && prj.mesh) emitFromObjectGroup(prj.mesh, dt);
+  }
+
+  const emitFromEntity = ent => {
+    if (!ent || !ent.rig) return;
+    if (ent.rig.heldItemMesh) emitFromObjectGroup(ent.rig.heldItemMesh, dt);
+    if (ent.rig.carriedItemMesh) emitFromObjectGroup(ent.rig.carriedItemMesh, dt);
+    if (Array.isArray(ent.rig.customCosMeshes)) {
+      for (const cg of ent.rig.customCosMeshes) {
+        emitFromObjectGroup(cg, dt);
+      }
+    }
+  };
+
+  if (S.player) emitFromEntity(S.player);
+  for (const npc of S.customNPCs) emitFromEntity(npc);
+  for (const q of S.queueLine) {
+    if (!q.isP) emitFromEntity(q);
+  }
+  if (S.archangelEnt) emitFromEntity(S.archangelEnt);
+  if (S.workbenchPreviewGroup) emitFromObjectGroup(S.workbenchPreviewGroup, dt);
 
   // 2. Обновление 2D-спрайтов частиц
   for (let i = activeParticles.length - 1; i >= 0; i--) {

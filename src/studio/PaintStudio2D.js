@@ -10,8 +10,9 @@ import {
 } from '../core/TextureFactory.js';
 import { sfx } from '../core/AudioEngine.js';
 import { rebuildPhysicsArrays } from '../core/WorldRegistry.js';
-import { renderInspectorUI } from './InspectorPanel.js';
-import { pushUndoState, pushCosmeticUndoState } from './StudioController.js';
+import { rebuildWorldItemVisual } from '../core/EntityManager.js';
+import { renderInspectorUI, syncLibraryItemIfEditing } from './InspectorPanel.js';
+import { pushUndoState, pushCosmeticUndoState, pushItemUndoState } from './StudioController.js';
 
 let paintCv = null;
 let paintCtx = null;
@@ -147,12 +148,29 @@ export function openPaintModal(defaultTarget = 'face') {
   if (sel && !sel.querySelector('option[value="particle"]')) {
     const opt = document.createElement('option');
     opt.value = 'particle';
-    opt.textContent = '✨ Спрайт Партикла 16×16 (Выбранный блок)';
+    opt.textContent = '✨ Спрайт Партикла 16×16 (Блок / Часть предмета)';
     sel.appendChild(opt);
   }
   $('paintModal').hidden = false;
   $('paintTargetSelect').value = defaultTarget;
   loadTargetTextureIntoCanvas(defaultTarget);
+}
+
+function getActiveParticleDataForPainter() {
+  if (!S.selectedRef) return null;
+  if (S.selectedRef.kind === 'block') return S.selectedRef.box.particleData;
+  if (S.selectedRef.kind === 'cosmetic') {
+    const pt = S.selectedRef.part || (S.selectedRef.item && S.selectedRef.item.parts[0]);
+    return pt ? pt.particleData : null;
+  }
+  if (S.selectedRef.kind === 'world_item') {
+    if (S.paintParticleScope === 'item') {
+      return S.selectedRef.item ? S.selectedRef.item.particleData : null;
+    }
+    const pt = S.selectedRef.part || (S.selectedRef.item && S.selectedRef.item.parts[S.selectedRef.partIdx || 0]);
+    return pt ? pt.particleData : (S.selectedRef.item ? S.selectedRef.item.particleData : null);
+  }
+  return null;
 }
 
 export function loadTargetTextureIntoCanvas(target) {
@@ -174,8 +192,8 @@ export function loadTargetTextureIntoCanvas(target) {
 
   let url = null;
   if (target === 'particle') {
-    if (S.selectedRef && S.selectedRef.kind === 'block' && S.selectedRef.box.particleData) {
-      const pd = S.selectedRef.box.particleData;
+    const pd = getActiveParticleDataForPainter();
+    if (pd) {
       url = pd.texDataURL;
       if (!url) {
         drawParticlePreset16(paintCtx, pd.preset === 'custom' ? 'spark' : (pd.preset || 'spark'));
@@ -189,9 +207,9 @@ export function loadTargetTextureIntoCanvas(target) {
     url = ent.preset.faceDataURL || defaultFaceURL;
   } else if (['head', 'torso', 'armL', 'armR', 'legL', 'legR'].includes(target) && ent) {
     url = (ent.preset.limbTex && ent.preset.limbTex[target]) || null;
-  } else if (target === 'cosmetic' && S.selectedRef && S.selectedRef.kind === 'cosmetic') {
-    const activePart = S.selectedRef.part || S.selectedRef.item;
-    url = activePart.texDataURL;
+  } else if (target === 'cosmetic' && S.selectedRef && (S.selectedRef.kind === 'cosmetic' || S.selectedRef.kind === 'world_item')) {
+    const activePart = S.selectedRef.part || (S.selectedRef.item && S.selectedRef.item.parts && S.selectedRef.item.parts[S.selectedRef.partIdx || 0]);
+    url = activePart ? activePart.texDataURL : null;
   } else if (target === 'block' && S.selectedRef && S.selectedRef.kind === 'block') {
     url = S.selectedRef.box.customTexDataURL;
   } else if (target === 'globalStuds') {
@@ -329,7 +347,7 @@ export function initPaintStudio2D() {
   $('paintTargetSelect').onchange = e => loadTargetTextureIntoCanvas(e.target.value);
   $('openFacePaintBtn').onclick = () => {
     if (S.selectedRef && S.selectedRef.kind === 'block') openPaintModal('block');
-    else if (S.selectedRef && S.selectedRef.kind === 'cosmetic') openPaintModal('cosmetic');
+    else if (S.selectedRef && (S.selectedRef.kind === 'cosmetic' || S.selectedRef.kind === 'world_item')) openPaintModal('cosmetic');
     else openPaintModal('face');
   };
   $('closePaintBtn').onclick = () => {
@@ -387,16 +405,20 @@ export function initPaintStudio2D() {
       : (S.selectedRef && S.selectedRef.kind === 'cosmetic' ? S.selectedRef.ent : S.player);
 
     if (target === 'particle') {
-      if (S.selectedRef && S.selectedRef.kind === 'block') {
-        pushUndoState('Применение 16x16 партикла');
-        const box = S.selectedRef.box;
-        box.particleData.enabled = true;
-        box.particleData.preset = 'custom';
-        box.particleData.texDataURL = dataURL;
+      const pd = getActiveParticleDataForPainter();
+      if (pd) {
+        if (S.selectedRef.kind === 'block') pushUndoState('Применение 16x16 партикла');
+        else if (S.selectedRef.kind === 'cosmetic') pushCosmeticUndoState('Применение 16x16 партикла');
+        else if (S.selectedRef.kind === 'world_item') pushItemUndoState('Применение 16x16 партикла');
+
+        pd.enabled = true;
+        pd.preset = 'custom';
+        pd.texDataURL = dataURL;
+        syncLibraryItemIfEditing(S.selectedRef);
         renderInspectorUI();
-        showBanner(`✨ Пиксельный 16×16 партикл применён к «${box.label}»!`, '#00e676');
+        showBanner('✨ Пиксельный 16×16 партикл успешно применён!', '#00e676');
       } else {
-        showBanner('Выбери блок в сцене, чтобы применить к нему 16×16 партикл!', '#ffce3a');
+        showBanner('Выбери блок, предмет или аксессуар, чтобы применить к нему 16×16 партикл!', '#ffce3a');
       }
     } else if (target === 'face' && ent) {
       pushUndoState('Применение спрайта лица');
@@ -412,11 +434,23 @@ export function initPaintStudio2D() {
       showBanner(`👕 Спрайт (${target}) наложен на лицевую грань «${ent.name}» с сохранением цвета тела!`, '#00e676');
     } else if (target === 'cosmetic' && S.selectedRef && S.selectedRef.kind === 'cosmetic') {
       pushCosmeticUndoState('Наложение спрайта на примитив');
-      const activePart = S.selectedRef.part || S.selectedRef.item;
+      const activePart = S.selectedRef.part || S.selectedRef.item.parts[0];
       activePart.texDataURL = dataURL;
-      setMeshFrontSprite(S.selectedRef.mesh, dataURL);
+      if (S.selectedRef.mesh) setMeshFrontSprite(S.selectedRef.mesh, dataURL);
+      syncLibraryItemIfEditing(S.selectedRef);
       renderInspectorUI();
       showBanner(`🎩 Спрайт наложен на лицевую грань примитива «${activePart.name || S.selectedRef.item.name}»!`, '#00e676');
+    } else if (target === 'cosmetic' && S.selectedRef && S.selectedRef.kind === 'world_item') {
+      pushItemUndoState('Наложение спрайта на часть предмета');
+      const activeArr = S.selectedRef.editMode === 'proj_part' ? S.selectedRef.item.projectileParts : S.selectedRef.item.parts;
+      const activePart = S.selectedRef.part || activeArr[S.selectedRef.partIdx || 0];
+      if (activePart) {
+        activePart.texDataURL = dataURL;
+        rebuildWorldItemVisual(S.selectedRef.worldEntry, true);
+        syncLibraryItemIfEditing(S.selectedRef);
+        renderInspectorUI();
+        showBanner(`🎨 Спрайт наложен на лицевую грань «${activePart.name || S.selectedRef.item.name}»!`, '#00e676');
+      }
     } else if (target === 'block' && S.selectedRef && S.selectedRef.kind === 'block') {
       pushUndoState('Наложение спрайта на блок');
       const box = S.selectedRef.box;
