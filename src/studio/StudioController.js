@@ -315,7 +315,7 @@ export function initStudioController() {
         ent.preset.handGripPoint.rz = m.rotation.z;
         if (ent.rig.syncGripSockets) ent.rig.syncGripSockets(ent.preset);
         m.updateMatrixWorld(true);
-        selBoxHelper.setFromObject(m);
+        selBoxHelper.visible = false;
         syncInspectorInputsFromObject();
       } else if (editMode === 'carry_grip' && ent.rig.carryGripMarker) {
         const m = ent.rig.carryGripMarker;
@@ -327,7 +327,7 @@ export function initStudioController() {
         ent.preset.carryGripPoint.rz = m.rotation.z;
         if (ent.rig.syncGripSockets) ent.rig.syncGripSockets(ent.preset);
         m.updateMatrixWorld(true);
-        selBoxHelper.setFromObject(m);
+        selBoxHelper.visible = false;
         syncInspectorInputsFromObject();
       } else {
         ent.x = ent.rig.g.position.x;
@@ -395,13 +395,13 @@ export function initStudioController() {
         item.gripPoint.ry = mesh.rotation.y;
         item.gripPoint.rz = mesh.rotation.z;
         mesh.updateMatrixWorld(true);
-        selBoxHelper.setFromObject(mesh);
+        selBoxHelper.visible = false;
       } else if (editMode === 'muzzle' && mesh) {
         item.muzzlePoint.x = mesh.position.x;
         item.muzzlePoint.y = mesh.position.y;
         item.muzzlePoint.z = mesh.position.z;
         mesh.updateMatrixWorld(true);
-        selBoxHelper.setFromObject(mesh);
+        selBoxHelper.visible = false;
       }
 
       syncInspectorInputsFromObject();
@@ -476,7 +476,8 @@ export function toggleStudioMode(forceState) {
     $('studioUI').hidden = false;
 
     for (const wi of S.worldItems) {
-      rebuildWorldItemVisual(wi, true);
+      const isSelWi = S.selectedRef && S.selectedRef.kind === 'world_item' && S.selectedRef.worldEntry === wi;
+      rebuildWorldItemVisual(wi, !!isSelWi);
     }
 
     if (S.selectedRef && S.selectedRef.kind === 'char' && S.selectedRef.ent?.rig?.setGripMarkersVisible) {
@@ -532,6 +533,12 @@ export function selectEditorObject(ref, keepUndoStack = false) {
     clearItemUndoStack();
   }
 
+  const prevWiEntry = S.selectedRef && S.selectedRef.kind === 'world_item' ? S.selectedRef.worldEntry : null;
+  const nextWiEntry = ref && ref.kind === 'world_item' ? ref.worldEntry : null;
+  if (prevWiEntry && prevWiEntry !== nextWiEntry && S.worldItems.includes(prevWiEntry)) {
+    rebuildWorldItemVisual(prevWiEntry, false);
+  }
+
   hideAllCharacterGripMarkers();
 
   S.selectedRef = ref;
@@ -563,21 +570,25 @@ export function selectEditorObject(ref, keepUndoStack = false) {
       ent.rig.armR.rotation.set(-Math.PI / 2, 0, 0);
       ent.rig.g.updateMatrixWorld(true);
       ref.mesh = ent.rig.handGripMarker;
+      tControls.attach(ref.mesh);
+      selBoxHelper.visible = false;
     } else if (ref.editMode === 'carry_grip' && ent.rig.carryGripMarker) {
-      ent.rig.armL.rotation.set(-1.35, 0.28, -0.08);
-      ent.rig.armR.rotation.set(-1.35, -0.28, 0.08);
+      ent.rig.armL.rotation.set(-1.35, -0.28, 0.08);
+      ent.rig.armR.rotation.set(-1.35, 0.28, -0.08);
       ent.rig.g.updateMatrixWorld(true);
       ref.mesh = ent.rig.carryGripMarker;
+      tControls.attach(ref.mesh);
+      selBoxHelper.visible = false;
     } else {
       ent.rig.armL.rotation.set(0, 0, 0);
       ent.rig.armR.rotation.set(0, 0, 0);
       ent.rig.g.updateMatrixWorld(true);
       ref.mesh = ent.rig.g;
+      tControls.attach(ref.mesh);
+      selBoxHelper.setFromObject(ref.mesh);
+      selBoxHelper.visible = true;
     }
 
-    tControls.attach(ref.mesh);
-    selBoxHelper.setFromObject(ref.mesh);
-    selBoxHelper.visible = true;
     $('inspTypeBadge').textContent = ent.isP ? '👑 Игрок' : '🤖 NPC Бот';
   } else if (ref.kind === 'cosmetic') {
     const { ent, item } = ref;
@@ -644,8 +655,12 @@ export function selectEditorObject(ref, keepUndoStack = false) {
     if (ref.mesh) {
       ref.mesh.updateMatrixWorld(true);
       tControls.attach(ref.mesh);
-      selBoxHelper.setFromObject(ref.mesh);
-      selBoxHelper.visible = true;
+      if (ref.editMode === 'grip' || ref.editMode === 'muzzle') {
+        selBoxHelper.visible = false;
+      } else {
+        selBoxHelper.setFromObject(ref.mesh);
+        selBoxHelper.visible = true;
+      }
     }
     $('inspTypeBadge').textContent = `${item.icon || '🗡️'} Предмет / Оружие`;
   }

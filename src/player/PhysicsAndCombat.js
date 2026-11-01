@@ -5,7 +5,8 @@ import { sfx } from '../core/AudioEngine.js';
 import {
   triggerEntityAttack,
   updateEntityAnimation,
-  buildItemGroup
+  buildItemGroup,
+  updateTag
 } from '../core/CharacterRig.js';
 import {
   addSceneBlock,
@@ -16,7 +17,8 @@ import {
 } from '../core/WorldRegistry.js';
 import {
   spawnDamageParticles,
-  spawnDeathShatter
+  spawnDeathShatter,
+  emitParticleBurst
 } from '../core/ParticleSystem.js';
 import {
   spawnCustomNPC,
@@ -32,11 +34,22 @@ const _vLocal = new THREE.Vector3();
 const _vNormal = new THREE.Vector3();
 const _vMuzzleWorld = new THREE.Vector3();
 const _vAimDir = new THREE.Vector3();
+const _vCamFwd = new THREE.Vector3();
+const _vTargetPt = new THREE.Vector3();
+const _vDashP0 = new THREE.Vector3();
+const _vDashP1 = new THREE.Vector3();
+const _aimRaycaster = new THREE.Raycaster();
 
-// Динамический источник света для удерживаемого факела и 3D-линия траектории прицеливания
+let camAdsBlend = 0;
+let camShoulderBlend = 0;
+
+// Динамический источник света для удерживаемого факела и объёмный 3D-пунктир траектории броска
 let heldTorchLight = null;
-let trajectoryLine = null;
-const TRAJ_SEGMENTS = 24;
+let trajectoryGroup = null;
+const TRAJ_DASH_COUNT = 28;
+const TRAJ_SIM_STEPS = 60;
+const _trajPts = Array.from({ length: TRAJ_SIM_STEPS + 1 }, () => new THREE.Vector3());
+const _trajArcLens = new Float32Array(TRAJ_SIM_STEPS + 1);
 
 function ensureHeldTorchLight() {
   if (heldTorchLight) return heldTorchLight;
@@ -46,21 +59,107 @@ function ensureHeldTorchLight() {
   return heldTorchLight;
 }
 
-function ensureTrajectoryLine() {
-  if (trajectoryLine) return trajectoryLine;
-  const geo = new THREE.BufferGeometry();
-  const positions = new Float32Array((TRAJ_SEGMENTS + 1) * 3);
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  const mat = new THREE.LineBasicMaterial({
-    color: 0x00ff88,
+function ensureTrajectoryVisuals() {
+  if (trajectoryGroup) return trajectoryGroup;
+  trajectoryGroup = new THREE.Group();
+  trajectoryGroup.visible = false;
+
+  const dashGeo = new THREE.CylinderGeometry(0.065, 0.065, 1.0, 10);
+  dashGeo.rotateX(Math.PI / 2);
+
+  const dashMat = new THREE.MeshBasicMaterial({
+    color: 0x00f5a0,
     transparent: true,
-    opacity: 0.85
+    opacity: 0.92,
+    depthWrite: false
   });
-  trajectoryLine = new THREE.Line(geo, mat);
-  trajectoryLine.frustumCulled = false;
-  trajectoryLine.visible = false;
-  scene.add(trajectoryLine);
-  return trajectoryLine;
+
+  const dashes = [];
+  for (let i = 0; i < TRAJ_DASH_COUNT; i++) {
+    const m = new THREE.Mesh(dashGeo, dashMat);
+    m.visible = false;
+    m.frustumCulled = false;
+    m.userData.noCollider = true;
+    trajectoryGroup.add(m);
+    dashes.push(m);
+  }
+
+  // Светящееся кольцо точки падения снаряда
+  const impactGroup = new THREE.Group();
+  const ringGeo = new THREE.TorusGeometry(0.44, 0.045, 10, 28);
+  ringGeo.rotateX(Math.PI / 2);
+  const ringMesh = new THREE.Mesh(ringGeo, dashMat);
+  ringMesh.userData.noCollider = true;
+
+  const discGeo = new THREE.RingGeometry(0.1, 0.24, 24);
+  discGeo.rotateX(-Math.PI / 2);
+  const discMesh = new THREE.Mesh(discGeo, dashMat);
+  discMesh.userData.noCollider = true;
+
+  impactGroup.add(ringMesh, discMesh);
+  impactGroup.position.y = 0.05;
+  trajectoryGroup.add(impactGroup);
+
+  trajectoryGroup.userData = {
+    dashes,
+    dashMat,
+    impactGroup,
+    ringMesh,
+    discMesh
+  };
+
+  scene.add(trajectoryGroup);
+  return trajectoryGroup;
+}
+
+// Плавное позиционирование камеры от 3-го лица и удобного прицела через правое плечо (Over-The-Shoulder)
+export function syncPlayCameraToPlayer(player, dt = 0) {
+  if (!player) return 6.8;
+  const held = getActiveHeldItem(player);
+  const isRangedOrThrow = !!(held && (held.useType === 'ranged' || held.useType === 'throwable'));
+  const isADS = !!(
+    !S.playerDead &&
+    held &&
+    ((S.isAimingRMB && held.canAim) || S.isChargingThrow)
+  );
+
+  if (dt > 0) {
+    const rate = 1 - Math.exp(-14 * dt);
+    camAdsBlend += ((isADS ? 1 : 0) - camAdsBlend) * rate;
+    camShoulderBlend += ((isRangedOrThrow ? 1 : 0) - camShoulderBlend) * rate;
+  } else {
+    camAdsBlend = isADS ? 1 : camAdsBlend;
+    camShoulderBlend = isRangedOrThrow ? 1 : camShoulderBlend;
+  }
+
+  const cp = Math.cos(S.pitch);
+  const fwdX = -Math.sin(S.yaw) * cp;
+  const fwdY = Math.sin(S.pitch);
+  const fwdZ = -Math.cos(S.yaw) * cp;
+
+  const rightX = Math.cos(S.yaw);
+  const rightZ = -Math.sin(S.yaw);
+
+  // Смещение камеры вправо за ведущую правую руку, чтобы голова персонажа никогда не закрывала прицел в центре экрана
+  const shoulderOffset = 0.48 * camShoulderBlend + 0.62 * camAdsBlend;
+  const pivotHeight = 2.02 + 0.16 * camAdsBlend;
+  const dist = 6.8 - 3.45 * camAdsBlend;
+
+  const pivotX = player.x + rightX * shoulderOffset;
+  const pivotY = player.y + pivotHeight;
+  const pivotZ = player.z + rightZ * shoulderOffset;
+
+  camera.position.set(
+    pivotX - fwdX * dist,
+    pivotY - fwdY * dist,
+    pivotZ - fwdZ * dist
+  );
+  camera.lookAt(
+    pivotX + fwdX * 60,
+    pivotY + fwdY * 60,
+    pivotZ + fwdZ * 60
+  );
+  return dist;
 }
 
 function ensureThrowChargeHUD() {
@@ -658,7 +757,7 @@ export function dealDamage(target, amount, attacker = null, customKnockback = 8)
   return true;
 }
 
-// Вычисляет мировую точку вылета снаряда (Muzzle / Throw Point) и вектор направления выстрела
+// Вычисляет мировую точку вылета снаряда (Muzzle / Throw Point) и точный вектор в центр прицела (Crosshair)
 export function computeMuzzleAndAim(player, item) {
   if (player.rig && player.rig.activeItemGroup) {
     if (player.isP) {
@@ -680,11 +779,57 @@ export function computeMuzzleAndAim(player, item) {
   }
 
   const cp = Math.cos(S.pitch);
-  _vAimDir.set(
-    -Math.sin(S.yaw) * cp,
-    Math.sin(S.pitch) + (item.useType === 'throwable' ? 0.22 : 0.04),
-    -Math.cos(S.yaw) * cp
-  ).normalize();
+  _vCamFwd.set(-Math.sin(S.yaw) * cp, Math.sin(S.pitch), -Math.cos(S.yaw) * cp).normalize();
+
+  // Для метательных снарядов — навесная парабола по направлению взгляда
+  if (item.useType === 'throwable') {
+    _vAimDir.set(_vCamFwd.x, _vCamFwd.y + 0.22, _vCamFwd.z).normalize();
+    return { origin: _vMuzzleWorld, dir: _vAimDir };
+  }
+
+  // Для стрелкового оружия — сведение луча из дула ровно в точку под 2D-перекрестием в центре экрана
+  const camDist = player.isP ? syncPlayCameraToPlayer(player, 0) : 6.0;
+  _aimRaycaster.set(camera.position, _vCamFwd);
+  _aimRaycaster.near = Math.max(0.5, camDist - 0.25);
+  const maxR = Math.max(60, Number(item.maxRange) || 85);
+  _aimRaycaster.far = maxR * 1.4;
+
+  const targets = [];
+  for (const b of S.allBlocks) {
+    if (b.matterState === 'solid' && !(b.logicRuntime && b.logicRuntime.ghostOpen)) {
+      targets.push(b.m);
+    }
+  }
+  const extraTargets = (S.gameMode && S.gameMode.getExtraTargets) ? S.gameMode.getExtraTargets() : [];
+  for (const t of [...S.customNPCs, ...extraTargets]) {
+    if (t && t !== player && !(t._deadCooldown > 0) && t.rig && t.rig.g) {
+      targets.push(t.rig.g);
+    }
+  }
+
+  const hits = _aimRaycaster.intersectObjects(targets, true);
+  if (hits.length > 0) {
+    _vTargetPt.copy(hits[0].point);
+  } else {
+    _vTargetPt.copy(camera.position).addScaledVector(_vCamFwd, maxR);
+  }
+
+  _vAimDir.subVectors(_vTargetPt, _vMuzzleWorld);
+  const distToTarget = _vAimDir.length();
+
+  // Если цель слишком близко к камере/спине, стреляем строго параллельно взгляду камеры
+  if (distToTarget < 0.8 || _vAimDir.dot(_vCamFwd) <= 0.1) {
+    _vAimDir.copy(_vCamFwd);
+  } else {
+    // Компенсация гравитационного падения снаряда на дистанции полёта, чтобы попадать точно в перекрестие
+    const g = (S.worldSettings.gravity || 22) * (Number(item.gravityFactor) ?? 0);
+    if (g > 0.001) {
+      const spd = Math.max(6, Number(item.projSpeed) || 38);
+      const tFlight = Math.min(1.6, distToTarget / spd);
+      _vAimDir.y += 0.5 * g * tFlight * tFlight;
+    }
+    _vAimDir.normalize();
+  }
 
   return { origin: _vMuzzleWorld, dir: _vAimDir };
 }
@@ -715,7 +860,8 @@ export function spawnProjectile(owner, item, speedMult = 1.0) {
   }
 
   const { origin, dir } = computeMuzzleAndAim(owner, item);
-  const spread = Number(item.spread) || 0;
+  const baseSpread = Number(item.spread) || 0;
+  const spread = owner && owner.isP && S.isAimingRMB ? baseSpread * 0.15 : baseSpread * 0.5;
   const dx = dir.x + (spread > 0 ? rnd(-spread, spread) : 0);
   const dy = dir.y + (spread > 0 ? rnd(-spread, spread) : 0);
   const dz = dir.z + (spread > 0 ? rnd(-spread, spread) : 0);
@@ -737,7 +883,7 @@ export function spawnProjectile(owner, item, speedMult = 1.0) {
     vx: (dx / len) * spd,
     vy: (dy / len) * spd,
     vz: (dz / len) * spd,
-    gravity: (S.worldSettings.gravity || 22) * (Number(item.gravityFactor) ?? 0.2),
+    gravity: (S.worldSettings.gravity || 22) * (Number(item.gravityFactor) ?? 0),
     damage: Number(item.damage) ?? 25,
     blastRadius: Number(item.blastRadius) || 0,
     knockback: Number(item.knockback) || 9,
@@ -1096,7 +1242,7 @@ function updateProjectilesAndWorldItems(dt) {
 
       if (hit.ny > 0.45 && wi.vy <= 0.5) {
         const impactSpeed = Math.abs(prevVy);
-        wi.y += hit.pen;
+        wi.y += hit.pen / Math.max(0.45, hit.ny);
         wi.vy = 0;
         wi.grounded = true;
 
@@ -1106,14 +1252,33 @@ function updateProjectilesAndWorldItems(dt) {
           wi.item.durability = Math.max(0, (wi.item.durability ?? wi.item.maxDurability) - dmg);
           sfx.hit();
           if (wi.item.durability <= 0) {
-            spawnDeathShatter({ x: wi.x, y: wi.y, z: wi.z, preset: { head: 0xf39c12, torso: 0xd35400 } });
+            emitParticleBurst(wi.x, wi.y + 0.55, wi.z, 22, {
+              preset: 'hit',
+              color: '#f39c12',
+              sizeStart: 0.52,
+              sizeEnd: 0.08,
+              speed: 6.5,
+              spread: 1.4,
+              gravity: -11,
+              lifetime: 0.9
+            });
+            emitParticleBurst(wi.x, wi.y + 0.55, wi.z, 14, {
+              preset: 'spark',
+              color: '#00e676',
+              sizeStart: 0.42,
+              sizeEnd: 0.06,
+              speed: 5.5,
+              spread: 1.3,
+              gravity: -8,
+              lifetime: 1.05
+            });
             sfx.oof();
             showBanner(`💥 Контейнер «${wi.item.name}» разбился вдребезги при падении!`, '#ff3e3e');
             scene.remove(wi.group);
             scene.remove(wi.tag);
             S.worldItems.splice(i, 1);
             break;
-          } else {
+          } else if (wi.tag) {
             updateTag(
               wi.tag,
               wi.item.holdMode === 'carried' ? '📦 Взять в 2 руки [E]' : `${wi.item.icon || '🗡️'} Подобрать [E]`,
@@ -1135,13 +1300,28 @@ function updateProjectilesAndWorldItems(dt) {
       wi.group.rotation.y = wi.rotY;
     }
     wi.group.position.set(wi.x, wi.y + (wi.item.holdMode === 'held' ? 0.35 : 0.55), wi.z);
-    wi.tag.position.set(wi.x, wi.y + 1.65, wi.z);
+    if (wi.tag) wi.tag.position.set(wi.x, wi.y + 1.65, wi.z);
   }
+}
+
+function sampleTrajectoryPointAtArcLen(s, maxIdx, outVec) {
+  if (s <= 0 || maxIdx <= 0) return outVec.copy(_trajPts[0]);
+  const total = _trajArcLens[maxIdx];
+  if (s >= total) return outVec.copy(_trajPts[maxIdx]);
+  for (let i = 1; i <= maxIdx; i++) {
+    const s1 = _trajArcLens[i];
+    if (s <= s1) {
+      const s0 = _trajArcLens[i - 1];
+      const frac = s1 > s0 ? (s - s0) / (s1 - s0) : 0;
+      return outVec.lerpVectors(_trajPts[i - 1], _trajPts[i], frac);
+    }
+  }
+  return outVec.copy(_trajPts[maxIdx]);
 }
 
 function updateAimTrajectoryAndTorch(player, dt) {
   const tLight = ensureHeldTorchLight();
-  const tLine = ensureTrajectoryLine();
+  const tGroup = ensureTrajectoryVisuals();
   const hud = ensureThrowChargeHUD();
   const ch = ensureCrosshairHUD();
 
@@ -1186,9 +1366,11 @@ function updateAimTrajectoryAndTorch(player, dt) {
   }
 
   // Шкала замаха метательного предмета при удержании ЛКМ
+  let chargeRatio = 1.0;
   if (S.isChargingThrow && held && held.useType === 'throwable' && S.state === 'play' && !S.playerDead) {
     S.throwChargeT += dt;
     const maxChg = Math.max(0.25, Number(held.maxChargeTime) || 1.1);
+    chargeRatio = clamp(S.throwChargeT / maxChg, 0.1, 1.0);
     const pct = Math.min(100, Math.round((S.throwChargeT / maxChg) * 100));
     hud.hidden = false;
     $('throwChargeLbl').textContent = `🎯 СИЛА БРОСКА: ${pct}%`;
@@ -1201,7 +1383,7 @@ function updateAimTrajectoryAndTorch(player, dt) {
     }
   }
 
-  // Отрисовка 3D-линии баллистической траектории ТОЛЬКО для метательных предметов (throwable)
+  // Отрисовка объёмного анимированного 3D-пунктира траектории ТОЛЬКО для метательных предметов (throwable)
   const showArc =
     S.state === 'play' &&
     !S.playerDead &&
@@ -1210,36 +1392,98 @@ function updateAimTrajectoryAndTorch(player, dt) {
     ((S.isAimingRMB && held.canAim) || S.isChargingThrow);
 
   if (!showArc) {
-    tLine.visible = false;
+    tGroup.visible = false;
     return;
   }
 
   const { origin, dir } = computeMuzzleAndAim(player, held);
   let spd = Number(held.projSpeed) || 30;
-  if (held.useType === 'throwable' && S.isChargingThrow) {
-    const maxChg = Math.max(0.25, Number(held.maxChargeTime) || 1.1);
-    const ratio = clamp(S.throwChargeT / maxChg, 0.1, 1.0);
+  if (S.isChargingThrow) {
     const minSpd = Number(held.minThrowSpeed) || 8;
-    spd = minSpd + (spd - minSpd) * ratio;
+    spd = minSpd + (spd - minSpd) * chargeRatio;
   }
 
   const vx = dir.x * spd;
   const vy = dir.y * spd;
   const vz = dir.z * spd;
-  const g = (S.worldSettings.gravity || 22) * (Number(held.gravityFactor) ?? 0.2);
+  const g = (S.worldSettings.gravity || 22) * (Number(held.gravityFactor) ?? 1.0);
 
-  const posAttr = tLine.geometry.attributes.position;
-  const arr = posAttr.array;
-  const totalTime = 1.35;
+  // Симуляция баллистической дуги с остановкой при столкновении с твёрдым блоком
+  const maxSimTime = 1.85;
+  let lastIdx = 0;
+  _trajPts[0].copy(origin);
+  _trajArcLens[0] = 0;
 
-  for (let i = 0; i <= TRAJ_SEGMENTS; i++) {
-    const t = (i / TRAJ_SEGMENTS) * totalTime;
-    arr[i * 3] = origin.x + vx * t;
-    arr[i * 3 + 1] = origin.y + vy * t - 0.5 * g * t * t;
-    arr[i * 3 + 2] = origin.z + vz * t;
+  for (let i = 1; i <= TRAJ_SIM_STEPS; i++) {
+    const t = (i / TRAJ_SIM_STEPS) * maxSimTime;
+    const px = origin.x + vx * t;
+    const py = origin.y + vy * t - 0.5 * g * t * t;
+    const pz = origin.z + vz * t;
+
+    _trajPts[i].set(px, py, pz);
+    _trajArcLens[i] = _trajArcLens[i - 1] + _trajPts[i - 1].distanceTo(_trajPts[i]);
+    lastIdx = i;
+
+    let hitBlock = false;
+    if (i > 2) {
+      for (const b of S.allBlocks) {
+        if (b.matterState !== 'solid' || (b.logicRuntime && b.logicRuntime.ghostOpen)) continue;
+        if (testPlayerOBB(px, py - 0.1, pz, 0.16, 0.25, b)) {
+          hitBlock = true;
+          break;
+        }
+      }
+    }
+    if (hitBlock || py < -15) break;
   }
-  posAttr.needsUpdate = true;
-  tLine.visible = true;
+
+  const totalArcLen = _trajArcLens[lastIdx];
+  const { dashes, dashMat, impactGroup } = tGroup.userData;
+
+  // Динамический цвет пунктира (бирюзово-зелёный при прицеле ПКМ, от зелёного к огненному при зарядке ЛКМ)
+  if (S.isChargingThrow) {
+    if (chargeRatio < 0.5) dashMat.color.setHex(0x00e676);
+    else if (chargeRatio < 0.85) dashMat.color.setHex(0xffce3a);
+    else dashMat.color.setHex(0xff3e3e);
+  } else {
+    dashMat.color.setHex(0x00f5a0);
+  }
+
+  const dashLen = 0.54;
+  const gapLen = 0.36;
+  const period = dashLen + gapLen;
+  const phase = (performance.now() * 0.0042) % period;
+
+  for (let k = 0; k < TRAJ_DASH_COUNT; k++) {
+    const dash = dashes[k];
+    const sStart = (k - 1) * period + phase;
+    const sEnd = sStart + dashLen;
+    const a = Math.max(0.12, sStart);
+    const b = Math.min(totalArcLen, sEnd);
+
+    if (b - a > 0.06) {
+      sampleTrajectoryPointAtArcLen(a, lastIdx, _vDashP0);
+      sampleTrajectoryPointAtArcLen(b, lastIdx, _vDashP1);
+      const segLen = _vDashP0.distanceTo(_vDashP1);
+      if (segLen > 0.04) {
+        dash.visible = true;
+        dash.position.lerpVectors(_vDashP0, _vDashP1, 0.5);
+        dash.lookAt(_vDashP1);
+        dash.scale.set(1, 1, segLen);
+        continue;
+      }
+    }
+    dash.visible = false;
+  }
+
+  // Кольцо приземления снаряда в конечной точке дуги
+  const endPt = _trajPts[lastIdx];
+  impactGroup.position.set(endPt.x, endPt.y + 0.05, endPt.z);
+  const pulse = 1.0 + Math.sin(performance.now() * 0.008) * 0.14;
+  impactGroup.scale.setScalar(pulse);
+  impactGroup.rotation.y = (performance.now() * 0.0025) % (Math.PI * 2);
+
+  tGroup.visible = true;
 }
 
 export function triggerBlockSpawner(box) {
@@ -1500,12 +1744,17 @@ export function update(dt) {
   p.vxKnock = (p.vxKnock || 0) * Math.pow(0.05, dt);
   p.vzKnock = (p.vzKnock || 0) * Math.pow(0.05, dt);
 
+  const lockFaceToCamera =
+    S.isAimingRMB ||
+    S.isChargingThrow ||
+    !!(activeHeld && activeHeld.useType === 'ranged');
+
   if (len > 0.1) {
     vx += (fx * f + rx * s) * spd;
     vz += (fz * f + rz * s) * spd;
-    p.rot = S.isAimingRMB ? S.yaw + Math.PI : Math.atan2(vx, vz);
+    p.rot = lockFaceToCamera ? S.yaw + Math.PI : Math.atan2(vx, vz);
     p.step += spd * dt;
-  } else if (S.isAimingRMB || S.isChargingThrow) {
+  } else if (lockFaceToCamera) {
     p.rot = S.yaw + Math.PI;
   }
 

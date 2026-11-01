@@ -37,8 +37,7 @@ export function clearWorldItems() {
 export function spawnWorldItem(itemData, x = 0, y = 2, z = 0, vx = 0, vy = 0, vz = 0) {
   const data = normalizeItemData(JSON.parse(JSON.stringify(itemData)));
   const wid = 'witem_' + S.itemIdCounter++;
-  const showMarkers = S.state === 'edit';
-  const group = buildItemGroup(data, { isProjectile: false, showMarkers, applyGripOffset: false });
+  const group = buildItemGroup(data, { isProjectile: false, showMarkers: false, applyGripOffset: false });
   group.position.set(x, y, z);
   scene.add(group);
 
@@ -76,7 +75,10 @@ export function spawnWorldItem(itemData, x = 0, y = 2, z = 0, vx = 0, vy = 0, vz
   return worldEntry;
 }
 
-export function rebuildWorldItemVisual(worldEntry, showMarkers = S.state === 'edit') {
+export function rebuildWorldItemVisual(
+  worldEntry,
+  showMarkers = S.state === 'edit' && S.selectedRef?.kind === 'world_item' && S.selectedRef.worldEntry === worldEntry
+) {
   if (!worldEntry) return;
   if (worldEntry.group) scene.remove(worldEntry.group);
   const group = buildItemGroup(worldEntry.item, {
@@ -153,7 +155,7 @@ export function syncEntityHeldItemMesh(ent = S.player) {
     ent.rig.activeItemGroup = meshGroup;
     if (heldItem.useType === 'shield') {
       ent.holdPose = 'shield';
-    } else if (ent.isP && S.isAimingRMB && heldItem.canAim) {
+    } else if (heldItem.useType === 'ranged' || (ent.isP && S.isAimingRMB && heldItem.canAim)) {
       ent.holdPose = 'aim';
     } else {
       ent.holdPose = 'weapon';

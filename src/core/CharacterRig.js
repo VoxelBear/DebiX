@@ -92,73 +92,64 @@ export function normalizeCharacterGripPoints(target, fallbackSource = null) {
   return target;
 }
 
-// Создание X-Ray маркеров для редактора (рендерятся поверх любых мешей с depthTest: false и чёткой индикацией направления)
+// Создание аккуратных высокоточных X-Ray гизмо-маркеров для Студии (depthTest: false, без громоздких сеток)
 export function createXRayGripMarkerMesh(colorHex = '#00e676', scale = 1.0) {
   const group = new THREE.Group();
   group.renderOrder = 999;
 
-  const coreMat = new THREE.MeshBasicMaterial({
-    color: colorHex,
-    depthTest: false,
-    depthWrite: false,
-    transparent: true,
-    opacity: 0.92
-  });
-  const outlineMat = new THREE.MeshBasicMaterial({
-    color: '#ffffff',
-    wireframe: true,
-    depthTest: false,
-    depthWrite: false,
-    transparent: true,
-    opacity: 0.85
-  });
-  const fwdMat = new THREE.MeshBasicMaterial({
-    color: '#56f0ff',
-    depthTest: false,
-    depthWrite: false,
-    transparent: true,
-    opacity: 0.95
-  });
-  const upMat = new THREE.MeshBasicMaterial({
-    color: '#ffce3a',
-    depthTest: false,
-    depthWrite: false,
-    transparent: true,
-    opacity: 0.9
-  });
+  const mkMat = (col, op = 0.95) =>
+    new THREE.MeshBasicMaterial({
+      color: col,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: op
+    });
 
-  // Центральная сфера хвата + контрастный каркас
-  const core = new THREE.Mesh(getSharedPrimitiveGeo('sphere'), coreMat);
-  core.scale.setScalar(0.32 * scale);
+  const coreMat = mkMat(colorHex, 0.96);
+  const ringMat = mkMat('#ffffff', 0.82);
+  const fwdMat = mkMat('#00e5ff', 0.96);
+  const upMat = mkMat('#ffce3a', 0.92);
+  const sideMat = mkMat('#ff5252', 0.88);
+  const hitMat = mkMat('#ffffff', 0.0);
+
+  // Невидимая сфера клика для лёгкого выделения мышью в 3D-вьюпорте
+  const hitSphere = new THREE.Mesh(new THREE.SphereGeometry(0.14 * scale, 8, 8), hitMat);
+  group.add(hitSphere);
+
+  // Компактный центральный кристалл-пивот (Octahedron)
+  const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.052 * scale, 0), coreMat);
   group.add(core);
 
-  const wire = new THREE.Mesh(getSharedPrimitiveGeo('sphere'), outlineMat);
-  wire.scale.setScalar(0.38 * scale);
-  group.add(wire);
-
-  // Кольцо прицела вокруг точки хвата
-  const ring = new THREE.Mesh(getSharedPrimitiveGeo('torus'), outlineMat);
-  ring.scale.setScalar(0.45 * scale);
+  // Тонкое гладкое кольцо вокруг пивота
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.105 * scale, 0.0075 * scale, 10, 32), ringMat);
   group.add(ring);
 
-  // Стрелка направления «Вперёд (-Z)» (показывает, куда будет смотреть ствол/клинок)
-  const fwdShaft = new THREE.Mesh(getSharedPrimitiveGeo('cylinder'), fwdMat);
-  fwdShaft.scale.set(0.08 * scale, 0.42 * scale, 0.08 * scale);
+  // Ось «Вперёд (-Z)» — тонкая голубая игла со стрелкой (направление ствола / клинка)
+  const fwdShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.0085 * scale, 0.0085 * scale, 0.26 * scale, 10), fwdMat);
   fwdShaft.rotation.x = Math.PI / 2;
-  fwdShaft.position.set(0, 0, -0.22 * scale);
+  fwdShaft.position.set(0, 0, -0.14 * scale);
   group.add(fwdShaft);
 
-  const fwdTip = new THREE.Mesh(getSharedPrimitiveGeo('cone'), fwdMat);
-  fwdTip.scale.set(0.2 * scale, 0.28 * scale, 0.2 * scale);
+  const fwdTip = new THREE.Mesh(new THREE.ConeGeometry(0.026 * scale, 0.075 * scale, 12), fwdMat);
   fwdTip.rotation.x = -Math.PI / 2;
-  fwdTip.position.set(0, 0, -0.42 * scale);
+  fwdTip.position.set(0, 0, -0.29 * scale);
   group.add(fwdTip);
 
-  // Малый указатель «Вверх (+Y)»
-  const upTip = new THREE.Mesh(getSharedPrimitiveGeo('cone'), upMat);
-  upTip.scale.set(0.14 * scale, 0.22 * scale, 0.14 * scale);
-  upTip.position.set(0, 0.24 * scale, 0);
+  // Ось «Вверх (+Y)» — короткая золотистая игла (верх рукояти)
+  const upShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.0075 * scale, 0.0075 * scale, 0.15 * scale, 8), upMat);
+  upShaft.position.set(0, 0.08 * scale, 0);
+  group.add(upShaft);
+
+  const upTip = new THREE.Mesh(new THREE.ConeGeometry(0.02 * scale, 0.055 * scale, 10), upMat);
+  upTip.position.set(0, 0.17 * scale, 0);
   group.add(upTip);
+
+  // Ось «Вправо (+X)» — короткий боковой штрих
+  const sideShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.0065 * scale, 0.0065 * scale, 0.11 * scale, 8), sideMat);
+  sideShaft.rotation.z = -Math.PI / 2;
+  sideShaft.position.set(0.06 * scale, 0, 0);
+  group.add(sideShaft);
 
   group.traverse(o => {
     o.renderOrder = 999;
@@ -171,38 +162,61 @@ export function createXRayMuzzleMarkerMesh(colorHex = '#ff3e3e', scale = 1.0) {
   const group = new THREE.Group();
   group.renderOrder = 999;
 
-  const muzMat = new THREE.MeshBasicMaterial({
-    color: colorHex,
-    depthTest: false,
-    depthWrite: false,
-    transparent: true,
-    opacity: 0.94
-  });
-  const ringMat = new THREE.MeshBasicMaterial({
-    color: '#ffce3a',
-    wireframe: true,
-    depthTest: false,
-    depthWrite: false,
-    transparent: true,
-    opacity: 0.9
-  });
+  const mkMat = (col, op = 0.95) =>
+    new THREE.MeshBasicMaterial({
+      color: col,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: op
+    });
 
-  // Кольцо среза ствола
-  const ring = new THREE.Mesh(getSharedPrimitiveGeo('torus'), ringMat);
-  ring.scale.setScalar(0.42 * scale);
-  group.add(ring);
+  const muzMat = mkMat(colorHex, 0.96);
+  const goldMat = mkMat('#ffce3a', 0.92);
+  const whiteMat = mkMat('#ffffff', 0.98);
+  const hitMat = mkMat('#ffffff', 0.0);
 
-  // Центральное ядро точки вылета
-  const core = new THREE.Mesh(getSharedPrimitiveGeo('sphere'), muzMat);
-  core.scale.setScalar(0.22 * scale);
-  group.add(core);
+  // Невидимая сфера для удобного клика мышью
+  const hitSphere = new THREE.Mesh(new THREE.SphereGeometry(0.14 * scale, 8, 8), hitMat);
+  group.add(hitSphere);
 
-  // Стрелка направления вылета снаряда (-Z)
-  const cone = new THREE.Mesh(getSharedPrimitiveGeo('cone'), muzMat);
-  cone.scale.set(0.28 * scale, 0.45 * scale, 0.28 * scale);
-  cone.rotation.x = -Math.PI / 2;
-  cone.position.set(0, 0, -0.22 * scale);
-  group.add(cone);
+  // Тонкое внешнее и внутреннее кольцо снайперского перекрестия дула
+  const outerRing = new THREE.Mesh(new THREE.TorusGeometry(0.1 * scale, 0.0075 * scale, 10, 32), muzMat);
+  group.add(outerRing);
+
+  const innerRing = new THREE.Mesh(new THREE.TorusGeometry(0.042 * scale, 0.0055 * scale, 8, 24), goldMat);
+  group.add(innerRing);
+
+  // 4 тонких деления перекрестия (верх, низ, лево, право)
+  const tickGeoV = new THREE.BoxGeometry(0.008 * scale, 0.042 * scale, 0.008 * scale);
+  const tickGeoH = new THREE.BoxGeometry(0.042 * scale, 0.008 * scale, 0.008 * scale);
+  const tTop = new THREE.Mesh(tickGeoV, goldMat);
+  tTop.position.set(0, 0.095 * scale, 0);
+  const tBot = new THREE.Mesh(tickGeoV, goldMat);
+  tBot.position.set(0, -0.095 * scale, 0);
+  const tLeft = new THREE.Mesh(tickGeoH, goldMat);
+  tLeft.position.set(-0.095 * scale, 0, 0);
+  const tRight = new THREE.Mesh(tickGeoH, goldMat);
+  tRight.position.set(0.095 * scale, 0, 0);
+  group.add(tTop, tBot, tLeft, tRight);
+
+  // Малая светящаяся точка в центре среза ствола
+  const centerDot = new THREE.Mesh(new THREE.SphereGeometry(0.018 * scale, 10, 10), whiteMat);
+  group.add(centerDot);
+
+  // Пунктирный лазерный луч направления выстрела (-Z) со стрелкой на конце
+  const dashGeo = new THREE.CylinderGeometry(0.0065 * scale, 0.0065 * scale, 0.06 * scale, 8);
+  dashGeo.rotateX(Math.PI / 2);
+  for (let i = 0; i < 3; i++) {
+    const dash = new THREE.Mesh(dashGeo, muzMat);
+    dash.position.set(0, 0, -(0.065 + i * 0.095) * scale);
+    group.add(dash);
+  }
+
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.025 * scale, 0.075 * scale, 12), muzMat);
+  tip.rotation.x = -Math.PI / 2;
+  tip.position.set(0, 0, -0.35 * scale);
+  group.add(tip);
 
   group.traverse(o => {
     o.renderOrder = 999;
@@ -358,7 +372,7 @@ export function normalizeItemData(item) {
       item.gripPoint.rz === 0
     ) {
       if (item.useType === 'shield') {
-        item.gripPoint = { x: 0.25, y: 0, z: -0.18, rx: 0, ry: 0, rz: 0 };
+        item.gripPoint = { x: -0.22, y: 0, z: -0.18, rx: 0, ry: 0, rz: 0 };
       } else if (item.useType === 'torch') {
         item.gripPoint = { x: 0, y: 0.15, z: 0, rx: -0.25, ry: 0, rz: 0 };
       } else if (item.useType === 'melee') {
@@ -370,6 +384,8 @@ export function normalizeItemData(item) {
       } else {
         item.gripPoint = { x: 0, y: 0.05, z: -0.08, rx: 0, ry: 0, rz: 0 };
       }
+    } else if (item.useType === 'shield' && Math.abs(item.gripPoint.x - 0.25) < 0.01) {
+      item.gripPoint.x = -0.22;
     }
   }
 
@@ -521,11 +537,11 @@ export function createStarterItemTemplate(presetType = 'sword') {
       useType: 'ranged',
       infiniteDurability: true,
       damage: 25,
-      projSpeed: 46,
-      maxRange: 75,
-      gravityFactor: 0.08,
+      projSpeed: 48,
+      maxRange: 85,
+      gravityFactor: 0,
       blastRadius: 0,
-      spread: 0.02,
+      spread: 0.004,
       canAim: true,
       autoFire: true,
       cooldown: 0.22,
@@ -669,7 +685,7 @@ export function createStarterItemTemplate(presetType = 'sword') {
         damageBonus: 10,
         speedBonus: 0
       },
-      gripPoint: { x: 0.25, y: 0, z: -0.18, rx: 0, ry: 0, rz: 0 },
+      gripPoint: { x: -0.22, y: 0, z: -0.18, rx: 0, ry: 0, rz: 0 },
       parts: [
         { id: uid(), name: 'Основа щита', shape: 'box', x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 1.7, sy: 2.1, sz: 0.22, color: '#2980b9' },
         { id: uid(), name: 'Кромка', shape: 'box', x: 0, y: 0, z: -0.04, rx: 0, ry: 0, rz: 0, sx: 1.35, sy: 1.75, sz: 0.22, color: '#56f0ff' }
@@ -917,14 +933,15 @@ export function createRobloxRig(preset, scale = 1, isAngel = false) {
   const mLegR = makePartMat(cLegR);
 
   // 1. Ноги: пивот в тазобедренном суставе (y = 0.95), геометрия смещена вниз на -0.475
+  // В локальном пространстве рига лицо смотрит в +Z, поэтому анатомическая ПРАВАЯ сторона персонажа — это -X, а ЛЕВАЯ — +X.
   const legGeo = new THREE.BoxGeometry(0.46, 0.95, 0.46);
   legGeo.translate(0, R6_PIVOTS.legCenterOffset, 0);
   const legL = new THREE.Mesh(legGeo, mLegL);
-  legL.position.set(-0.25, R6_PIVOTS.hipY, 0);
+  legL.position.set(0.25, R6_PIVOTS.hipY, 0);
   legL.userData.pivotOffsetY = R6_PIVOTS.legCenterOffset;
 
   const legR = new THREE.Mesh(legGeo, mLegR);
-  legR.position.set(0.25, R6_PIVOTS.hipY, 0);
+  legR.position.set(-0.25, R6_PIVOTS.hipY, 0);
   legR.userData.pivotOffsetY = R6_PIVOTS.legCenterOffset;
   g.add(legL, legR);
 
@@ -937,14 +954,15 @@ export function createRobloxRig(preset, scale = 1, isAngel = false) {
   g.add(torso);
 
   // 3. Руки: пивот в плечевом суставе (y = 1.83), геометрия смещена вниз на -0.38 (визуальный центр = 1.45)
+  // armR (ведущая правая рука) находится справа по взгляду со спины (-0.73 по X в локальных координатах рига)
   const armGeo = new THREE.BoxGeometry(0.44, 0.96, 0.44);
   armGeo.translate(0, R6_PIVOTS.armCenterOffset, 0);
   const armL = new THREE.Mesh(armGeo, mArmL);
-  armL.position.set(-0.73, R6_PIVOTS.shoulderY, 0);
+  armL.position.set(0.73, R6_PIVOTS.shoulderY, 0);
   armL.userData.pivotOffsetY = R6_PIVOTS.armCenterOffset;
 
   const armR = new THREE.Mesh(armGeo, mArmR);
-  armR.position.set(0.73, R6_PIVOTS.shoulderY, 0);
+  armR.position.set(-0.73, R6_PIVOTS.shoulderY, 0);
   armR.userData.pivotOffsetY = R6_PIVOTS.armCenterOffset;
   g.add(armL, armR);
 
@@ -1243,8 +1261,8 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
   let armRX = 0;
   let armLY = 0;
   let armRY = 0;
-  let armLZ = -0.04 - Math.abs(idleBreath) * 0.8;
-  let armRZ = 0.04 + Math.abs(idleBreath) * 0.8;
+  let armLZ = 0.04 + Math.abs(idleBreath) * 0.8;
+  let armRZ = -0.04 - Math.abs(idleBreath) * 0.8;
 
   let torsoX = idleBreath * 0.35;
   let torsoY = 0;
@@ -1260,21 +1278,21 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
     legRX = -Math.sin(swimPhase) * 0.55 + 0.2;
     armLX = Math.cos(swimPhase) * 0.85 - 0.5;
     armRX = -Math.cos(swimPhase) * 0.85 - 0.5;
-    armLZ = -0.28;
-    armRZ = 0.28;
+    armLZ = 0.28;
+    armRZ = -0.28;
     torsoX = 0.26;
     headX = -0.2;
   } else if (!grounded) {
     const airFactor = clamp(vy * 0.06, -0.45, 0.45);
     legLX = -0.32 + walkSwing * 0.35;
     legRX = 0.26 - walkSwing * 0.35;
-    legLZ = -0.05;
-    legRZ = 0.05;
+    legLZ = 0.05;
+    legRZ = -0.05;
 
     armLX = -0.42 - airFactor * 0.7;
     armRX = -0.42 - airFactor * 0.7;
-    armLZ = -0.26;
-    armRZ = 0.26;
+    armLZ = 0.26;
+    armRZ = -0.26;
     torsoX = -airFactor * 0.22;
     headX = airFactor * 0.18;
   } else if (moving) {
@@ -1283,8 +1301,8 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
 
     armLX = -walkSwing * 0.68;
     armRX = walkSwing * 0.68;
-    armLZ = -0.07;
-    armRZ = 0.07;
+    armLZ = 0.07;
+    armRZ = -0.07;
 
     torsoX = 0.07;
     torsoY = -walkSwing * 0.08;
@@ -1308,10 +1326,10 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
     // Поза переноски крупного контейнера в 2 руках (carried)
     armLX = -1.35 + (isEditingCharGrip ? 0 : Math.sin(t * 3.0) * 0.03);
     armRX = -1.35 + (isEditingCharGrip ? 0 : Math.sin(t * 3.0) * 0.03);
-    armLY = 0.28;
-    armRY = -0.28;
-    armLZ = -0.08;
-    armRZ = 0.08;
+    armLY = -0.28;
+    armRY = 0.28;
+    armLZ = 0.08;
+    armRZ = -0.08;
     torsoX = isEditingCharGrip ? 0 : -0.06;
   } else if (isEditingCharGrip === 'hand_grip') {
     // Наглядная поза вытянутой вперёд правой руки (-90°) для точной настройки 1-ручного хвата в Студии
@@ -1323,9 +1341,9 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
   } else if (ent.holdPose === 'throw_charge') {
     // Замах правой рукой назад для метания снаряда
     armRX = -2.35;
-    armRY = 0.22;
-    armRZ = 0.18;
-    torsoY = -0.25;
+    armRY = -0.22;
+    armRZ = -0.18;
+    torsoY = 0.25;
   } else if (ent.holdPose === 'aim') {
     // Прицеливание из стрелкового оружия / посоха (с поправкой на угол камеры по вертикали)
     const pitchOffset = ent.isP ? clamp(-S.pitch, -0.7, 0.7) : 0;
@@ -1334,15 +1352,15 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
     armRZ = 0;
     headX += pitchOffset * 0.45;
   } else if (ent.holdPose === 'shield') {
-    // Удержание силового щита перед корпусом
+    // Удержание силового щита перед корпусом в правой руке
     armRX = -Math.PI / 2;
-    armRY = -0.25;
+    armRY = 0.25;
     armRZ = 0;
   } else if (ent.holdPose === 'tool' || ent.holdPose === 'weapon') {
     // Удержание 1-ручного оружия/предмета в правой руке прямо вперёд
     armRX = -1.52 + Math.sin(t * 2.5) * 0.03;
-    armRY = -0.03;
-    armRZ = 0.02;
+    armRY = 0.03;
+    armRZ = -0.02;
   }
 
   // Анимация удара/выстрела от плечевого сустава
@@ -1357,25 +1375,25 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
       torsoX -= 0.06 * strikeCurve;
     } else {
       armRX = -1.95 * strikeCurve;
-      armRY = -0.32 * strikeCurve;
-      armRZ = 0.18 * strikeCurve;
-      torsoY += 0.28 * strikeCurve;
+      armRY = 0.32 * strikeCurve;
+      armRZ = -0.18 * strikeCurve;
+      torsoY -= 0.28 * strikeCurve;
       torsoX += 0.12 * strikeCurve;
     }
   }
 
   const blend = 1 - Math.exp(-18 * Math.max(0.001, dt));
 
-  rig.legL.position.set(-0.25, R6_PIVOTS.hipY + walkBounce * 0.4, 0);
-  rig.legR.position.set(0.25, R6_PIVOTS.hipY + walkBounce * 0.4, 0);
+  rig.legL.position.set(0.25, R6_PIVOTS.hipY + walkBounce * 0.4, 0);
+  rig.legR.position.set(-0.25, R6_PIVOTS.hipY + walkBounce * 0.4, 0);
   rig.torso.position.set(0, R6_PIVOTS.waistY + walkBounce, 0);
 
   const upperShiftZ = Math.sin(torsoX) * 0.88;
   const upperShiftY = (Math.cos(torsoX) - 1) * 0.88 + walkBounce;
   const shoulderTwistZ = Math.sin(torsoY) * 0.65;
 
-  rig.armL.position.set(-0.73, R6_PIVOTS.shoulderY + upperShiftY + idleBreath * 0.5, upperShiftZ + shoulderTwistZ);
-  rig.armR.position.set(0.73, R6_PIVOTS.shoulderY + upperShiftY + idleBreath * 0.5, upperShiftZ - shoulderTwistZ);
+  rig.armL.position.set(0.73, R6_PIVOTS.shoulderY + upperShiftY + idleBreath * 0.5, upperShiftZ - shoulderTwistZ);
+  rig.armR.position.set(-0.73, R6_PIVOTS.shoulderY + upperShiftY + idleBreath * 0.5, upperShiftZ + shoulderTwistZ);
   rig.head.position.set(0, R6_PIVOTS.neckY + upperShiftY, upperShiftZ * 1.1);
 
   rig.legL.rotation.x += (legLX - rig.legL.rotation.x) * blend;

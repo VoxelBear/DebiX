@@ -22,7 +22,8 @@ import {
   findNearestWorldItem,
   reloadActiveWeapon,
   cancelReloadHold,
-  releaseChargedThrow
+  releaseChargedThrow,
+  syncPlayCameraToPlayer
 } from './PhysicsAndCombat.js';
 import {
   tControls,
@@ -110,26 +111,7 @@ export function render(dt) {
       camera.position.copy(S.spectatorPos);
       camera.lookAt(lookTarget);
     } else {
-      const held = getActiveHeldItem(player);
-      const isADS = S.isAimingRMB && held && held.canAim;
-      const cp = Math.cos(S.pitch);
-      const dx = Math.sin(S.yaw) * cp;
-      const dy = -Math.sin(S.pitch);
-      const dz = Math.cos(S.yaw) * cp;
-      const dist = isADS ? 4.2 : 7.2;
-      const shoulderRightX = isADS ? Math.cos(S.yaw) * 0.85 : 0;
-      const shoulderRightZ = isADS ? -Math.sin(S.yaw) * 0.85 : 0;
-
-      camera.position.set(
-        player.x + shoulderRightX + dx * dist,
-        player.y + (isADS ? 2.25 : 2.4) + dy * dist,
-        player.z + shoulderRightZ + dz * dist
-      );
-      camera.lookAt(
-        player.x + shoulderRightX - dx * (isADS ? 12 : 0),
-        player.y + (isADS ? 2.0 - dy * 12 : 1.8),
-        player.z + shoulderRightZ - dz * (isADS ? 12 : 0)
-      );
+      syncPlayCameraToPlayer(player, dt);
     }
   } else if (S.state === 'edit') {
     updateEditorCamera(dt);

@@ -971,14 +971,7 @@ export async function exportPlayOnlyBuild() {
           updateParticles(dt);
           updateAllPets(dt);
           if (S.state === 'play' && S.player) {
-            const held = getActiveHeldItem(S.player);
-            const isADS = S.isAimingRMB && held && held.canAim;
-            const cp = Math.cos(S.pitch), dx = Math.sin(S.yaw) * cp, dy = -Math.sin(S.pitch), dz = Math.cos(S.yaw) * cp;
-            const dist = isADS ? 4.2 : 7.2;
-            const srX = isADS ? Math.cos(S.yaw) * 0.85 : 0;
-            const srZ = isADS ? -Math.sin(S.yaw) * 0.85 : 0;
-            camera.position.set(S.player.x + srX + dx * dist, S.player.y + (isADS ? 2.25 : 2.4) + dy * dist, S.player.z + srZ + dz * dist);
-            camera.lookAt(S.player.x + srX - dx * (isADS ? 12 : 0), S.player.y + (isADS ? 2.0 - dy * 12 : 1.8), S.player.z + srZ - dz * (isADS ? 12 : 0));
+            syncPlayCameraToPlayer(S.player, dt);
           } else {
             menuAngle += dt * 0.18;
             camera.position.set(Math.cos(menuAngle) * 26, 14, -35 + Math.sin(menuAngle) * 18);
