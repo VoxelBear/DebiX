@@ -1,0 +1,3332 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Очередь в Рай + Обби [ROBLOX 3D + UNITY STUDIO v2.0]</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800;900&display=swap">
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --ui-bg:rgba(24,26,32,.86);
+  --ui-border:rgba(255,255,255,.22);
+  --rbx-green:#00b06f;
+  --rbx-blue:#00a2ff;
+  --rbx-gold:#ffce3a;
+  --rbx-red:#ff3e3e;
+  --ed-bg:#1b1e26;
+  --ed-panel:#252934;
+  --ed-input:#14171f;
+  --ed-border:#383f52;
+  --f:"Montserrat",system-ui,-apple-system,sans-serif;
+}
+html,body{height:100%;width:100%;margin:0;padding:0;overflow:hidden;background:#4aa8ff;color:#fff;font-family:var(--f);touch-action:none;-webkit-user-select:none;user-select:none}
+[hidden]{display:none!important}
+#c{position:fixed;inset:0;display:block;width:100%;height:100%}
+
+/* Roblox Top Bar & HUD */
+#topbar{position:fixed;top:calc(10px + env(safe-area-inset-top,0px));left:12px;right:12px;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none;z-index:10;gap:10px}
+.top-left{display:flex;flex-wrap:wrap;gap:6px;align-items:center;pointer-events:auto;max-width:calc(100vw - 220px)}
+.pill{background:var(--ui-bg);border:2px solid var(--ui-border);border-radius:11px;padding:6px 11px;font-weight:800;font-size:12px;display:flex;align-items:center;gap:6px;backdrop-filter:blur(8px);box-shadow:0 4px 14px rgba(0,0,0,.3);white-space:nowrap}
+.pill b{color:var(--rbx-gold);font-size:14px}
+.pill.pos b{color:#56f0ff}
+.pill.hp b{color:#ff5252}
+.pill.eye-safe{border-color:#00e676;background:rgba(10,55,30,.85);color:#8affc1}
+.pill.eye-warn{border-color:#ff3e3e;background:rgba(85,12,12,.9);color:#ff9e9e;animation:pulse .6s infinite alternate}
+@keyframes pulse{from{transform:scale(1)}to{transform:scale(1.04)}}
+.btn-top{cursor:pointer;background:var(--ui-bg);border:2px solid var(--ui-border);color:#fff;border-radius:10px;padding:6px 11px;font:800 11.5px var(--f);transition:background .15s,transform .08s;white-space:nowrap}
+.btn-top:hover{background:rgba(50,55,70,.95)}
+.btn-studio-toggle{background:linear-gradient(135deg,#8e44ad,#00a2ff)!important;border-color:#88ddff!important;box-shadow:0 4px 14px rgba(0,162,255,.45)}
+
+/* Roblox Leaderboard */
+#leader{background:var(--ui-bg);border:2px solid var(--ui-border);border-radius:12px;padding:8px 12px;width:195px;flex-shrink:0;backdrop-filter:blur(8px);font-size:11.5px;pointer-events:auto;box-shadow:0 4px 16px rgba(0,0,0,.35)}
+#leader h4{margin:0 0 6px;font-size:11px;letter-spacing:.08em;color:#aaa;text-transform:uppercase;display:flex;justify-content:space-between}
+.lb-row{display:flex;justify-content:space-between;padding:3px 4px;border-radius:5px;font-weight:700}
+.lb-row.me{background:rgba(0,162,255,.35);color:#fff}
+.lb-row span:last-child{color:var(--rbx-gold)}
+
+/* Left Shop & Actions Panel */
+#shopPanel{position:fixed;left:12px;top:calc(64px + env(safe-area-inset-top,0px));display:flex;flex-direction:column;gap:6px;z-index:10;width:230px}
+.sbtn{pointer-events:auto;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--ui-bg);border:2px solid var(--ui-border);border-radius:11px;padding:7px 11px;color:#fff;font:800 11.5px/1.2 var(--f);text-align:left;backdrop-filter:blur(8px);box-shadow:0 4px 12px rgba(0,0,0,.3);transition:transform .08s,border-color .15s}
+.sbtn:hover{border-color:var(--rbx-gold);transform:translateX(3px)}
+.sbtn:active{transform:scale(.96)}
+.sbtn .tag{background:var(--rbx-green);color:#fff;padding:4px 7px;border-radius:6px;font-size:10.5px;white-space:nowrap}
+.sbtn.owned .tag{background:#3a8bff}
+.sbtn.act{background:linear-gradient(135deg,#00b06f,#008a57);border-color:#5cffb6}
+.sbtn.troll{background:linear-gradient(135deg,#e53935,#b71c1c);border-color:#ff8a80}
+
+/* Center Notification & Prompt */
+#banner{position:fixed;top:calc(58px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);background:rgba(15,20,30,.94);border:2px solid var(--rbx-gold);color:#fff;padding:8px 18px;border-radius:99px;font:800 12.5px var(--f);pointer-events:none;z-index:45;text-align:center;box-shadow:0 6px 22px rgba(0,0,0,.45);transition:opacity .25s;max-width:90vw}
+#hint{position:fixed;bottom:calc(88px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:rgba(18,22,30,.92);border:2px solid rgba(255,255,255,.35);padding:7px 15px;border-radius:11px;font:800 12px var(--f);pointer-events:none;z-index:11;text-align:center;max-width:88vw}
+
+/* Roblox Classic Bottom Hotbar */
+#hotbar{position:fixed;bottom:calc(12px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:11;pointer-events:auto}
+.slot{width:64px;height:64px;background:rgba(20,22,28,.88);border:2.5px solid rgba(255,255,255,.25);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;position:relative;color:#fff;font:800 10px/1.1 var(--f);text-align:center;padding:4px;transition:transform .08s,border-color .12s}
+.slot.active{border-color:var(--rbx-blue);background:rgba(0,162,255,.28);transform:translateY(-4px);box-shadow:0 6px 16px rgba(0,162,255,.4)}
+.slot .num{position:absolute;top:3px;left:5px;font-size:10px;color:#99a}
+.slot .ico{font-size:20px;margin-bottom:2px}
+
+/* Touch Controls */
+#touch{position:fixed;inset:0;pointer-events:none;z-index:9}
+#stick{position:fixed;width:114px;height:114px;margin:-57px 0 0 -57px;border:3px dashed rgba(255,255,255,.65);border-radius:50%;pointer-events:none}
+#knob{position:absolute;left:50%;top:50%;width:46px;height:46px;margin:-23px 0 0 -23px;border-radius:50%;background:rgba(255,255,255,.8);border:2px solid #111}
+.tbtn{position:fixed;pointer-events:auto;border-radius:50%;background:rgba(25,28,36,.85);border:3px solid rgba(255,255,255,.6);color:#fff;font:900 10.5px var(--f);display:grid;place-items:center;touch-action:none}
+.tbtn:active{transform:scale(.92);background:var(--rbx-blue)}
+#bJump{width:74px;height:74px;right:18px;bottom:90px;background:rgba(0,176,111,.88)}
+#bPush{width:66px;height:66px;right:102px;bottom:94px;background:rgba(229,57,53,.88)}
+#bCut{width:66px;height:66px;right:22px;bottom:174px;background:rgba(255,180,0,.9);color:#111}
+
+/* Modal Menu */
+#menu{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 50%,rgba(15,30,60,.45),rgba(10,15,28,.88));padding:16px;z-index:30;backdrop-filter:blur(6px);overflow:auto}
+.modal{max-width:600px;width:100%;background:linear-gradient(180deg,#232733,#181b24);border:3px solid rgba(255,255,255,.22);border-radius:20px;padding:24px 22px 20px;box-shadow:0 24px 60px rgba(0,0,0,.65);color:#fff}
+.badge{display:inline-block;background:var(--rbx-red);color:#fff;font:900 10.5px var(--f);padding:4px 10px;border-radius:6px;letter-spacing:.1em;margin-bottom:8px}
+.modal h1{margin:0 0 10px;font:900 clamp(24px,5.5vw,38px)/1.05 var(--f);color:#fff;text-shadow:0 3px 0 #000}
+.modal h1 span{color:var(--rbx-gold)}
+.rules{margin:0 0 14px;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:#d6deeb}
+.rules li{padding-left:22px;position:relative;line-height:1.38}
+.rules li::before{content:"🟩";position:absolute;left:0;top:1px;font-size:11px}
+.ctrls{background:rgba(0,0,0,.35);border-radius:12px;padding:10px 12px;font-size:11px;line-height:1.45;color:#b8c4d8;margin-bottom:14px}
+.ctrls b{background:#00a2ff;color:#fff;padding:2px 6px;border-radius:5px;margin-right:4px;font-size:10px}
+.play-btn{width:100%;padding:13px;border:0;border-radius:12px;background:linear-gradient(180deg,#00d484,#009e60);color:#fff;font:900 15px var(--f);letter-spacing:.04em;cursor:pointer;box-shadow:0 5px 0 #00663d,0 10px 24px rgba(0,212,132,.35);transition:transform .08s,box-shadow .08s}
+.play-btn:hover{filter:brightness(1.08)}
+.play-btn:active{transform:translateY(3px);box-shadow:0 2px 0 #00663d}
+.menu-row{display:flex;gap:10px;flex-wrap:wrap}
+.menu-row .play-btn{flex:1;min-width:200px}
+
+/* ======================== FIXED NON-SHIFTING STUDIO 3D EDITOR UI ======================== */
+#studioUI{position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:25;display:grid;grid-template-rows:46px minmax(0,1fr);overflow:hidden}
+.ed-topbar{pointer-events:auto;background:var(--ed-bg);border-bottom:2px solid var(--ed-border);display:flex;align-items:center;justify-content:space-between;padding:0 10px;gap:8px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,.45)}
+.ed-topbar::-webkit-scrollbar{height:4px}
+.ed-topbar::-webkit-scrollbar-thumb{background:#454d63;border-radius:2px}
+.ed-brand{display:flex;align-items:center;gap:6px;font:900 12px var(--f);color:#56f0ff;flex-shrink:0}
+.ed-brand span{background:#00a2ff;color:#fff;padding:3px 6px;border-radius:5px;font-size:10px}
+.ed-tools{display:flex;align-items:center;gap:5px;flex-shrink:0}
+.ed-btn{cursor:pointer;background:var(--ed-panel);border:1.5px solid var(--ed-border);color:#dde3f0;border-radius:7px;padding:5px 9px;font:800 11px var(--f);display:inline-flex;align-items:center;gap:5px;transition:all .12s;white-space:nowrap;flex-shrink:0}
+.ed-btn:hover{border-color:#00a2ff;color:#fff;background:#313746}
+.ed-btn.active{background:#00a2ff;border-color:#70cfff;color:#fff;box-shadow:0 0 10px rgba(0,162,255,.4)}
+.ed-btn.apply-oneclick{background:linear-gradient(135deg,#00d484,#009e60);border-color:#69f0ae;color:#fff;padding:6px 12px;box-shadow:0 2px 10px rgba(0,212,132,.35)}
+.ed-btn.danger{background:#c0392b;border-color:#ff7675;color:#fff}
+
+.ed-body{display:flex;justify-content:space-between;width:100%;height:100%;min-height:0;overflow:hidden;pointer-events:none;position:relative}
+.ed-sidebar{pointer-events:auto;width:280px;height:100%;min-height:0;flex-shrink:0;background:rgba(27,30,38,.95);backdrop-filter:blur(10px);display:flex;flex-direction:column;border-right:2px solid var(--ed-border);overflow:hidden}
+.ed-sidebar.right{border-right:0;border-left:2px solid var(--ed-border);width:350px}
+.ed-sec-title{background:#14161d;padding:7px 10px;font:900 10.5px var(--f);text-transform:uppercase;letter-spacing:.06em;color:#8fa0bd;border-bottom:1px solid var(--ed-border);display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+.ed-scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:8px;display:flex;flex-direction:column;gap:7px}
+.ed-scroll::-webkit-scrollbar{width:6px}
+.ed-scroll::-webkit-scrollbar-thumb{background:#454d63;border-radius:3px}
+
+/* Spawn Grid */
+.spawn-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:7px;flex-shrink:0;border-bottom:1px solid var(--ed-border)}
+.spawn-card{cursor:pointer;background:var(--ed-panel);border:1.5px solid var(--ed-border);border-radius:7px;padding:6px 4px;text-align:center;font:800 10.5px var(--f);color:#e2e8f0;transition:all .12s;display:flex;flex-direction:column;align-items:center;gap:2px}
+.spawn-card:hover{border-color:var(--rbx-gold);background:#333949;transform:translateY(-1px)}
+.spawn-card .ico{font-size:15px}
+
+/* Hierarchy List */
+.hier-item{cursor:pointer;padding:5px 8px;border-radius:6px;background:var(--ed-panel);border:1px solid transparent;font:700 11px var(--f);color:#cfd8e8;display:flex;justify-content:space-between;align-items:center;gap:6px;flex-shrink:0}
+.hier-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hier-item:hover{background:#323847}
+.hier-item.sel{background:rgba(0,162,255,.28);border-color:#00a2ff;color:#fff}
+.hier-item small{color:#8fa0bd;font-size:9.5px;flex-shrink:0}
+
+/* Inspector Controls */
+.prop-group{background:var(--ed-panel);border:1px solid var(--ed-border);border-radius:8px;padding:8px 9px;display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.prop-group h5{margin:0 0 2px;font:900 10.5px var(--f);color:#ffce3a;text-transform:uppercase;letter-spacing:.04em;display:flex;justify-content:space-between;align-items:center}
+.prop-row{display:flex;align-items:center;justify-content:space-between;gap:6px;font:700 11px var(--f);color:#cbd5e1;min-width:0}
+.prop-row label{flex:0 0 84px;font-size:10.5px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vec3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;flex:1;min-width:0}
+.ed-inp{width:100%;min-width:0;background:var(--ed-input);border:1px solid var(--ed-border);color:#fff;border-radius:5px;padding:4px 6px;font:700 11px var(--f)}
+.ed-inp:focus{outline:none;border-color:#00a2ff}
+input[type="color"].ed-color{width:36px;height:24px;border:1px solid var(--ed-border);border-radius:5px;background:var(--ed-input);cursor:pointer;padding:1px;flex-shrink:0}
+.cos-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+.cos-chip{cursor:pointer;background:var(--ed-input);border:1.5px solid var(--ed-border);border-radius:6px;padding:5px 6px;font:700 10.5px var(--f);color:#cbd5e1;display:flex;align-items:center;gap:4px;transition:all .1s;overflow:hidden;white-space:nowrap}
+.cos-chip.on{background:rgba(0,212,132,.22);border-color:#00d484;color:#fff}
+
+.limb-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.limb-card{background:var(--ed-input);border:1px solid var(--ed-border);border-radius:6px;padding:5px;display:flex;align-items:center;justify-content:space-between;gap:4px;font:700 10px var(--f)}
+
+.ed-helpbar{pointer-events:none;position:absolute;bottom:10px;left:50%;transform:translateX(-50%);background:rgba(15,18,26,.9);border:1.5px solid var(--ed-border);border-radius:99px;padding:5px 14px;font:700 11px var(--f);color:#cbd5e1;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,.4);max-width:calc(100vw - 650px);overflow:hidden;text-overflow:ellipsis}
+.ed-helpbar b{color:#56f0ff}
+
+/* 2D Print Studio Modal (With Eyedropper, Flood Fill & Alpha Support) */
+#paintModal{position:fixed;inset:0;background:rgba(10,13,20,.85);backdrop-filter:blur(6px);z-index:50;display:flex;align-items:center;justify-content:center;padding:14px;pointer-events:auto}
+.paint-box{background:var(--ed-bg);border:2px solid #00a2ff;border-radius:16px;max-width:780px;width:100%;max-height:94vh;overflow-y:auto;padding:16px;box-shadow:0 20px 60px rgba(0,0,0,.75);display:flex;flex-direction:column;gap:10px}
+.paint-head{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--ed-border);padding-bottom:8px}
+.paint-head h3{margin:0;font:900 15px var(--f);color:#fff}
+.paint-main{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start}
+.paint-canvas-wrap{background:#111;border:2px solid var(--ed-border);border-radius:10px;padding:8px;display:flex;flex-direction:column;align-items:center;gap:6px}
+.checkerboard{width:280px;height:280px;border-radius:6px;overflow:hidden;background-color:#ccc;background-image:linear-gradient(45deg,#888 25%,transparent 25%),linear-gradient(-45deg,#888 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#888 75%),linear-gradient(-45deg,transparent 75%,#888 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}
+#paintCv{width:280px;height:280px;image-rendering:pixelated;cursor:crosshair;display:block;touch-action:none}
+.paint-controls{flex:1;min-width:260px;display:flex;flex-direction:column;gap:8px}
+.swatch-row{display:flex;flex-wrap:wrap;gap:5px}
+.swatch{width:22px;height:22px;border-radius:5px;cursor:pointer;border:2px solid rgba(255,255,255,.25)}
+.swatch:hover{transform:scale(1.12);border-color:#fff}
+
+@media (max-width:900px){
+  #leader{display:none}
+  #shopPanel{top:auto;bottom:84px;left:8px;width:185px;transform:scale(.9);transform-origin:bottom left}
+  .ed-sidebar{width:210px}
+  .ed-sidebar.right{width:250px}
+  .ed-helpbar{display:none}
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- ===================== GAME HUD ===================== -->
+<div id="topbar" hidden>
+  <div class="top-left">
+    <div class="pill pos">ОЧЕРЕДЬ:<b id="posTxt">#30 / 30</b></div>
+    <div class="pill hp" id="hpPill">❤️ HP:<b id="hpTxt">100 / 100</b></div>
+    <div class="pill">КАРМА:<b id="cashTxt">25 R$</b></div>
+    <div class="pill">РЕБИРТЫ:<b id="rebTxt">0</b></div>
+    <div class="pill eye-safe" id="eyePill">👁️ АРХАНГЕЛ ОТВЕРНУЛСЯ (МОЖНО ТОЛКАТЬ!)</div>
+    <button class="btn-top" id="muteBtn" type="button">ЗВУК: ВКЛ</button>
+    <button class="btn-top btn-studio-toggle" id="openStudioBtn" type="button">🛠️ 3D РЕДАКТОР (F2)</button>
+  </div>
+  <div id="leader">
+    <h4><span>ОЧЕРЕДЬ В РАЙ</span><span>МЕСТО</span></h4>
+    <div id="lbList"></div>
+  </div>
+</div>
+
+<div id="shopPanel" hidden>
+  <button class="sbtn act" id="btnCut" type="button">
+    <span>⏩ Обогнать в очереди<br><small style="color:#b8ffda;font-weight:600">Занять место впереди (E)</small></span>
+    <span class="tag" id="costCut">35 R$</span>
+  </button>
+  <button class="sbtn troll" id="btnPush" type="button">
+    <span>🥊 Ударить / Толкнуть!<br><small style="color:#ffd0d0;font-weight:600">Удар рукой (ЛКМ / F)</small></span>
+    <span class="tag" style="background:#111">УДАР</span>
+  </button>
+  <button class="sbtn" id="buySpeed" type="button">
+    <span>🌀 Пружина Скорости<br><small style="color:#aaa;font-weight:600">+65% к бегу в Обби</small></span>
+    <span class="tag" id="costSpeed">80 R$</span>
+  </button>
+  <button class="sbtn" id="buyGrav" type="button">
+    <span>🚀 Пружина Прыжка<br><small style="color:#aaa;font-weight:600">Высокий прыжок (Gravity)</small></span>
+    <span class="tag" id="costGrav">120 R$</span>
+  </button>
+  <button class="sbtn" id="buyHalo" type="button">
+    <span>😇 VIP Нимб Донатера<br><small style="color:#aaa;font-weight:600">x2 R$ и защита от молнии</small></span>
+    <span class="tag" id="costHalo">250 R$</span>
+  </button>
+</div>
+
+<div id="banner" hidden>Добро пожаловать в Очередь в Рай!</div>
+<div id="hint" hidden></div>
+
+<div id="hotbar" hidden>
+  <div class="slot active" data-slot="0"><span class="num">1</span><span class="ico">🥊</span>Кулак</div>
+  <div class="slot" data-slot="1"><span class="num">2</span><span class="ico">🌀</span>Speed</div>
+  <div class="slot" data-slot="2"><span class="num">3</span><span class="ico">🚀</span>Gravity</div>
+  <div class="slot" data-slot="3"><span class="num">4</span><span class="ico">☁️</span>В очередь</div>
+</div>
+
+<div id="touch" hidden>
+  <div id="stick" hidden><div id="knob"></div></div>
+  <button class="tbtn" id="bJump" type="button">ПРЫЖОК</button>
+  <button class="tbtn" id="bPush" type="button">УДАР</button>
+  <button class="tbtn" id="bCut" type="button">ОБОГНАТЬ</button>
+</div>
+
+<!-- ===================== UNITY / ROBLOX STUDIO 3D EDITOR OVERLAY ===================== -->
+<div id="studioUI" hidden>
+  <div class="ed-topbar">
+    <div class="ed-brand">
+      <span>STUDIO 3D v2</span> РЕДАКТОР ИГРЫ
+    </div>
+    <div class="ed-tools">
+      <button class="ed-btn active" id="gizmoMove" type="button" title="Перемещение (W)">✥ Двигать (W)</button>
+      <button class="ed-btn" id="gizmoRot" type="button" title="Вращение (E)">🔄 Вращать (E)</button>
+      <button class="ed-btn" id="gizmoScale" type="button" title="Масштаб / Размер (R)">📐 Размер (R)</button>
+      <button class="ed-btn" id="btnSnapToggle" type="button">🧲 Сетка: ВЫКЛ</button>
+      <button class="ed-btn" id="btnColliderVis" type="button">🔲 Коллайдеры: ВЫКЛ</button>
+      <button class="ed-btn" id="openWorldSettingsBtn" type="button">🌤️ Скайбокс и Мир</button>
+      <button class="ed-btn" id="openFacePaintBtn" type="button">🎨 2D Принт-Студия</button>
+      <button class="ed-btn" id="dupObjBtn" type="button" title="Дублировать (Ctrl+D)">📋 Дубль</button>
+      <button class="ed-btn danger" id="delObjBtn" type="button" title="Удалить (Delete)">🗑️ Удалить</button>
+    </div>
+    <div class="ed-tools">
+      <button class="ed-btn apply-oneclick" id="applyAndSaveBtn" type="button">💾 ПРИМЕНИТЬ И СОХРАНИТЬ (1 КЛИК)</button>
+      <button class="ed-btn" id="exportHtmlBtn" type="button">📥 Скачать .HTML</button>
+      <button class="ed-btn" id="resetSavedBtn" type="button">♻️ Сброс</button>
+    </div>
+  </div>
+
+  <div class="ed-body">
+    <!-- Left Sidebar: Spawner & Scene Hierarchy -->
+    <div class="ed-sidebar">
+      <div class="ed-sec-title"><span>➕ СПАВН ОБЪЕКТОВ И NPC</span></div>
+      <div class="spawn-grid">
+        <div class="spawn-card" data-spawn="solid"><span class="ico">🧱</span>Лего-Блок (Твёрдый)</div>
+        <div class="spawn-card" data-spawn="liquid"><span class="ico">💧</span>Вода / Лава (Жидкость)</div>
+        <div class="spawn-card" data-spawn="gas"><span class="ico">☁️</span>Облако / Пар (Газ)</div>
+        <div class="spawn-card" data-spawn="checkpoint"><span class="ico">⭐</span>Чекпоинт Обби</div>
+        <div class="spawn-card" data-spawn="kill"><span class="ico">🚨</span>Урон-Лазер (Kill)</div>
+        <div class="spawn-card" data-spawn="trampoline"><span class="ico">🟢</span>Батут (Прыгучий)</div>
+        <div class="spawn-card" data-spawn="spawner"><span class="ico">⚙️</span>Спавнер Ботов/Монет</div>
+        <div class="spawn-card" data-spawn="npc"><span class="ico">🤖</span>Спавн NPC-Бота</div>
+      </div>
+      <div class="ed-sec-title">
+        <span>📂 ВСЕ ОБЪЕКТЫ СЦЕНЫ</span>
+        <select id="hierFilter" class="ed-inp" style="width:118px;padding:2px 4px;font-size:10px">
+          <option value="all">Все объекты</option>
+          <option value="chars">Игрок и Боты</option>
+          <option value="checkpoints">Чекпоинты</option>
+          <option value="clouds">Облака / Газ</option>
+          <option value="blocks">Блоки / Платформы</option>
+        </select>
+      </div>
+      <div class="ed-scroll" id="hierContainer"></div>
+    </div>
+
+    <!-- Center Viewport Help Bar -->
+    <div class="ed-helpbar">
+      <b>ЛКМ</b> — выбрать · <b>ПКМ + WASD/QE</b> — полёт · <b>W/E/R</b> — Сдвиг/Поворот/Размер · <b>F</b> — Фокус · <b>Ctrl+D</b> — Дубль
+    </div>
+
+    <!-- Right Sidebar: Inspector -->
+    <div class="ed-sidebar right">
+      <div class="ed-sec-title">
+        <span>⚙️ ИНСПЕКТОР СВОЙСТВ</span>
+        <span id="inspTypeBadge" style="color:#56f0ff">Мир / Скайбокс</span>
+      </div>
+      <div class="ed-scroll" id="inspectorContent"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 2D PRINT PAINTER MODAL (EYEDROPPER, FLOOD FILL & ALPHA) ===================== -->
+<div id="paintModal" hidden>
+  <div class="paint-box">
+    <div class="paint-head">
+      <h3 id="paintModalTitle">🎨 2D СТУДИЯ ПРИНТОВ И ТЕКСТУР (С ПРОЗРАЧНОСТЬЮ АЛЬФА)</h3>
+      <button class="ed-btn danger" id="closePaintBtn" type="button">✕ Закрыть</button>
+    </div>
+    <div class="paint-main">
+      <div class="paint-canvas-wrap">
+        <div class="checkerboard">
+          <canvas id="paintCv" width="128" height="128"></canvas>
+        </div>
+        <div style="font-size:10.5px;color:#94a3b8">Холст 128×128 (шахматный фон = прозрачность Alpha)</div>
+      </div>
+      <div class="paint-controls">
+        <div class="prop-group">
+          <h5>Инструменты: Кисть, Заливка, Пипетка, Ластик и Альфа</h5>
+          <div class="prop-row">
+            <label>Цвет и Альфа</label>
+            <input type="color" id="paintColor" class="ed-color" value="#111111">
+            <input type="range" id="paintAlpha" min="0" max="100" value="100" title="Прозрачность (Alpha)" style="flex:1">
+            <span id="paintAlphaTxt" style="font-size:10px;width:34px;text-align:right">100%</span>
+          </div>
+          <div class="prop-row">
+            <label>Размер кисти</label>
+            <input type="range" id="paintSize" min="1" max="28" value="6" style="flex:1">
+          </div>
+          <div class="swatch-row" id="paintSwatches"></div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px">
+            <button class="ed-btn active" id="toolBrush" type="button">🖌️ Кисть</button>
+            <button class="ed-btn" id="toolBucket" type="button">🪣 Заливка</button>
+            <button class="ed-btn" id="toolPicker" type="button">💧 Пипетка</button>
+            <button class="ed-btn" id="toolEraser" type="button">🧽 Ластик (Прозр.)</button>
+            <button class="ed-btn" id="toolSym" type="button">🦋 Симметрия</button>
+            <button class="ed-btn" id="toolClearAlpha" type="button">🗑️ Очистить в 0%</button>
+          </div>
+        </div>
+
+        <div class="prop-group">
+          <h5>Быстрые шаблоны (Лица и Лего-Кирпичики)</h5>
+          <div style="display:flex;gap:4px;flex-wrap:wrap">
+            <button class="ed-btn" data-fpreset="classic" type="button">🙂 Нуб</button>
+            <button class="ed-btn" data-fpreset="cool" type="button">😎 Очки</button>
+            <button class="ed-btn" data-fpreset="angry" type="button">😠 Злой</button>
+            <button class="ed-btn" data-fpreset="angel" type="button">😇 Ангел</button>
+            <button class="ed-btn" data-spreset="round" type="button">🧱 Лего Круг</button>
+            <button class="ed-btn" data-spreset="square" type="button">⬜ Лего Квадрат</button>
+            <button class="ed-btn" data-spreset="neonGrid" type="button">💠 Неон</button>
+          </div>
+        </div>
+
+        <div class="prop-group">
+          <h5>Куда применить нарисованный принт?</h5>
+          <div class="prop-row">
+            <label>Цель наложения</label>
+            <select id="paintTargetSelect" class="ed-inp">
+              <option value="face">😀 Лицо персонажа (Перед головы)</option>
+              <option value="head">🟨 Вся Голова персонажа</option>
+              <option value="torso">👕 Торс / Футболка персонажа</option>
+              <option value="armL">💪 Левая рука персонажа</option>
+              <option value="armR">💪 Правая рука персонажа</option>
+              <option value="legL">👖 Левая нога персонажа</option>
+              <option value="legR">👖 Правая нога персонажа</option>
+              <option value="cosmetic">🎩 Выбранный свой аксессуар</option>
+              <option value="block">🧱 Выбранный Блок / Платформа</option>
+              <option value="globalStuds">🌍 Все стандартные Лего-Платформы</option>
+            </select>
+          </div>
+          <button class="ed-btn apply-oneclick" id="applyPaintBtn" type="button" style="justify-content:center;width:100%">✅ ПРИМЕНИТЬ ПРИНТ К ВЫБРАННОЙ ЦЕЛИ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== START MODAL ===================== -->
+<div id="menu">
+  <div class="modal" id="modalBox">
+    <span class="badge">ROBLOX OBBY & LINE SIMULATOR 3D + STUDIO v2.0</span>
+    <h1>ОЧЕРЕДЬ В <span>РАЙ</span><br>+ 3D STUDIO ДВИЖОК</h1>
+    <ul class="rules">
+      <li><b>Очередь к Вратам Рая (#30 → #1):</b> обгоняй за `R$` (`E`), проходи Обби справа или толкай и бей рукой (`ЛКМ` / `F`)!</li>
+      <li><b>Здоровье и Рукопашный Бой:</b> бей ботов рукой (`ЛКМ`), следи за всплывающей полоской здоровья или включай/выключай урон в редакторе.</li>
+      <li><b>Полный 3D-Редактор (`F2`):</b> градиентный скайбокс, жидкие/газообразные/твёрдые блоки, управление облаками и чекпоинтами, спавнеры, коллайдеры, цвета и принты каждой части тела и 3D-конструктор собственной косметики!</li>
+    </ul>
+    <div class="ctrls">
+      <div><b>ИГРА</b>Мышь — камера · WASD — бег · Пробел — прыжок/плавание · <b>ЛКМ</b> — удар рукой · <b>F</b> — толкнуть в очереди · <b>E</b> — обогнать / спавнер · <b>R или 4</b> — в очередь</div>
+      <div><b>3D РЕДАКТОР (`F2`)</b>ЛКМ — выбрать любой объект/облако/чекпоинт/бота · ПКМ + WASD/QE — полёт камеры · <b>W/E/R</b> — Сдвиг/Поворот/Размер</div>
+    </div>
+    <div class="menu-row">
+      <button class="play-btn" id="startBtn" type="button">▶ ИГРАТЬ В ОЧЕРЕДЬ</button>
+      <button class="play-btn" id="startEditorBtn" type="button" style="background:linear-gradient(180deg,#3498db,#1f6dad);box-shadow:0 5px 0 #12436b">🛠️ ОТКРЫТЬ 3D РЕДАКТОР</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
+<script id="bakedSceneDataScript">
+window.__BAKED_SCENE_STATE__ = null;
+</script>
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+const TAU=Math.PI*2;
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const pick=a=>a[Math.random()*a.length|0];
+const coarse=matchMedia('(pointer:coarse)').matches;
+
+/* ---------- Renderer & Scene ---------- */
+const cv=$('c');
+const renderer=new THREE.WebGLRenderer({canvas:cv,antialias:!coarse,powerPreference:'high-performance'});
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.1;
+
+const scene=new THREE.Scene();
+scene.fog=new THREE.FogExp2(0x88ccff,0.0038);
+
+const camera=new THREE.PerspectiveCamera(65,1,0.1,700);
+let SW=1,SH=1;
+function resize(){
+  SW=innerWidth;SH=innerHeight;
+  renderer.setSize(SW,SH);
+  camera.aspect=SW/SH;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize',resize);resize();
+
+const hemi=new THREE.HemisphereLight(0xffffff,0x5588bb,0.9);
+scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xfff6dd,1.25);
+sun.position.set(45,85,35);
+sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048);
+{const sc=sun.shadow.camera;sc.left=-90;sc.right=90;sc.top=90;sc.bottom=-90;sc.near=5;sc.far=250;}
+sun.shadow.bias=-0.0005;
+scene.add(sun);
+
+/* ---------- Gradient Skybox System ---------- */
+const worldSettings = {
+  skyTop: '#1565c0',
+  skyMid: '#62b6ff',
+  skyBot: '#dff4ff',
+  fogColor: '#88ccff',
+  fogDensity: 0.0038,
+  gravity: 22
+};
+
+const skyCanvas = document.createElement('canvas');
+skyCanvas.width = 64; skyCanvas.height = 256;
+const skyCtx = skyCanvas.getContext('2d');
+const skyTex = new THREE.CanvasTexture(skyCanvas);
+const skyGeo = new THREE.SphereGeometry(500, 32, 24);
+const skyMat = new THREE.MeshBasicMaterial({map: skyTex, side: THREE.BackSide, depthWrite: false, fog: false});
+const skyDome = new THREE.Mesh(skyGeo, skyMat);
+scene.add(skyDome);
+
+function updateSkybox(){
+  const grad = skyCtx.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0.0, worldSettings.skyTop);
+  grad.addColorStop(0.52, worldSettings.skyMid);
+  grad.addColorStop(1.0, worldSettings.skyBot);
+  skyCtx.fillStyle = grad;
+  skyCtx.fillRect(0, 0, 64, 256);
+  skyTex.needsUpdate = true;
+  scene.fog.color.set(worldSettings.fogColor);
+  scene.fog.density = worldSettings.fogDensity;
+}
+updateSkybox();
+
+/* ---------- Procedural Roblox Studs & Alpha Textures ---------- */
+let customDefaultStudDataURL = null;
+
+function drawStudPatternOnCtx(g, bgHex, lineHex, style='round'){
+  g.clearRect(0,0,128,128);
+  g.fillStyle=bgHex;g.fillRect(0,0,128,128);
+  g.strokeStyle=lineHex;g.lineWidth=3;
+  g.strokeRect(2,2,124,124);
+  for(const [x,y] of [[32,32],[96,32],[32,96],[96,96]]){
+    if(style==='round'){
+      g.beginPath();g.arc(x,y,16,0,TAU);
+      g.fillStyle='rgba(255,255,255,.16)';g.fill();
+      g.strokeStyle='rgba(0,0,0,.22)';g.lineWidth=2.5;g.stroke();
+    }else if(style==='square'){
+      g.fillStyle='rgba(255,255,255,.18)';
+      g.fillRect(x-15,y-15,30,30);
+      g.strokeStyle='rgba(0,0,0,.25)';g.lineWidth=2.5;
+      g.strokeRect(x-15,y-15,30,30);
+    }else if(style==='neonGrid'){
+      g.strokeStyle='#00f2fe';g.lineWidth=2;
+      g.strokeRect(x-18,y-18,36,36);
+      g.beginPath();g.arc(x,y,6,0,TAU);g.fillStyle='#00f2fe';g.fill();
+    }
+  }
+}
+
+function makeStudTex(bgHex,lineHex,style='round'){
+  const c=document.createElement('canvas');c.width=c.height=128;
+  const g=c.getContext('2d');
+  drawStudPatternOnCtx(g,bgHex,lineHex,style);
+  const t=new THREE.CanvasTexture(c);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  t.userData={dataURL:c.toDataURL()};
+  return t;
+}
+
+function makeTexFromDataURL(dataURL, repeat=true){
+  const c=document.createElement('canvas');c.width=c.height=128;
+  const g=c.getContext('2d');
+  const t=new THREE.CanvasTexture(c);
+  if(repeat){t.wrapS=t.wrapT=THREE.RepeatWrapping;}
+  t.userData={dataURL};
+  const img=new Image();
+  img.onload=()=>{
+    g.clearRect(0,0,128,128);
+    g.drawImage(img,0,0,128,128);
+    t.needsUpdate=true;
+  };
+  img.src=dataURL;
+  return t;
+}
+
+const studWhite=makeStudTex('#f2f6ff','rgba(160,185,220,.4)');
+const studGold=makeStudTex('#ffd24c','rgba(180,120,0,.45)');
+
+function createBlockMaterial(colorHex, repX=2, repZ=2, gold=false, customTexDataURL=null, matterState='solid'){
+  let baseTex = gold ? studGold : studWhite;
+  let t;
+  if(customTexDataURL){
+    t=makeTexFromDataURL(customTexDataURL,true);
+  }else if(!gold && customDefaultStudDataURL){
+    t=makeTexFromDataURL(customDefaultStudDataURL,true);
+  }else{
+    t=baseTex.clone();
+    t.needsUpdate=true;
+  }
+  t.repeat.set(Math.max(0.5,repX),Math.max(0.5,repZ));
+  const isLiquid = matterState==='liquid';
+  const isGas = matterState==='gas';
+  const mat=new THREE.MeshStandardMaterial({
+    map:t,
+    color:colorHex,
+    roughness:isLiquid?0.15:( isGas?0.9:0.45 ),
+    metalness:gold?0.45:(isLiquid?0.2:0.08),
+    transparent:true,
+    opacity:isLiquid?0.72:(isGas?0.48:1.0),
+    alphaTest:0.02
+  });
+  mat.userData={gold,customTexDataURL};
+  return mat;
+}
+
+/* ---------- WebAudio Roblox Sound Effects ---------- */
+let AC=null,master=null,soundOn=true;
+function initAudio(){
+  if(!AC){
+    const C=window.AudioContext||window.webkitAudioContext;
+    if(C){AC=new C();master=AC.createGain();master.gain.value=0.7;master.connect(AC.destination);}
+  }
+  if(AC&&AC.state==='suspended')AC.resume();
+}
+function tone(f0,f1,dur,type='sine',vol=0.18,delay=0){
+  if(!AC||!soundOn)return;
+  const t=AC.currentTime+delay;
+  const o=AC.createOscillator(),g=AC.createGain();
+  o.type=type;o.frequency.setValueAtTime(f0,t);
+  if(f1)o.frequency.exponentialRampToValueAtTime(Math.max(20,f1),t+dur);
+  g.gain.setValueAtTime(0.001,t);
+  g.gain.linearRampToValueAtTime(vol,t+0.015);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g);g.connect(master);
+  o.start(t);o.stop(t+dur+0.03);
+}
+const sfx={
+  oof(){tone(210,125,0.26,'sawtooth',0.26);tone(160,95,0.26,'triangle',0.22,0.02);},
+  coil(){tone(240,780,0.28,'sine',0.2);tone(780,420,0.22,'triangle',0.14,0.12);},
+  jump(){tone(260,520,0.14,'sine',0.12);},
+  cash(){tone(987.77,1318.5,0.12,'square',0.14);tone(1318.5,1975.5,0.24,'triangle',0.16,0.09);},
+  slap(){tone(420,90,0.15,'sawtooth',0.28);},
+  hit(){tone(180,65,0.18,'square',0.3);},
+  zap(){tone(680,75,0.45,'sawtooth',0.32);tone(320,55,0.45,'square',0.24,0.04);},
+  checkpoint(){[523.25,659.25,783.99,1046.5].forEach((f,i)=>tone(f,f,0.28,'triangle',0.15,i*0.06));},
+  gate(){[392,493.88,587.33,783.99,1046.5,1318.5].forEach((f,i)=>tone(f,f,0.65,'sine',0.16,i*0.09));}
+};
+$('muteBtn').addEventListener('click',()=>{
+  initAudio();soundOn=!soundOn;
+  if(master)master.gain.value=soundOn?0.7:0;
+  $('muteBtn').textContent=soundOn?'ЗВУК: ВКЛ':'ЗВУК: ВЫКЛ';
+});
+
+/* ---------- Blocky R6 Character Builder (Independent Limbs, Prints & Custom Cosmetics) ---------- */
+function drawFacePresetOnCtx(g, bgHex='#f5cd30', preset='classic'){
+  g.clearRect(0,0,128,128);
+  g.fillStyle=bgHex;g.fillRect(0,0,128,128);
+  g.fillStyle='#111';g.strokeStyle='#111';g.lineCap='round';
+  if(preset==='classic'){
+    g.beginPath();g.arc(44,50,8,0,TAU);g.arc(84,50,8,0,TAU);g.fill();
+    g.lineWidth=6;
+    g.beginPath();g.arc(64,62,24,0.18*Math.PI,0.82*Math.PI);g.stroke();
+  }else if(preset==='cool'){
+    g.fillStyle='#111';
+    g.fillRect(22,38,38,20);g.fillRect(68,38,38,20);
+    g.fillRect(58,42,12,6);
+    g.fillStyle='#56f0ff';
+    g.fillRect(26,42,12,6);g.fillRect(72,42,12,6);
+    g.lineWidth=5;g.beginPath();g.moveTo(46,84);g.quadraticCurveTo(64,96,86,78);g.stroke();
+  }else if(preset==='angry'){
+    g.beginPath();g.arc(44,54,8,0,TAU);g.arc(84,54,8,0,TAU);g.fill();
+    g.lineWidth=6;
+    g.beginPath();g.moveTo(28,36);g.lineTo(54,46);g.moveTo(100,36);g.lineTo(74,46);g.stroke();
+    g.beginPath();g.arc(64,94,20,1.15*Math.PI,1.85*Math.PI);g.stroke();
+  }else if(preset==='angel'){
+    g.fillStyle='#ff9ff3';
+    g.beginPath();g.arc(30,66,10,0,TAU);g.arc(98,66,10,0,TAU);g.fill();
+    g.fillStyle='#111';g.lineWidth=5;
+    g.beginPath();g.arc(44,50,10,Math.PI,TAU);g.stroke();
+    g.beginPath();g.arc(84,50,10,Math.PI,TAU);g.stroke();
+    g.beginPath();g.arc(64,64,20,0.2*Math.PI,0.8*Math.PI);g.stroke();
+  }
+}
+
+function makePartMat(colorHex, texDataURL=null){
+  const m = new THREE.MeshLambertMaterial({
+    color: texDataURL ? 0xffffff : colorHex,
+    transparent: true,
+    alphaTest: 0.02
+  });
+  if(texDataURL){
+    m.map = makeTexFromDataURL(texDataURL, false);
+  }
+  m.userData = {baseColor: colorHex, texDataURL};
+  return m;
+}
+
+function makeDefaultFaceDataURL(){
+  const c=document.createElement('canvas');c.width=c.height=128;
+  drawFacePresetOnCtx(c.getContext('2d'),'#f5cd30','classic');
+  return c.toDataURL();
+}
+const defaultFaceURL = makeDefaultFaceDataURL();
+
+const PRESETS=[
+  {head:0xf5cd30,torso:0x0088dd,armL:0xf5cd30,armR:0xf5cd30,legL:0x789048,legR:0x789048,hair:null,hat:null},
+  {head:0xe8b89a,torso:0x3b4d6b,armL:0xe8b89a,armR:0xe8b89a,legL:0x22252a,legR:0x22252a,hair:0x7a421d,hat:null},
+  {head:0xf5cd30,torso:0xe74c3c,armL:0xf5cd30,armR:0xf5cd30,legL:0x1f242d,legR:0x1f242d,hair:null,hat:0x111111},
+  {head:0xf2c9ac,torso:0xff6b9d,armL:0xf2c9ac,armR:0xf2c9ac,legL:0xecf0f1,legR:0xecf0f1,hair:0xf1c40f,hat:null},
+  {head:0xf5cd30,torso:0x8e44ad,armL:0xf5cd30,armR:0xf5cd30,legL:0x2c3e50,legR:0x2c3e50,hair:null,hat:0xffd700},
+  {head:0xd2996c,torso:0x27ae60,armL:0xd2996c,armR:0xd2996c,legL:0x2c3e50,legR:0x2c3e50,hair:0x1a1a1a,hat:null}
+];
+
+let savedCosmeticsLibrary = []; // User's custom created cosmetics
+
+function buildCustomCosmeticMesh(item){
+  let geo;
+  if(item.shape==='sphere')geo=new THREE.SphereGeometry(0.4,16,12);
+  else if(item.shape==='cylinder')geo=new THREE.CylinderGeometry(0.35,0.35,0.6,16);
+  else if(item.shape==='cone')geo=new THREE.ConeGeometry(0.4,0.7,16);
+  else if(item.shape==='torus')geo=new THREE.TorusGeometry(0.38,0.08,10,20);
+  else if(item.shape==='plane')geo=new THREE.PlaneGeometry(0.8,0.8);
+  else geo=new THREE.BoxGeometry(0.5,0.5,0.5);
+
+  const mat=new THREE.MeshStandardMaterial({
+    color:item.texDataURL?0xffffff:(item.color||'#ffce3a'),
+    roughness:0.35,metalness:0.2,transparent:true,side:THREE.DoubleSide,alphaTest:0.02
+  });
+  if(item.texDataURL)mat.map=makeTexFromDataURL(item.texDataURL,false);
+
+  const mesh=new THREE.Mesh(geo,mat);
+  mesh.position.set(item.x||0,item.y||0,item.z||0);
+  mesh.rotation.set(item.rx||0,item.ry||0,item.rz||0);
+  mesh.scale.set(item.sx||1,item.sy||1,item.sz||1);
+  mesh.castShadow=true;
+  mesh.userData.cosmeticItem=item;
+  return mesh;
+}
+
+function createRobloxRig(preset,scale=1,isAngel=false){
+  const g=new THREE.Group();
+  const cHead=isAngel?0xfff3d6:(preset.head??0xf5cd30);
+  const cTorso=isAngel?0xffffff:(preset.torso??0x00a2ff);
+  const cArmL=isAngel?0xfff3d6:(preset.armL??cHead);
+  const cArmR=isAngel?0xfff3d6:(preset.armR??cHead);
+  const cLegL=isAngel?0xf4d068:(preset.legL??(preset.legs??0x2ecc71));
+  const cLegR=isAngel?0xf4d068:(preset.legR??(preset.legs??0x2ecc71));
+
+  const limbTex = preset.limbTex || {};
+  const mHead = makePartMat(cHead, limbTex.head||null);
+  const mTorso = makePartMat(cTorso, limbTex.torso||null);
+  const mArmL = makePartMat(cArmL, limbTex.armL||null);
+  const mArmR = makePartMat(cArmR, limbTex.armR||null);
+  const mLegL = makePartMat(cLegL, limbTex.legL||null);
+  const mLegR = makePartMat(cLegR, limbTex.legR||null);
+  const mFace = makePartMat(0xffffff, preset.faceDataURL||defaultFaceURL);
+
+  const legGeo=new THREE.BoxGeometry(0.46,0.95,0.46);
+  const legL=new THREE.Mesh(legGeo,mLegL);legL.position.set(-0.25,0.475,0);
+  const legR=new THREE.Mesh(legGeo,mLegR);legR.position.set(0.25,0.475,0);
+  g.add(legL,legR);
+
+  const torso=new THREE.Mesh(new THREE.BoxGeometry(0.98,1.0,0.48),mTorso);
+  torso.position.set(0,1.45,0);g.add(torso);
+
+  const armGeo=new THREE.BoxGeometry(0.44,0.96,0.44);
+  const armL=new THREE.Mesh(armGeo,mArmL);armL.position.set(-0.73,1.45,0);
+  const armR=new THREE.Mesh(armGeo,mArmR);armR.position.set(0.73,1.45,0);
+  g.add(armL,armR);
+
+  const headMats=[mHead,mHead,mHead,mHead,mFace,mHead];
+  const head=new THREE.Mesh(new THREE.BoxGeometry(0.68,0.68,0.68),headMats);
+  head.position.set(0,2.32,0);g.add(head);
+
+  // Built-in Cosmetics
+  const hairMat=new THREE.MeshLambertMaterial({color:preset.hair||0x7a421d});
+  const hair=new THREE.Mesh(new THREE.BoxGeometry(0.76,0.32,0.76),hairMat);
+  hair.position.set(0,0.3,0);hair.visible=!!preset.hair;
+  head.add(hair);
+
+  const hatGroup=new THREE.Group();
+  const hatMat=new THREE.MeshLambertMaterial({color:preset.hat||0x111111});
+  const brim=new THREE.Mesh(new THREE.CylinderGeometry(0.55,0.55,0.08,16),hatMat);
+  brim.position.set(0,0.36,0);
+  const top=new THREE.Mesh(new THREE.CylinderGeometry(0.38,0.38,0.48,16),hatMat);
+  top.position.set(0,0.62,0);
+  hatGroup.add(brim,top);hatGroup.visible=!!preset.hat;
+  head.add(hatGroup);
+
+  const crown=new THREE.Mesh(new THREE.CylinderGeometry(0.42,0.35,0.28,8),new THREE.MeshStandardMaterial({color:0xffd700,metalness:0.6,roughness:0.25}));
+  crown.position.set(0,0.46,0);crown.visible=!!preset.crown;
+  head.add(crown);
+
+  const glasses=new THREE.Mesh(new THREE.BoxGeometry(0.74,0.18,0.12),new THREE.MeshLambertMaterial({color:0x111111}));
+  glasses.position.set(0,0.06,0.34);glasses.visible=!!preset.glasses;
+  head.add(glasses);
+
+  const backpack=new THREE.Mesh(new THREE.BoxGeometry(0.68,0.72,0.32),new THREE.MeshLambertMaterial({color:0xe67e22}));
+  backpack.position.set(0,0.03,-0.38);backpack.visible=!!preset.backpack;
+  torso.add(backpack);
+
+  const sword=new THREE.Mesh(new THREE.BoxGeometry(0.14,1.25,0.06),new THREE.MeshStandardMaterial({color:0x56f0ff,metalness:0.7,roughness:0.2}));
+  sword.position.set(0.2,0.1,-0.32);sword.rotation.z=0.55;sword.visible=!!preset.sword;
+  torso.add(sword);
+
+  const halo=new THREE.Mesh(new THREE.TorusGeometry(0.45,0.055,8,20),new THREE.MeshBasicMaterial({color:0xffe64c}));
+  halo.rotation.x=Math.PI/2;halo.position.set(0,0.6,0);halo.visible=isAngel||!!preset.halo;
+  head.add(halo);
+
+  const coil=new THREE.Mesh(new THREE.TorusGeometry(0.28,0.06,8,16),new THREE.MeshBasicMaterial({color:0xff3e3e}));
+  coil.position.set(0,-0.2,0);coil.visible=!!preset.coil;
+  armR.add(coil);
+
+  const wings=new THREE.Group();wings.position.set(0,0.15,-0.28);wings.visible=isAngel||!!preset.wings;
+  const wGeo=new THREE.BoxGeometry(0.85,0.5,0.1);
+  const wMat=new THREE.MeshLambertMaterial({color:0xfff7cc,emissive:0x554400});
+  const wL=new THREE.Mesh(wGeo,wMat);wL.position.set(-0.55,0.1,0);wL.rotation.z=0.3;
+  const wR=new THREE.Mesh(wGeo,wMat);wR.position.set(0.55,0.1,0);wR.rotation.z=-0.3;
+  wings.add(wL,wR);torso.add(wings);
+
+  const sockets = {head, torso, armL, armR, legL, legR};
+  const customCosMeshes = [];
+
+  function syncCustomCosmetics(list){
+    for(const cm of customCosMeshes){
+      if(cm.parent)cm.parent.remove(cm);
+    }
+    customCosMeshes.length=0;
+    if(!Array.isArray(list))return;
+    for(const item of list){
+      const parentBone = sockets[item.parentSlot] || head;
+      const mesh = buildCustomCosmeticMesh(item);
+      parentBone.add(mesh);
+      customCosMeshes.push(mesh);
+    }
+  }
+  if(preset.customCosmetics)syncCustomCosmetics(preset.customCosmetics);
+
+  g.scale.setScalar(scale);
+  g.traverse(o=>{if(o.isMesh)o.castShadow=true;});
+  return {
+    g,legL,legR,armL,armR,head,torso,sockets,
+    mHead,mTorso,mArmL,mArmR,mLegL,mLegR,mFace,
+    hair,hairMat,hatGroup,hatMat,crown,glasses,backpack,sword,halo,coil,wings,
+    customCosMeshes,syncCustomCosmetics
+  };
+}
+
+/* ---------- Name Tag & Floating Health Bar Sprite ---------- */
+function makeTagSprite(w=280,h=105,sx=3.1,sy=1.15){
+  const c=document.createElement('canvas');c.width=w;c.height=h;
+  const t=new THREE.CanvasTexture(c);
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthWrite:false}));
+  s.scale.set(sx,sy,1);
+  s.userData={c,g:c.getContext('2d'),t,last:''};
+  return s;
+}
+
+function updateTag(spr,rankText,nameText,chatText,isMe=false,hpInfo=null){
+  const hpKey = hpInfo && hpInfo.show ? `${Math.ceil(hpInfo.hp)}/${hpInfo.maxHp}` : '';
+  const key=`${rankText}|${nameText}|${chatText}|${isMe}|${hpKey}`;
+  if(spr.userData.last===key)return;
+  spr.userData.last=key;
+  const {c,g,t}=spr.userData;
+  g.clearRect(0,0,c.width,c.height);
+
+  if(chatText){
+    g.fillStyle='rgba(255,255,255,.95)';
+    g.strokeStyle='#222';g.lineWidth=3;
+    g.beginPath();g.roundRect(14,4,c.width-28,32,10);g.fill();g.stroke();
+    g.fillStyle='#111';g.font='800 13px "Montserrat",sans-serif';
+    g.textAlign='center';g.textBaseline='middle';
+    g.fillText(chatText,c.width/2,20);
+  }
+  g.font='900 17px "Montserrat",sans-serif';
+  g.textAlign='center';g.textBaseline='middle';
+  g.lineWidth=5;g.strokeStyle='rgba(0,0,0,.85)';
+  const label=`${rankText} ${nameText}`;
+  g.strokeText(label,c.width/2,54);
+  g.fillStyle=isMe?'#56f0ff':'#ffe066';
+  g.fillText(label,c.width/2,54);
+
+  // Floating Health Bar (shown temporarily after taking damage)
+  if(hpInfo && hpInfo.show){
+    const bw=160, bh=16, bx=(c.width-bw)/2, by=74;
+    const ratio=clamp(hpInfo.hp/Math.max(1,hpInfo.maxHp),0,1);
+    g.fillStyle='rgba(0,0,0,.78)';
+    g.beginPath();g.roundRect(bx-2,by-2,bw+4,bh+4,6);g.fill();
+    g.fillStyle=ratio>0.5?'#00e676':(ratio>0.25?'#ffce3a':'#ff3e3e');
+    if(ratio>0){
+      g.beginPath();g.roundRect(bx,by,bw*ratio,bh,4);g.fill();
+    }
+    g.fillStyle='#fff';g.font='800 11px "Montserrat",sans-serif';
+    g.fillText(`${Math.ceil(hpInfo.hp)} / ${hpInfo.maxHp} HP`, c.width/2, by+bh/2+1);
+  }
+
+  t.needsUpdate=true;
+}
+
+/* ---------- Universal World Objects & Physics Registry ---------- */
+const TOTAL_SPOTS=30;
+let queueCoords=[];
+let allBlocks=[]; // ALL objects in scene (platforms, clouds, lasers, checkpoints, spinners, decor)
+let customNPCs=[];
+let spawnedCoins=[];
+let colliderHelpers=[];
+let showColliders=false;
+let blockIdCounter=1;
+
+function addSceneBlock(opts){
+  const {
+    x=0,y=0,z=0, w=4,h=1,d=4,
+    colorHex='#ecf5ff', gold=false, customTexDataURL=null,
+    matterState='solid', // 'solid' | 'liquid' | 'gas'
+    bounciness=0,
+    conveyorVz=0, conveyorVx=0,
+    damageOnContact=0,
+    teleportToCheckpoint=false,
+    spinSpeed=0,
+    checkpointData=null, // {enabled:true, stage:1, title:'...', rewardCash:30, skipSpots:2}
+    spawnerData=null,    // {mode:'none'|'timer'|'contact'|'hit'|'keyE', interval:4, timer:4, spawnType:'npc'|'coin'|'cube'}
+    label='Блок',
+    shape='box',
+    isCustom=false
+  } = opts;
+
+  let geo;
+  if(shape==='cylinder')geo=new THREE.CylinderGeometry(0.5,0.5,1,18);
+  else if(shape==='sphere')geo=new THREE.SphereGeometry(0.5,16,12);
+  else geo=new THREE.BoxGeometry(1,1,1);
+
+  let mat;
+  if(damageOnContact>0 && matterState==='solid' && !customTexDataURL && colorHex==='#ff1e1e'){
+    mat=new THREE.MeshStandardMaterial({color:colorHex,emissive:colorHex,transparent:true,opacity:1});
+  }else{
+    mat=createBlockMaterial(colorHex, w/2.2, d/2.2, gold, customTexDataURL, matterState);
+  }
+
+  const m=new THREE.Mesh(geo,mat);
+  m.scale.set(w,h,d);
+  m.position.set(x,y-h/2,z);
+  m.castShadow = matterState==='solid';
+  m.receiveShadow = true;
+  scene.add(m);
+
+  const id='blk_'+(blockIdCounter++);
+  const box={
+    id, label:label||('Объект #'+blockIdCounter),
+    shape,
+    x0:x-w/2,x1:x+w/2,y0:y-h,y1:y,z0:z-d/2,z1:z+d/2,
+    w,h,d, m,
+    colorHex: colorHex.startsWith('#')?colorHex:('#'+new THREE.Color(colorHex).getHexString()),
+    gold:!!gold,
+    customTexDataURL:customTexDataURL||null,
+    matterState,
+    bounciness:Number(bounciness)||0,
+    conveyorVz:Number(conveyorVz)||0,
+    conveyorVx:Number(conveyorVx)||0,
+    damageOnContact:Number(damageOnContact)||0,
+    teleportToCheckpoint:!!teleportToCheckpoint,
+    spinSpeed:Number(spinSpeed)||0,
+    colliderScale:{x:1,y:1,z:1},
+    checkpointData: checkpointData || {enabled:false, stage:1, title:'Чекпоинт', rewardCash:50, skipSpots:2},
+    spawnerData: spawnerData || {mode:'none', interval:5, timer:5, spawnType:'npc'},
+    cpVisualGroup: null,
+    isCustom
+  };
+
+  m.userData.editorRef={kind:'block',box};
+  allBlocks.push(box);
+  syncBlockSpecialVisuals(box);
+  return box;
+}
+
+function syncBlockSpecialVisuals(box){
+  if(box.cpVisualGroup){
+    scene.remove(box.cpVisualGroup);
+    box.cpVisualGroup=null;
+  }
+  if(box.checkpointData && box.checkpointData.enabled){
+    const g=new THREE.Group();
+    const pad=new THREE.Mesh(new THREE.CylinderGeometry(1.5,1.5,0.22,20),new THREE.MeshBasicMaterial({color:0x00ff88}));
+    pad.position.set(0, box.h/2+0.11, 0);
+    const spr=makeTagSprite(320,90,3.8,1.05);
+    spr.position.set(0, box.h/2+2.6, 0);
+    const cd=box.checkpointData;
+    updateTag(spr,`⭐ ЧЕКПОИНТ #${cd.stage}`,cd.title,`+${cd.rewardCash} R$ и -${cd.skipSpots} мест!`);
+    g.add(pad,spr);
+    g.position.copy(box.m.position);
+    g.traverse(o=>{o.userData.editorRef={kind:'block',box};});
+    scene.add(g);
+    box.cpVisualGroup=g;
+  }
+}
+
+function rebuildPhysicsArrays(){
+  for(const ch of colliderHelpers)scene.remove(ch);
+  colliderHelpers.length=0;
+
+  for(const box of allBlocks){
+    const m=box.m;
+    const w=Math.max(0.15,Math.abs(m.scale.x));
+    const h=Math.max(0.1,Math.abs(m.scale.y));
+    const d=Math.max(0.15,Math.abs(m.scale.z));
+    box.w=w;box.h=h;box.d=d;
+
+    const cs = box.colliderScale || {x:1,y:1,z:1};
+    const cw = w * cs.x, ch = h * cs.y, cd = d * cs.z;
+    const cx=m.position.x, cy=m.position.y, cz=m.position.z;
+    box.x0=cx-cw/2; box.x1=cx+cw/2;
+    box.y0=cy-ch/2; box.y1=cy+ch/2;
+    box.z0=cz-cd/2; box.z1=cz+cd/2;
+
+    if(m.material && m.material.map){
+      m.material.map.repeat.set(Math.max(1,Math.round(w/2.2)), Math.max(1,Math.round(d/2.2)));
+    }
+    if(box.cpVisualGroup){
+      box.cpVisualGroup.position.copy(m.position);
+    }
+
+    if(showColliders && box.matterState!=='gas'){
+      const colGeo=new THREE.BoxGeometry(cw,ch,cd);
+      const colWire=new THREE.LineSegments(
+        new THREE.EdgesGeometry(colGeo),
+        new THREE.LineBasicMaterial({color:box.damageOnContact>0?0xff3e3e:0x00ff88})
+      );
+      colWire.position.set(cx,cy,cz);
+      scene.add(colWire);
+      colliderHelpers.push(colWire);
+    }
+  }
+
+  if(showColliders && player){
+    const pr = player.colliderRadius || 0.42;
+    const ph = player.colliderHeight || 2.5;
+    const pWire = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(pr*2, ph, pr*2)),
+      new THREE.LineBasicMaterial({color:0x56f0ff})
+    );
+    pWire.position.set(player.x, player.y+ph/2, player.z);
+    scene.add(pWire);
+    colliderHelpers.push(pWire);
+  }
+}
+
+function buildWorld(){
+  // 1. Spawn Cloud Lobby
+  addSceneBlock({x:0,y:0,z:8, w:28,h:2,d:18, colorHex:'#ecf5ff', label:'Спавн-Лобби Облако'});
+
+  // Editable Decorative Gas Clouds
+  for(let i=0;i<24;i++){
+    addSceneBlock({
+      x:rnd(-85,85), y:rnd(-10,30), z:rnd(-130,28),
+      w:rnd(8,18), h:rnd(2,4), d:rnd(6,14),
+      colorHex:'#ffffff', matterState:'gas', label:`Небесное Облако #${i+1}`
+    });
+  }
+
+  // 2. Winding Golden Queue Staircase (#30 at bottom up to #1 at the Pearly Gates)
+  queueCoords=new Array(TOTAL_SPOTS);
+  for(let i=0;i<TOTAL_SPOTS;i++){
+    const fromBottom = (TOTAL_SPOTS - 1) - i;
+    const y = 0.2 + fromBottom * 0.55;
+    const z = -2 - fromBottom * 3.1;
+    const x = Math.sin(fromBottom * 0.35) * 3.2;
+    queueCoords[i]={x,y,z};
+
+    const isTop = i===0;
+    const padCol = isTop ? '#ffe64c' : (i%2===0 ? '#f8fbff' : '#dff2ff');
+    addSceneBlock({x,y,z, w:5.2,h:0.6,d:2.9, colorHex:padCol, gold:isTop, label:`Ступень Очереди #${i+1}`});
+  }
+
+  // 3. The Pearly Gates & VIP Heaven Sanctuary at the top
+  const topSpot=queueCoords[0];
+  const gx=topSpot.x, gy=topSpot.y, gz=topSpot.z-9;
+  addSceneBlock({x:gx,y:gy,z:gz, w:26,h:1.5,d:16, colorHex:'#fff5c0', gold:true, label:'Остров VIP Рая'});
+
+  for(const sx of [-4.5,4.5]){
+    addSceneBlock({x:gx+sx,y:gy+9,z:gz+5, w:1.6,h:9,d:1.6, colorHex:'#ffd24c', gold:true, label:'Колонна Врат Рая'});
+  }
+  addSceneBlock({x:gx,y:gy+10.2,z:gz+5, w:11.5,h:1.4,d:2.0, colorHex:'#ffd24c', gold:true, label:'Арка Врат Рая'});
+  addSceneBlock({x:gx,y:gy+8.5,z:gz+5, w:7.2,h:8.5,d:0.25, colorHex:'#88ffff', matterState:'gas', label:'Сияющий Портал Рая'});
+
+  // 4. Parallel 5-Stage Sky Obby
+  addSceneBlock({x:12,y:0,z:6, w:12,h:1,d:4, colorHex:'#55efc4', label:'Мост на Обби'});
+
+  let oz=2, oy=0.5, ox=20;
+  addCheckpointBlock(ox,oy,oz, 1, 'Этап 1: Радужные Прыжки', 30, 2);
+  for(let k=1;k<=6;k++){
+    oz-=4.4; oy+=0.5;
+    const col=['#ff6b6b','#ffbe76','#f6e58d','#badc58','#7ed6df','#e056fd'][k-1];
+    addSceneBlock({x:ox+Math.sin(k)*2.2,y:oy,z:oz, w:3.2,h:0.7,d:3.0, colorHex:col, label:`Радужная Платформа #${k}`});
+  }
+
+  oz-=5.0; oy+=0.5;
+  addCheckpointBlock(ox,oy,oz, 2, 'Этап 2: Неоновые Лазеры', 55, 3);
+  oz-=11;
+  addSceneBlock({x:ox,y:oy,z:oz, w:4.6,h:0.7,d:18, colorHex:'#dfe6e9', label:'Мост Лазеров'});
+  for(let k=-6;k<=6;k+=3.2){
+    addSceneBlock({
+      x:ox,y:oy+0.32,z:oz+k, w:4.6,h:0.28,d:0.45,
+      colorHex:'#ff1e1e', damageOnContact:50, teleportToCheckpoint:true, label:'Неоновый Лазер'
+    });
+  }
+
+  oz-=12;
+  addCheckpointBlock(ox,oy,oz, 3, 'Этап 3: Турбо-Конвейер и Батуты', 85, 4);
+  oz-=10;
+  addSceneBlock({x:ox,y:oy,z:oz, w:4.5,h:0.7,d:14, colorHex:'#34495e', conveyorVz:4.2, label:'Турбо-Конвейер'});
+  oz-=10;
+  for(let k=0;k<3;k++){
+    addSceneBlock({
+      x:ox+(k%2?2.2:-2.2),y:oy+k*3.2,z:oz-k*6.5, w:3.6,h:0.7,d:3.6,
+      colorHex:'#00e676', bounciness:15.5, label:`Батут #${k+1}`
+    });
+  }
+
+  oy+=9.5; oz-=19;
+  addCheckpointBlock(ox,oy,oz, 4, 'Этап 4: Вращающиеся Балки', 120, 5);
+  for(let k=1;k<=3;k++){
+    const pz=oz-k*7.2;
+    addSceneBlock({x:ox,y:oy,z:pz, w:5.2,h:0.7,d:5.2, colorHex:'#74b9ff', label:`Арена Балки #${k}`});
+    addSceneBlock({
+      x:ox,y:oy+0.75,z:pz, w:5.6,h:0.45,d:0.45,
+      colorHex:'#ff2a55', spinSpeed:(k%2?2.3:-2.6), damageOnContact:40, teleportToCheckpoint:true, label:`Вращающаяся Балка #${k}`
+    });
+  }
+
+  oz-=28; oy+=1.2;
+  addCheckpointBlock(ox,oy,oz, 5, 'ФИНИШ ОББИ: Мега-Касса и +6 Мест!', 220, 6);
+
+  rebuildPhysicsArrays();
+}
+
+function addCheckpointBlock(x,y,z,stage,title,rewardCash,skipSpots){
+  return addSceneBlock({
+    x,y,z, w:6.4,h:0.8,d:6.4, colorHex:'#ffeaa7', gold:true,
+    label:`Чекпоинт Обби #${stage}`,
+    checkpointData:{enabled:true, stage, title, rewardCash, skipSpots}
+  });
+}
+
+/* ---------- Queue NPCs, Custom NPCs, Archangel & Player State ---------- */
+const NPC_NAMES=['Noobik2014','RobuxKing777','BaconHair_Pro','Masha_Cat','AdoptMePlz','SigmaBoy_Rbx','Dasha_Play','CoolVanya','Kotik_YT','VIP_RichMan','Bebra_228','AngelicGirl','SpeedRunner','Pudge_Roblox','Skibidi_Pro','LavaJumper','ObbyMaster','KapiBara99','SlapBattles','BrookhavenRP','BloxFruit_God','Glitcher_X','Dreamer_77','Troller_XD','Mimic_Fan','Doors_Pro','BuildABoat','MeepCity_Old','TowerOfHell','Fisch_Lover'];
+const CHAT_LINES=[
+  'Кто крайний в Рай??',
+  'Я только спросить к Петру!',
+  'Опять донатер без очереди!',
+  'Пж дайте 5 робуксов на пропуск',
+  'Не толкайтесь, я с 2019 стою!',
+  'А в Раю дают бесплатный Доминус?',
+  'Смотрите, Архангел сейчас повернётся!',
+  'Пойду лучше Обби пройду...',
+  'Кто ударит — получит сдачи!!',
+  'Ура, осталось чуть-чуть!'
+];
+
+let queueLine=[];
+let player=null;
+let archangelEnt=null;
+let state='menu',time=0;
+let judgeTimer=6.5;
+let eyeTimer=4.5,eyeWatching=false;
+let activeSlot=0;
+
+function attachRigToEntity(ent){
+  ent.rig.g.traverse(o=>{
+    o.userData.editorRef={kind:'char',ent};
+  });
+}
+
+function initQueueAndPlayer(){
+  for(const ent of queueLine){
+    if(ent&&ent.rig){scene.remove(ent.rig.g);scene.remove(ent.tag);}
+  }
+  if(archangelEnt && archangelEnt.rig){
+    scene.remove(archangelEnt.rig.g);scene.remove(archangelEnt.tag);
+  }
+  queueLine=[];
+
+  // Create Archangel Judge as a selectable character too!
+  const topSpot=queueCoords[0];
+  const angelPreset={head:0xfff3d6,torso:0xffffff,armL:0xfff3d6,armR:0xfff3d6,legL:0xf4d068,legR:0xf4d068,halo:true,wings:true,customCosmetics:[]};
+  const angelRig=createRobloxRig(angelPreset,1.35,true);
+  const angelTag=makeTagSprite(320,105,3.5,1.15);
+  const ax=topSpot.x-3.4, ay=topSpot.y, az=topSpot.z-1.6;
+  angelRig.g.position.set(ax,ay,az);
+  angelRig.g.rotation.y=0.45;
+  scene.add(angelRig.g, angelTag);
+  archangelEnt={
+    id:'archangel', isP:false, isCustomNPC:true, isArchangel:true,
+    name:'АРХАНГЕЛ ПЁТР', chat:'Проходим по одному!',
+    wander:false, aggressive:false,
+    hpEnabled:false, hp:500, maxHp:500, hpBarTimer:0, meleeDamage:50,
+    x:ax, y:ay, z:az, homeX:ax, homeZ:az, rot:0.45, step:0,
+    rig:angelRig, tag:angelTag, preset:angelPreset
+  };
+  attachRigToEntity(archangelEnt);
+  updateTag(angelTag,'👑 СУДЬЯ',archangelEnt.name,archangelEnt.chat,false);
+  angelTag.position.set(ax,ay+4.5,az);
+
+  for(let i=0;i<TOTAL_SPOTS;i++){
+    const isP = (i===TOTAL_SPOTS-1);
+    const basePreset = isP
+      ? {head:0xf5cd30,torso:0x00a2ff,armL:0xf5cd30,armR:0xf5cd30,legL:0x2ecc71,legR:0x2ecc71,hair:null,hat:null,limbTex:{},customCosmetics:[]}
+      : Object.assign({limbTex:{},customCosmetics:[]},pick(PRESETS));
+    const rig = createRobloxRig(basePreset,1,false);
+    const tag = makeTagSprite(280,105,3.0,1.1);
+    const sp = queueCoords[i];
+    rig.g.position.set(sp.x,sp.y,sp.z);
+    scene.add(rig.g,tag);
+
+    const ent={
+      id:isP?'player':'qnpc_'+i,
+      isP,
+      isCustomNPC:false,
+      name:isP?'ТЫ (Игрок)':NPC_NAMES[i%NPC_NAMES.length],
+      qIdx:i,
+      x:sp.x,y:sp.y,z:sp.z,vxKnock:0,vzKnock:0,vy:0,rot:Math.PI,grounded:true,
+      hpEnabled:true, hp:100, maxHp:100, hpBarTimer:0,
+      meleeDamage:isP?25:12, aggressive:false, attackCooldown:0,
+      colliderRadius:0.42, colliderHeight:2.5,
+      walkSpeed:7.6, jumpPower:10.2,
+      rig,tag,chat:'',chatT:rnd(2,12),step:0,
+      preset:basePreset
+    };
+    attachRigToEntity(ent);
+    if(isP){
+      player=Object.assign(ent,{
+        cash:25,rebirths:0,hasSpeed:false,hasGrav:false,hasHalo:false,
+        bestObby:0,inHeaven:false,respawnX:sp.x,respawnY:sp.y,respawnZ:sp.z
+      });
+    }
+    queueLine.push(ent);
+  }
+  refreshQueueTags();
+}
+
+function spawnCustomNPC(opts={}){
+  const preset = Object.assign({
+    head:opts.head??0xf5cd30,
+    torso:opts.torso??0xe74c3c,
+    armL:opts.armL??(opts.head??0xf5cd30),
+    armR:opts.armR??(opts.head??0xf5cd30),
+    legL:opts.legL??0x2c3e50,
+    legR:opts.legR??0x2c3e50,
+    hair:opts.hair||null,
+    hat:opts.hat||null,
+    crown:!!opts.crown,
+    glasses:!!opts.glasses,
+    backpack:!!opts.backpack,
+    sword:!!opts.sword,
+    halo:!!opts.halo,
+    wings:!!opts.wings,
+    coil:!!opts.coil,
+    faceDataURL:opts.faceDataURL||null,
+    limbTex:opts.limbTex||{},
+    customCosmetics:opts.customCosmetics||[]
+  });
+  const rig = createRobloxRig(preset, opts.scale||1, false);
+  const tag = makeTagSprite(280,105,3.0,1.1);
+  const x = opts.x!==undefined ? opts.x : (player ? player.x + rnd(-3,3) : 0);
+  const y = opts.y!==undefined ? opts.y : (player ? player.y : 0.5);
+  const z = opts.z!==undefined ? opts.z : (player ? player.z + rnd(-3,3) : 6);
+  rig.g.position.set(x,y,z);
+  rig.g.rotation.y = opts.rot||0;
+  scene.add(rig.g,tag);
+
+  const npc={
+    id:'cnpc_'+(Date.now()+Math.floor(Math.random()*9999)),
+    isP:false,
+    isCustomNPC:true,
+    name:opts.name||('NPC_'+(customNPCs.length+1)),
+    chat:opts.chat!==undefined?opts.chat:'Привет! Я бот из 3D Студии!',
+    wander:opts.wander!==undefined?opts.wander:true,
+    aggressive:!!opts.aggressive,
+    hpEnabled:opts.hpEnabled!==undefined?opts.hpEnabled:true,
+    hp:opts.hp||100, maxHp:opts.maxHp||100, hpBarTimer:0,
+    meleeDamage:opts.meleeDamage||15, attackCooldown:0,
+    homeX:x,homeZ:z,
+    x,y,z,vxKnock:0,vzKnock:0,rot:opts.rot||0,step:0,wTimer:rnd(1,4),tx:x,tz:z,
+    rig,tag,preset
+  };
+  attachRigToEntity(npc);
+  updateTag(npc.tag,'🤖 NPC',npc.name,npc.chat,false,{show:false,hp:npc.hp,maxHp:npc.maxHp});
+  tag.position.set(x,y+3.35,z);
+  customNPCs.push(npc);
+  return npc;
+}
+
+/* ---------- Health, Damage & Melee Combat System ---------- */
+function dealDamage(target, amount, attacker=null){
+  if(!target || !target.hpEnabled || amount<=0)return false;
+  target.hp = Math.max(0, target.hp - amount);
+  target.hpBarTimer = 3.5; // Show floating health bar for 3.5 seconds
+  sfx.hit();
+
+  if(attacker){
+    const dx = target.x - attacker.x;
+    const dz = target.z - attacker.z;
+    const d = Math.hypot(dx,dz)||1;
+    target.vxKnock = (dx/d)*8;
+    target.vzKnock = (dz/d)*8;
+    // Bot retaliates when hit!
+    if(!target.isP && !target.isArchangel){
+      target.chat = 'АЙ! Ты зачем дерёшься?! 😡';
+      target.chatT = 3.5;
+    }
+  }
+
+  refreshEntityTagWithHP(target);
+  if(target.isP)updateShopUI();
+
+  if(target.hp <= 0){
+    target.hp = target.maxHp;
+    target.hpBarTimer = 0;
+    if(target.isP){
+      oofRespawn('💀 Твоё здоровье упало до 0! Возрождение.');
+    }else if(target.isCustomNPC){
+      sfx.oof();
+      target.x = target.homeX; target.z = target.homeZ;
+      target.chat = 'Уф, меня нокаутировали... 💫';
+      target.chatT = 3.5;
+    }else{
+      // Queue NPC knocked out -> player advances if it was the person in front!
+      sfx.oof();
+      if(player && target.qIdx === player.qIdx - 1){
+        movePlayerInQueue(-1);
+        showBanner(`🥊 Ты нокаутировал ${target.name} и занял место #${player.qIdx+1}!`, '#00e676');
+      }
+    }
+    refreshEntityTagWithHP(target);
+    if(target.isP)updateShopUI();
+  }
+  return true;
+}
+
+function refreshEntityTagWithHP(e){
+  const hpInfo = {show: e.hpEnabled && e.hpBarTimer > 0, hp: e.hp, maxHp: e.maxHp};
+  if(e.isArchangel){
+    updateTag(e.tag,'👑 СУДЬЯ',e.name,e.chat,false,hpInfo);
+  }else if(e.isCustomNPC){
+    updateTag(e.tag,'🤖 NPC',e.name,e.chat,false,hpInfo);
+  }else{
+    updateTag(e.tag,`#${e.qIdx+1}`,e.name,e.chat,e.isP,hpInfo);
+  }
+}
+
+function performPlayerMeleeAttack(isQueuePushKey=false){
+  if(state!=='play'||!player)return;
+  player.rig.armR.rotation.x=-1.65;
+  setTimeout(()=>{if(player)player.rig.armR.rotation.x=0;},200);
+  sfx.slap();
+
+  // 1. Check hit-spawners on blocks
+  for(const b of allBlocks){
+    if(b.spawnerData && b.spawnerData.mode==='hit'){
+      const cx=(b.x0+b.x1)/2, cz=(b.z0+b.z1)/2;
+      if(Math.hypot(player.x-cx, player.z-cz)<4.0){
+        triggerBlockSpawner(b);
+      }
+    }
+  }
+
+  // 2. Check melee hit against any NPC in range
+  const allTargets = [...customNPCs, ...queueLine.filter(e=>!e.isP)];
+  if(archangelEnt)allTargets.push(archangelEnt);
+  let hitAnyone = false;
+  for(const t of allTargets){
+    const dist = Math.hypot(t.x - player.x, t.z - player.z);
+    if(dist < 3.6 && Math.abs(t.y - player.y) < 2.8){
+      hitAnyone = true;
+      if(t.hpEnabled){
+        dealDamage(t, player.meleeDamage||25, player);
+      }else{
+        t.chat = 'У меня отключён урон (Бессмертие)! 🛡️';
+        t.chatT = 3.0;
+        refreshEntityTagWithHP(t);
+      }
+    }
+  }
+
+  // 3. If F pressed or near queue spot, also run classic queue push logic
+  const sp=queueCoords[player.qIdx];
+  if(isQueuePushKey || (sp && Math.hypot(player.x-sp.x,player.z-sp.z)<4.5 && !hitAnyone)){
+    tryPushInLine();
+  }
+}
+
+function triggerBlockSpawner(box){
+  const sd = box.spawnerData;
+  if(!sd || sd.mode==='none')return;
+  const cx=(box.x0+box.x1)/2, cy=box.y1+1.2, cz=(box.z0+box.z1)/2;
+  if(sd.spawnType==='npc'){
+    spawnCustomNPC({x:cx+rnd(-1.5,1.5), y:cy, z:cz+rnd(-1.5,1.5), name:'SpawnBot_'+(customNPCs.length+1)});
+    sfx.coil();
+  }else if(sd.spawnType==='coin'){
+    const coin=new THREE.Mesh(new THREE.CylinderGeometry(0.55,0.55,0.16,16),new THREE.MeshStandardMaterial({color:0xffd700,metalness:0.7,roughness:0.2}));
+    coin.rotation.x=Math.PI/2;
+    coin.position.set(cx+rnd(-1.5,1.5), cy+0.5, cz+rnd(-1.5,1.5));
+    scene.add(coin);
+    spawnedCoins.push({m:coin, x:coin.position.x, y:coin.position.y, z:coin.position.z, val:25});
+    sfx.cash();
+  }else if(sd.spawnType==='cube'){
+    addSceneBlock({x:cx+rnd(-1,1), y:cy+1, z:cz+rnd(-1,1), w:1.8, h:1.8, d:1.8, colorHex:pick(['#ff6b6b','#56f0ff','#00e676','#ffce3a']), label:'Спавн-Куб', isCustom:true});
+    rebuildPhysicsArrays();
+    sfx.jump();
+  }
+}
+
+function refreshQueueTags(){
+  for(let i=0;i<queueLine.length;i++){
+    const e=queueLine[i];
+    e.qIdx=i;
+    refreshEntityTagWithHP(e);
+  }
+  const lb=$('lbList');
+  let html='';
+  const showIdx=[0,1,2,3,player.qIdx-1,player.qIdx,player.qIdx+1]
+    .filter((v,idx,a)=>v>=0&&v<queueLine.length&&a.indexOf(v)===idx)
+    .sort((a,b)=>a-b)
+    .slice(0,7);
+  for(const idx of showIdx){
+    const e=queueLine[idx];
+    html+=`<div class="lb-row ${e.isP?'me':''}"><span>#${idx+1} ${e.name.slice(0,11)}</span><span>${e.isP?player.cash+' R$':(TOTAL_SPOTS-idx)*15+' R$'}</span></div>`;
+  }
+  lb.innerHTML=html;
+  $('posTxt').textContent=player.inHeaven?'В РАЮ! 👑':`#${player.qIdx+1} / ${TOTAL_SPOTS}`;
+}
+
+function showBanner(txt,col='#ffce3a'){
+  const b=$('banner');
+  b.hidden=false;b.style.borderColor=col;b.textContent=txt;b.style.opacity='1';
+  clearTimeout(b._t);
+  b._t=setTimeout(()=>{b.style.opacity='0';},3400);
+}
+
+/* ---------- Queue Mechanics ---------- */
+function movePlayerInQueue(deltaSpots){
+  const oldIdx=player.qIdx;
+  const newIdx=clamp(oldIdx+deltaSpots,0,TOTAL_SPOTS-1);
+  if(newIdx===oldIdx)return;
+  queueLine.splice(oldIdx,1);
+  queueLine.splice(newIdx,0,player);
+  refreshQueueTags();
+
+  const sp=queueCoords[player.qIdx];
+  if(Math.hypot(player.x-sp.x,player.z-sp.z)<10){
+    player.x=sp.x;player.y=sp.y+0.5;player.z=sp.z;
+  }
+}
+
+function cutCost(){
+  return Math.max(15, Math.round((TOTAL_SPOTS - player.qIdx)*12));
+}
+
+function tryCutInLine(){
+  if(state!=='play')return;
+  // Also check if near a keyE spawner block!
+  for(const b of allBlocks){
+    if(b.spawnerData && b.spawnerData.mode==='keyE'){
+      const cx=(b.x0+b.x1)/2, cz=(b.z0+b.z1)/2;
+      if(Math.hypot(player.x-cx, player.z-cz)<4.5){
+        triggerBlockSpawner(b);
+        showBanner(`⚙️ Активирован спавнер «${b.label}»!`, '#56f0ff');
+        return;
+      }
+    }
+  }
+
+  if(player.qIdx===0){enterHeaven();return;}
+  const cost=cutCost();
+  if(player.cash<cost){
+    sfx.oof();
+    showBanner(`Не хватает Карма-Робуксов! Нужно ${cost} R$ (пройди Обби справа!)`,'#ff3e3e');
+    return;
+  }
+  player.cash-=cost;
+  sfx.cash();
+  movePlayerInQueue(-1);
+  const sp=queueCoords[player.qIdx];
+  player.x=sp.x;player.y=sp.y+0.4;player.z=sp.z;
+  showBanner(`⏩ Ты обогнал впереди стоящего! Теперь ты #${player.qIdx+1} в очереди`,'#00e676');
+  updateShopUI();
+}
+
+function tryPushInLine(){
+  if(state!=='play')return;
+  if(player.qIdx===0){enterHeaven();return;}
+  const sp=queueCoords[player.qIdx];
+  if(Math.hypot(player.x-sp.x,player.z-sp.z)>6.5){
+    return;
+  }
+
+  if(eyeWatching && !player.hasHalo){
+    sfx.zap();
+    dealDamage(player, 30, archangelEnt);
+    movePlayerInQueue(+4);
+    const backSp=queueCoords[player.qIdx];
+    player.x=backSp.x;player.y=backSp.y+2.5;player.z=backSp.z;
+    showBanner('⚡ АРХАНГЕЛ ЗАМЕТИЛ ТОЛЧОК! Молния отбросила тебя на 4 места назад!','#ff3e3e');
+    return;
+  }
+
+  const victim=queueLine[player.qIdx-1];
+  if(victim){
+    victim.chat='АЙ!! За что столкнул?! 😭';
+    victim.chatT=3.5;
+    dealDamage(victim, player.meleeDamage||25, player);
+  }
+  movePlayerInQueue(-1);
+  const nextSp=queueCoords[player.qIdx];
+  player.x=nextSp.x;player.y=nextSp.y+0.3;player.z=nextSp.z;
+  player.cash+=10*(player.hasHalo?2:1);
+  showBanner(`🥊 Бум! Ты вытолкнул игрока и занял место #${player.qIdx+1}!`,'#00e676');
+  updateShopUI();
+}
+
+function advanceQueueFront(){
+  if(player.inHeaven)return;
+  if(player.qIdx===0){
+    showBanner('👑 ТЫ ПЕРВЫЙ (#1)! Шагни в сияющие Врата Рая или нажми E!','#ffce3a');
+    return;
+  }
+  const frontNPC=queueLine.shift();
+  const approved=Math.random()<0.72;
+  if(archangelEnt){
+    archangelEnt.chat = approved?`${frontNPC.name} принят в Рай! 😇`:`${frontNPC.name} отправлен вниз! 💀`;
+    refreshEntityTagWithHP(archangelEnt);
+  }
+  frontNPC.name=pick(NPC_NAMES);
+  frontNPC.hp=frontNPC.maxHp;
+  frontNPC.chat='Опять в конец очереди...';
+  frontNPC.chatT=4;
+  const backSp=queueCoords[TOTAL_SPOTS-1];
+  frontNPC.x=backSp.x;frontNPC.y=backSp.y;frontNPC.z=backSp.z;
+  queueLine.push(frontNPC);
+  refreshQueueTags();
+
+  const gain=(3 + player.rebirths*2)*(player.hasHalo?2:1);
+  player.cash+=gain;
+  const oldSp=queueCoords[player.qIdx+1];
+  const newSp=queueCoords[player.qIdx];
+  if(oldSp && Math.hypot(player.x-oldSp.x,player.z-oldSp.z)<3.6){
+    player.x=newSp.x;player.y=newSp.y;player.z=newSp.z;
+  }
+  updateShopUI();
+}
+
+function enterHeaven(){
+  if(player.inHeaven)return;
+  player.inHeaven=true;
+  sfx.gate();
+  player.rig.wings.visible=true;
+  player.rig.halo.visible=true;
+  const topSpot=queueCoords[0];
+  player.x=topSpot.x;player.y=topSpot.y+1.2;player.z=topSpot.z-10;
+  player.cash+=500*(player.rebirths+1);
+  player.rebirths++;
+  $('rebTxt').textContent=player.rebirths;
+  updateShopUI();
+
+  try{if(document.pointerLockElement===cv)document.exitPointerLock();}catch(_){}
+  $('modalBox').innerHTML=`
+    <span class="badge" style="background:#00b06f">ТЫ ПРОШЁЛ СУД АРХАНГЕЛА!</span>
+    <h1>ДОБРО ПОЖАЛОВАТЬ В <span>VIP РАЙ!</span> 😇</h1>
+    <p style="font-weight:700;color:#d8e6ff;line-height:1.5">Ты дошёл до Места #1, прошёл сквозь Жемчужные Врата и получил Золотые Крылья Ангела, +500 R$ и Перерождение #${player.rebirths}!</p>
+    <div style="display:flex;gap:10px;margin-top:18px;flex-wrap:wrap">
+      <button class="play-btn" id="keepPlayBtn" type="button" style="flex:1">👑 ГУЛЯТЬ В РАЮ</button>
+      <button class="play-btn" id="rebirthBtn" type="button" style="flex:1;background:linear-gradient(180deg,#ffce3a,#e09b00);color:#111;box-shadow:0 5px 0 #996500">🔄 НОВАЯ ОЧЕРЕДЬ (x${player.rebirths+1} ДОХОД)</button>
+    </div>
+  `;
+  $('menu').hidden=false;
+  $('keepPlayBtn').onclick=()=>{
+    $('menu').hidden=true;
+    showBanner('👑 Ты в VIP-Раю! Открой 3D Редактор (F2), чтобы строить свой мир!', '#ffce3a');
+  };
+  $('rebirthBtn').onclick=()=>{
+    $('menu').hidden=true;
+    player.inHeaven=false;
+    player.bestObby=0;
+    movePlayerInQueue(TOTAL_SPOTS);
+    teleportToQueueSpot();
+    showBanner(`🔄 Перерождение #${player.rebirths}! Доход повышен!`, '#00e676');
+  };
+}
+
+function teleportToQueueSpot(){
+  if(!player)return;
+  const sp=queueCoords[player.qIdx];
+  player.x=sp.x;player.y=sp.y+0.8;player.z=sp.z;player.vy=0;
+  sfx.coil();
+  showBanner(`☁️ Телепорт на твоё место в очереди (#${player.qIdx+1})`, '#56f0ff');
+}
+
+/* ---------- Shop & Hotbar ---------- */
+function updateShopUI(){
+  if(!player)return;
+  $('cashTxt').textContent=`${player.cash} R$`;
+  $('hpPill').hidden=!player.hpEnabled;
+  $('hpTxt').textContent=`${Math.ceil(player.hp)} / ${player.maxHp}`;
+  $('costCut').textContent=player.qIdx===0?'В РАЙ!':`${cutCost()} R$`;
+  if(player.hasSpeed){$('buySpeed').classList.add('owned');$('costSpeed').textContent='КУПЛЕНО';}
+  if(player.hasGrav){$('buyGrav').classList.add('owned');$('costGrav').textContent='КУПЛЕНО';}
+  if(player.hasHalo){$('buyHalo').classList.add('owned');$('costHalo').textContent='КУПЛЕНО';}
+}
+
+$('btnCut').addEventListener('click',tryCutInLine);
+$('btnPush').addEventListener('click',()=>performPlayerMeleeAttack(true));
+$('bCut').addEventListener('pointerdown',e=>{e.preventDefault();tryCutInLine();});
+$('bPush').addEventListener('pointerdown',e=>{e.preventDefault();performPlayerMeleeAttack(true);});
+
+$('buySpeed').addEventListener('click',()=>{
+  if(!player||player.hasSpeed)return;
+  if(player.cash<80){sfx.oof();showBanner('Нужно 80 R$ для Пружины Скорости!','#ff3e3e');return;}
+  player.cash-=80;player.hasSpeed=true;
+  selectSlot(1);sfx.coil();updateShopUI();
+  showBanner('🌀 Куплена Пружина Скорости (Speed Coil)!','#00e676');
+});
+$('buyGrav').addEventListener('click',()=>{
+  if(!player||player.hasGrav)return;
+  if(player.cash<120){sfx.oof();showBanner('Нужно 120 R$ для Пружины Прыжка!','#ff3e3e');return;}
+  player.cash-=120;player.hasGrav=true;
+  selectSlot(2);sfx.coil();updateShopUI();
+  showBanner('🚀 Куплена Пружина Прыжка (Gravity Coil)!','#00e676');
+});
+$('buyHalo').addEventListener('click',()=>{
+  if(!player||player.hasHalo)return;
+  if(player.cash<250){sfx.oof();showBanner('Нужно 250 R$ для VIP Нимб!','#ff3e3e');return;}
+  player.cash-=250;player.hasHalo=true;player.rig.halo.visible=true;
+  sfx.gate();updateShopUI();
+  showBanner('😇 VIP Нимб активирован! x2 R$ и иммунитет к молнии Петра!','#ffce3a');
+});
+
+function selectSlot(idx){
+  activeSlot=idx;
+  document.querySelectorAll('#hotbar .slot').forEach((el,i)=>el.classList.toggle('active',i===idx));
+  if(!player)return;
+  if(idx===3){
+    teleportToQueueSpot();
+    setTimeout(()=>selectSlot(0),250);
+    return;
+  }
+  player.rig.coil.visible=(idx===1&&player.hasSpeed)||(idx===2&&player.hasGrav);
+  if(player.rig.coil.visible){
+    player.rig.coil.material.color.setHex(idx===1?0xff3e3e:0x00a2ff);
+    sfx.coil();
+  }
+}
+document.querySelectorAll('#hotbar .slot').forEach(el=>{
+  el.addEventListener('click',()=>selectSlot(+el.dataset.slot));
+});
+
+/* ======================== UNITY / ROBLOX STUDIO 3D EDITOR ENGINE ======================== */
+const tControls = new THREE.TransformControls(camera, cv);
+tControls.setSize(0.9);
+scene.add(tControls);
+
+let selectedRef = null; // null (World/Skybox), {kind:'block', box}, {kind:'char', ent}, or {kind:'cosmetic', ent, mesh, item}
+let snapEnabled = false;
+let edCamPos = new THREE.Vector3(10, 12, 18);
+let edYaw = 0.35, edPitch = -0.35;
+let rmbDown = false;
+const raycaster = new THREE.Raycaster();
+const mouseNDC = new THREE.Vector2();
+
+const selBoxHelper = new THREE.BoxHelper(new THREE.Mesh(), 0x00f2fe);
+selBoxHelper.visible = false;
+scene.add(selBoxHelper);
+
+tControls.addEventListener('change', ()=>{
+  if(!selectedRef)return;
+  if(selectedRef.kind==='block'){
+    const box=selectedRef.box;
+    rebuildPhysicsArrays();
+    selBoxHelper.setFromObject(box.m);
+    syncInspectorInputsFromObject();
+  }else if(selectedRef.kind==='char'){
+    const ent=selectedRef.ent;
+    ent.x=ent.rig.g.position.x;
+    ent.y=ent.rig.g.position.y;
+    ent.z=ent.rig.g.position.z;
+    ent.rot=ent.rig.g.rotation.y;
+    if(ent.isCustomNPC){ent.homeX=ent.x;ent.homeZ=ent.z;}
+    ent.tag.position.set(ent.x,ent.y+(ent.isArchangel?4.5:3.35),ent.z);
+    selBoxHelper.setFromObject(ent.rig.g);
+    if(showColliders)rebuildPhysicsArrays();
+    syncInspectorInputsFromObject();
+  }else if(selectedRef.kind==='cosmetic'){
+    const {mesh,item}=selectedRef;
+    item.x=mesh.position.x;item.y=mesh.position.y;item.z=mesh.position.z;
+    item.rx=mesh.rotation.x;item.ry=mesh.rotation.y;item.rz=mesh.rotation.z;
+    item.sx=mesh.scale.x;item.sy=mesh.scale.y;item.sz=mesh.scale.z;
+    selBoxHelper.setFromObject(mesh);
+  }
+});
+
+function toggleStudioMode(forceState){
+  const target = forceState || (state==='edit' ? 'play' : 'edit');
+  if(target==='edit'){
+    state='edit';
+    try{if(document.pointerLockElement===cv)document.exitPointerLock();}catch(_){}
+    $('menu').hidden=true;
+    $('topbar').hidden=true;
+    $('shopPanel').hidden=true;
+    $('hotbar').hidden=true;
+    $('hint').hidden=true;
+    $('touch').hidden=true;
+    $('studioUI').hidden=false;
+
+    if(player){
+      edCamPos.set(player.x+8, player.y+7, player.z+12);
+      edYaw = 0.55; edPitch = -0.35;
+    }
+    refreshHierarchyUI();
+    renderInspectorUI();
+    showBanner('🛠️ 3D Редактор открыт! Кликни по любому объекту, облаку, чекпоинту или NPC.', '#56f0ff');
+  }else{
+    rebuildPhysicsArrays();
+    tControls.detach();
+    selBoxHelper.visible=false;
+    state='play';
+    $('studioUI').hidden=true;
+    $('paintModal').hidden=true;
+    $('topbar').hidden=false;
+    $('shopPanel').hidden=false;
+    $('hotbar').hidden=false;
+    if(coarse)$('touch').hidden=false;
+    updateShopUI();
+  }
+}
+
+$('openStudioBtn').addEventListener('click',()=>toggleStudioMode('edit'));
+$('startEditorBtn').addEventListener('click',()=>{
+  initAudio();
+  toggleStudioMode('edit');
+});
+$('openWorldSettingsBtn').addEventListener('click',()=>selectEditorObject(null));
+
+function setGizmoMode(mode){
+  tControls.setMode(mode);
+  $('gizmoMove').classList.toggle('active',mode==='translate');
+  $('gizmoRot').classList.toggle('active',mode==='rotate');
+  $('gizmoScale').classList.toggle('active',mode==='scale');
+}
+$('gizmoMove').onclick=()=>setGizmoMode('translate');
+$('gizmoRot').onclick=()=>setGizmoMode('rotate');
+$('gizmoScale').onclick=()=>setGizmoMode('scale');
+
+$('btnSnapToggle').onclick=()=>{
+  snapEnabled=!snapEnabled;
+  tControls.setTranslationSnap(snapEnabled?0.5:null);
+  tControls.setRotationSnap(snapEnabled?THREE.MathUtils.degToRad(15):null);
+  tControls.setScaleSnap(snapEnabled?0.25:null);
+  $('btnSnapToggle').textContent=snapEnabled?'🧲 Сетка: ВКЛ':'🧲 Сетка: ВЫКЛ';
+  $('btnSnapToggle').classList.toggle('active',snapEnabled);
+};
+
+$('btnColliderVis').onclick=()=>{
+  showColliders=!showColliders;
+  $('btnColliderVis').textContent=showColliders?'🔲 Коллайдеры: ВКЛ':'🔲 Коллайдеры: ВЫКЛ';
+  $('btnColliderVis').classList.toggle('active',showColliders);
+  rebuildPhysicsArrays();
+};
+
+function selectEditorObject(ref){
+  selectedRef = ref;
+  if(!ref){
+    tControls.detach();
+    selBoxHelper.visible=false;
+    $('inspTypeBadge').textContent='🌤️ Мир и Скайбокс';
+    refreshHierarchyUI();
+    renderInspectorUI();
+    return;
+  }
+  if(ref.kind==='block'){
+    tControls.attach(ref.box.m);
+    selBoxHelper.setFromObject(ref.box.m);
+    selBoxHelper.visible=true;
+    $('inspTypeBadge').textContent = ref.box.checkpointData.enabled ? '⭐ Чекпоинт' : '🧱 Объект сцены';
+  }else if(ref.kind==='char'){
+    tControls.attach(ref.ent.rig.g);
+    selBoxHelper.setFromObject(ref.ent.rig.g);
+    selBoxHelper.visible=true;
+    $('inspTypeBadge').textContent=ref.ent.isP?'👑 Игрок':'🤖 NPC Бот';
+  }else if(ref.kind==='cosmetic'){
+    tControls.attach(ref.mesh);
+    selBoxHelper.setFromObject(ref.mesh);
+    selBoxHelper.visible=true;
+    $('inspTypeBadge').textContent='🎩 3D Аксессуар';
+  }
+  refreshHierarchyUI();
+  renderInspectorUI();
+}
+
+function focusOnSelected(){
+  if(!selectedRef)return;
+  const obj = selectedRef.kind==='block' ? selectedRef.box.m : (selectedRef.kind==='char' ? selectedRef.ent.rig.g : selectedRef.mesh);
+  const p = new THREE.Vector3();
+  obj.getWorldPosition(p);
+  const fwd = new THREE.Vector3(-Math.sin(edYaw)*Math.cos(edPitch), Math.sin(edPitch), -Math.cos(edYaw)*Math.cos(edPitch));
+  edCamPos.copy(p).addScaledVector(fwd, -8).add(new THREE.Vector3(0,1.8,0));
+}
+
+/* ---------- Hierarchy & Spawner ---------- */
+function refreshHierarchyUI(){
+  const filter = $('hierFilter').value;
+  const cont = $('hierContainer');
+  let html = '';
+
+  if(filter==='all' || filter==='chars'){
+    if(player){
+      const isSel = selectedRef && selectedRef.kind==='char' && selectedRef.ent===player;
+      html += `<div class="hier-item ${isSel?'sel':''}" data-hkind="char" data-hid="player"><span>👑 ${player.name}</span><small>Игрок</small></div>`;
+    }
+    if(archangelEnt){
+      const isSel = selectedRef && selectedRef.kind==='char' && selectedRef.ent===archangelEnt;
+      html += `<div class="hier-item ${isSel?'sel':''}" data-hkind="char" data-hid="archangel"><span>😇 ${archangelEnt.name}</span><small>Судья</small></div>`;
+    }
+    for(const npc of customNPCs){
+      const isSel = selectedRef && selectedRef.kind==='char' && selectedRef.ent===npc;
+      html += `<div class="hier-item ${isSel?'sel':''}" data-hkind="char" data-hid="${npc.id}"><span>🤖 ${npc.name}</span><small>NPC</small></div>`;
+    }
+    for(let i=0;i<queueLine.length;i++){
+      const e=queueLine[i];
+      if(e.isP)continue;
+      const isSel = selectedRef && selectedRef.kind==='char' && selectedRef.ent===e;
+      html += `<div class="hier-item ${isSel?'sel':''}" data-hkind="char" data-hid="${e.id}"><span>🧍 #${i+1} ${e.name}</span><small>Очередь</small></div>`;
+    }
+  }
+
+  for(let i=allBlocks.length-1;i>=0;i--){
+    const b=allBlocks[i];
+    if(filter==='chars')continue;
+    if(filter==='checkpoints' && (!b.checkpointData || !b.checkpointData.enabled))continue;
+    if(filter==='clouds' && b.matterState!=='gas')continue;
+    if(filter==='blocks' && b.matterState==='gas')continue;
+
+    const isSel = selectedRef && selectedRef.kind==='block' && selectedRef.box===b;
+    const ico = b.checkpointData.enabled?'⭐':(b.matterState==='liquid'?'💧':(b.matterState==='gas'?'☁️':(b.damageOnContact>0?'🚨':(b.bounciness>0?'🟢':'🧱'))));
+    html += `<div class="hier-item ${isSel?'sel':''}" data-hkind="block" data-hid="${b.id}"><span>${ico} ${b.label}</span><small>${b.matterState}</small></div>`;
+  }
+
+  cont.innerHTML = html;
+  cont.querySelectorAll('.hier-item').forEach(el=>{
+    el.onclick=()=>{
+      const kind=el.dataset.hkind, hid=el.dataset.hid;
+      if(kind==='block'){
+        const box=allBlocks.find(b=>b.id===hid);
+        if(box){selectEditorObject({kind:'block',box});focusOnSelected();}
+      }else{
+        const ent = hid==='player' ? player : (hid==='archangel' ? archangelEnt : (customNPCs.find(n=>n.id===hid) || queueLine.find(n=>n.id===hid)));
+        if(ent){selectEditorObject({kind:'char',ent});focusOnSelected();}
+      }
+    };
+  });
+}
+$('hierFilter').onchange=refreshHierarchyUI;
+
+// Spawner Buttons
+document.querySelectorAll('.spawn-card').forEach(card=>{
+  card.addEventListener('click',()=>{
+    const st = card.dataset.spawn;
+    const fwd = new THREE.Vector3(-Math.sin(edYaw)*Math.cos(edPitch), Math.sin(edPitch), -Math.cos(edYaw)*Math.cos(edPitch));
+    const sp = edCamPos.clone().addScaledVector(fwd, 9);
+    sp.x = Math.round(sp.x*2)/2;
+    sp.y = Math.round(sp.y*2)/2;
+    sp.z = Math.round(sp.z*2)/2;
+
+    if(st==='npc'){
+      const npc = spawnCustomNPC({x:sp.x, y:sp.y, z:sp.z});
+      selectEditorObject({kind:'char',ent:npc});
+      sfx.coil();
+      showBanner('🤖 Заспавнен новый NPC! Настрой его части тела, здоровье и косметику справа.', '#00e676');
+      return;
+    }
+
+    let box;
+    if(st==='solid'){
+      box=addSceneBlock({x:sp.x,y:sp.y,z:sp.z, w:4,h:1,d:4, colorHex:'#56f0ff', matterState:'solid', label:'Лего-Блок', isCustom:true});
+    }else if(st==='liquid'){
+      box=addSceneBlock({x:sp.x,y:sp.y,z:sp.z, w:6,h:3.5,d:6, colorHex:'#00a8ff', matterState:'liquid', label:'Бассейн Воды', isCustom:true});
+    }else if(st==='gas'){
+      box=addSceneBlock({x:sp.x,y:sp.y,z:sp.z, w:8,h:2.5,d:6, colorHex:'#ffffff', matterState:'gas', label:'Пушистое Облако', isCustom:true});
+    }else if(st==='checkpoint'){
+      const nextStg = allBlocks.filter(b=>b.checkpointData&&b.checkpointData.enabled).length + 1;
+      box=addCheckpointBlock(sp.x,sp.y,sp.z, nextStg, `Чекпоинт #${nextStg}`, 50, 2);
+      box.isCustom=true;
+    }else if(st==='kill'){
+      box=addSceneBlock({x:sp.x,y:sp.y,z:sp.z, w:4.6,h:0.4,d:0.8, colorHex:'#ff1e1e', damageOnContact:35, teleportToCheckpoint:false, label:'Урон-Лазер', isCustom:true});
+    }else if(st==='trampoline'){
+      box=addSceneBlock({x:sp.x,y:sp.y,z:sp.z, w:4,h:0.8,d:4, colorHex:'#00e676', bounciness:16, label:'Прыгучий Батут', isCustom:true});
+    }else if(st==='spawner'){
+      box=addSceneBlock({
+        x:sp.x,y:sp.y,z:sp.z, w:3.5,h:0.8,d:3.5, colorHex:'#9b59b6', gold:true,
+        label:'Спавнер Объектов', spawnerData:{mode:'timer',interval:5,timer:2,spawnType:'coin'}, isCustom:true
+      });
+    }
+
+    rebuildPhysicsArrays();
+    selectEditorObject({kind:'block',box});
+    sfx.jump();
+    showBanner(`✨ Создан объект «${box.label}»!`, '#00e676');
+  });
+});
+
+function duplicateSelected(){
+  if(!selectedRef)return;
+  if(selectedRef.kind==='block'){
+    const src=selectedRef.box;
+    const m=src.m;
+    const copy=addSceneBlock({
+      x:m.position.x+2, y:m.position.y+m.scale.y/2, z:m.position.z+2,
+      w:m.scale.x, h:m.scale.y, d:m.scale.z,
+      colorHex:src.colorHex, gold:src.gold, customTexDataURL:src.customTexDataURL,
+      matterState:src.matterState, bounciness:src.bounciness,
+      conveyorVz:src.conveyorVz, conveyorVx:src.conveyorVx,
+      damageOnContact:src.damageOnContact, teleportToCheckpoint:src.teleportToCheckpoint,
+      spinSpeed:src.spinSpeed,
+      checkpointData:Object.assign({},src.checkpointData),
+      spawnerData:Object.assign({},src.spawnerData),
+      label:src.label+' (Копия)', isCustom:true
+    });
+    copy.m.rotation.copy(m.rotation);
+    rebuildPhysicsArrays();
+    selectEditorObject({kind:'block',box:copy});
+    sfx.jump();
+  }else if(selectedRef.kind==='char'){
+    const src=selectedRef.ent;
+    const npc=spawnCustomNPC(Object.assign({},JSON.parse(JSON.stringify(src.preset)),{
+      name:src.name+'_Copy', chat:src.chat,
+      x:src.x+1.8, y:src.y, z:src.z, scale:src.rig.g.scale.x,
+      hpEnabled:src.hpEnabled, maxHp:src.maxHp, hp:src.maxHp
+    }));
+    selectEditorObject({kind:'char',ent:npc});
+    sfx.coil();
+  }
+}
+
+function deleteSelected(){
+  if(!selectedRef)return;
+  if(selectedRef.kind==='block'){
+    const box=selectedRef.box;
+    scene.remove(box.m);
+    if(box.cpVisualGroup)scene.remove(box.cpVisualGroup);
+    const idx=allBlocks.indexOf(box);
+    if(idx>=0)allBlocks.splice(idx,1);
+    rebuildPhysicsArrays();
+    selectEditorObject(null);
+    sfx.oof();
+  }else if(selectedRef.kind==='char'){
+    const ent=selectedRef.ent;
+    if(ent.isP || (!ent.isCustomNPC && !ent.isArchangel)){
+      showBanner('Игрока и сюжетную очередь удалять нельзя (можно двигать и менять внешность)!','#ff3e3e');
+      return;
+    }
+    scene.remove(ent.rig.g);
+    scene.remove(ent.tag);
+    const idx=customNPCs.indexOf(ent);
+    if(idx>=0)customNPCs.splice(idx,1);
+    selectEditorObject(null);
+    sfx.oof();
+  }else if(selectedRef.kind==='cosmetic'){
+    const {ent,item}=selectedRef;
+    const arr=ent.preset.customCosmetics||[];
+    const idx=arr.indexOf(item);
+    if(idx>=0)arr.splice(idx,1);
+    ent.rig.syncCustomCosmetics(arr);
+    attachRigToEntity(ent);
+    selectEditorObject({kind:'char',ent});
+    sfx.oof();
+  }
+}
+$('dupObjBtn').onclick=duplicateSelected;
+$('delObjBtn').onclick=deleteSelected;
+
+/* ---------- Comprehensive Right Inspector UI ---------- */
+function renderInspectorUI(){
+  const cont = $('inspectorContent');
+
+  // 1. WORLD & SKYBOX SETTINGS (When nothing is selected)
+  if(!selectedRef){
+    cont.innerHTML=`
+      <div class="prop-group">
+        <h5>🌤️ Градиент Скайбокса (Неба)</h5>
+        <div class="prop-row"><label>Верх неба</label><input type="color" class="ed-color" id="wSkyTop" value="${worldSettings.skyTop}"></div>
+        <div class="prop-row"><label>Горизонт</label><input type="color" class="ed-color" id="wSkyMid" value="${worldSettings.skyMid}"></div>
+        <div class="prop-row"><label>Низ неба</label><input type="color" class="ed-color" id="wSkyBot" value="${worldSettings.skyBot}"></div>
+        <div class="prop-row"><label>Цвет тумана</label><input type="color" class="ed-color" id="wFogCol" value="${worldSettings.fogColor}"></div>
+        <div class="prop-row"><label>Плотн. тумана</label><input type="range" min="0" max="0.015" step="0.0005" id="wFogDens" value="${worldSettings.fogDensity}" style="flex:1"></div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">
+          <button class="ed-btn" data-sky="day" type="button">☀️ День</button>
+          <button class="ed-btn" data-sky="sunset" type="button">🌇 Закат</button>
+          <button class="ed-btn" data-sky="night" type="button">🌌 Кибер-Ночь</button>
+          <button class="ed-btn" data-sky="heaven" type="button">😇 Золотой Рай</button>
+        </div>
+      </div>
+
+      <div class="prop-group">
+        <h5>🌍 Физика Мира и Здоровье</h5>
+        <div class="prop-row"><label>Гравитация</label><input type="number" step="1" class="ed-inp" id="wGrav" value="${worldSettings.gravity}"></div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">
+          <button class="ed-btn" id="btnAllHpOn" type="button">❤️ Вкл HP всем</button>
+          <button class="ed-btn" id="btnAllHpOff" type="button">🛡️ Выкл HP всем</button>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#8fa0bd;line-height:1.4;padding:4px">
+        💡 Кликни левой кнопкой мыши по любому блоку, облаку, чекпоинту, игроку или NPC в сцене, чтобы открыть его свойства!
+      </div>
+    `;
+
+    const applySky=()=>{
+      worldSettings.skyTop=$('wSkyTop').value;
+      worldSettings.skyMid=$('wSkyMid').value;
+      worldSettings.skyBot=$('wSkyBot').value;
+      worldSettings.fogColor=$('wFogCol').value;
+      worldSettings.fogDensity=+$('wFogDens').value;
+      updateSkybox();
+    };
+    ['wSkyTop','wSkyMid','wSkyBot','wFogCol','wFogDens'].forEach(id=>$(id).oninput=applySky);
+    cont.querySelectorAll('[data-sky]').forEach(btn=>{
+      btn.onclick=()=>{
+        const s=btn.dataset.sky;
+        if(s==='day')Object.assign(worldSettings,{skyTop:'#1565c0',skyMid:'#62b6ff',skyBot:'#dff4ff',fogColor:'#88ccff'});
+        if(s==='sunset')Object.assign(worldSettings,{skyTop:'#2c1654',skyMid:'#ff5e62',skyBot:'#ff9966',fogColor:'#ff7e5f'});
+        if(s==='night')Object.assign(worldSettings,{skyTop:'#050714',skyMid:'#141e30',skyBot:'#243b55',fogColor:'#141e30'});
+        if(s==='heaven')Object.assign(worldSettings,{skyTop:'#f39c12',skyMid:'#ffeaa7',skyBot:'#ffffff',fogColor:'#fff3c4'});
+        updateSkybox();renderInspectorUI();
+      };
+    });
+    $('wGrav').oninput=e=>{worldSettings.gravity=+e.target.value||22;};
+    $('btnAllHpOn').onclick=()=>{
+      player.hpEnabled=true;
+      queueLine.forEach(e=>e.hpEnabled=true);
+      customNPCs.forEach(e=>e.hpEnabled=true);
+      updateShopUI();showBanner('❤️ Здоровье и урон включены для всех!','#00e676');
+    };
+    $('btnAllHpOff').onclick=()=>{
+      player.hpEnabled=false;
+      queueLine.forEach(e=>e.hpEnabled=false);
+      customNPCs.forEach(e=>e.hpEnabled=false);
+      updateShopUI();showBanner('🛡️ Бессмертие: урон отключён для всех!','#56f0ff');
+    };
+    return;
+  }
+
+  // 2. CUSTOM 3D COSMETIC ITEM SELECTED
+  if(selectedRef.kind==='cosmetic'){
+    const {ent,mesh,item}=selectedRef;
+    cont.innerHTML=`
+      <div class="prop-group">
+        <h5>🎩 Настройка 3D-Аксессуара («${item.name}»)</h5>
+        <button class="ed-btn" id="btnBackToChar" type="button">⬅ Вернуться к персонажу (${ent.name})</button>
+        <div class="prop-row"><label>Название</label><input class="ed-inp" id="cosName" value="${item.name}"></div>
+        <div class="prop-row">
+          <label>Форма</label>
+          <select class="ed-inp" id="cosShape">
+            <option value="box" ${item.shape==='box'?'selected':''}>Куб (Box)</option>
+            <option value="sphere" ${item.shape==='sphere'?'selected':''}>Сфера (Sphere)</option>
+            <option value="cylinder" ${item.shape==='cylinder'?'selected':''}>Цилиндр (Cylinder)</option>
+            <option value="cone" ${item.shape==='cone'?'selected':''}>Конус / Рог (Cone)</option>
+            <option value="torus" ${item.shape==='torus'?'selected':''}>Кольцо / Нимб (Torus)</option>
+            <option value="plane" ${item.shape==='plane'?'selected':''}>Плоскость / Крыло (Plane)</option>
+          </select>
+        </div>
+        <div class="prop-row">
+          <label>Крепление</label>
+          <select class="ed-inp" id="cosSlot">
+            <option value="head" ${item.parentSlot==='head'?'selected':''}>Голова (Head)</option>
+            <option value="torso" ${item.parentSlot==='torso'?'selected':''}>Торс / Спина (Torso)</option>
+            <option value="armL" ${item.parentSlot==='armL'?'selected':''}>Левая рука (ArmL)</option>
+            <option value="armR" ${item.parentSlot==='armR'?'selected':''}>Правая рука (ArmR)</option>
+            <option value="legL" ${item.parentSlot==='legL'?'selected':''}>Левая нога (LegL)</option>
+            <option value="legR" ${item.parentSlot==='legR'?'selected':''}>Правая нога (LegR)</option>
+          </select>
+        </div>
+        <div class="prop-row">
+          <label>Цвет и Принт</label>
+          <input type="color" class="ed-color" id="cosCol" value="${item.color||'#ffce3a'}">
+          <button class="ed-btn" id="btnPaintCos" type="button" style="flex:1">🎨 Принт аксессуара</button>
+        </div>
+        <button class="ed-btn apply-oneclick" id="btnSaveCosLib" type="button">⭐ Сохранить аксессуар в Гардероб</button>
+      </div>
+    `;
+    $('btnBackToChar').onclick=()=>selectEditorObject({kind:'char',ent});
+    $('cosName').oninput=e=>{item.name=e.target.value;};
+    const rebuildCos=()=>{
+      ent.rig.syncCustomCosmetics(ent.preset.customCosmetics);
+      attachRigToEntity(ent);
+      const newMesh=ent.rig.customCosMeshes.find(m=>m.userData.cosmeticItem===item);
+      if(newMesh)selectEditorObject({kind:'cosmetic',ent,mesh:newMesh,item});
+    };
+    $('cosShape').onchange=e=>{item.shape=e.target.value;rebuildCos();};
+    $('cosSlot').onchange=e=>{item.parentSlot=e.target.value;rebuildCos();};
+    $('cosCol').oninput=e=>{item.color=e.target.value;mesh.material.color.set(e.target.value);};
+    $('btnPaintCos').onclick=()=>openPaintModal('cosmetic');
+    $('btnSaveCosLib').onclick=()=>{
+      savedCosmeticsLibrary.push( JSON.parse(JSON.stringify(item)) );
+      sfx.cash();
+      showBanner(`⭐ Аксессуар «${item.name}» сохранён в общий Гардероб!`, '#00e676');
+    };
+    return;
+  }
+
+  // 3. SCENE BLOCK / CLOUD / CHECKPOINT / SPAWNER SELECTED
+  if(selectedRef.kind==='block'){
+    const box = selectedRef.box;
+    const p = box.m.position, r = box.m.rotation, s = box.m.scale;
+    const cs = box.colliderScale || {x:1,y:1,z:1};
+    const cd = box.checkpointData;
+    const sd = box.spawnerData;
+
+    cont.innerHTML=`
+      <div class="prop-group">
+        <h5>🧱 Основное и Агрегатное Состояние</h5>
+        <div class="prop-row"><label>Название</label><input class="ed-inp" id="inpBlkName" value="${box.label}"></div>
+        <div class="prop-row">
+          <label>Состояние</label>
+          <select class="ed-inp" id="inpMatter">
+            <option value="solid" ${box.matterState==='solid'?'selected':''}>🧱 Твёрдое (Можно ходить и прыгать)</option>
+            <option value="liquid" ${box.matterState==='liquid'?'selected':''}>💧 Жидкое (Вода/Лава — можно плавать)</option>
+            <option value="gas" ${box.matterState==='gas'?'selected':''}>☁️ Газообразное (Облако — сквозь него)</option>
+          </select>
+        </div>
+        <div class="prop-row">
+          <label>Цвет и Принт</label>
+          <input type="color" class="ed-color" id="inpBlkCol" value="${box.colorHex}">
+          <button class="ed-btn" id="btnEditBlockStuds" type="button" style="flex:1">🎨 Нарисовать принт</button>
+        </div>
+      </div>
+
+      <div class="prop-group">
+        <h5>📐 Трансформация и Коллайдер</h5>
+        <div class="prop-row"><label>Позиция</label><div class="vec3">
+          <input type="number" step="0.5" class="ed-inp" id="inpPX" value="${p.x.toFixed(1)}">
+          <input type="number" step="0.5" class="ed-inp" id="inpPY" value="${p.y.toFixed(1)}">
+          <input type="number" step="0.5" class="ed-inp" id="inpPZ" value="${p.z.toFixed(1)}">
+        </div></div>
+        <div class="prop-row"><label>Размер</label><div class="vec3">
+          <input type="number" step="0.5" min="0.2" class="ed-inp" id="inpSX" value="${s.x.toFixed(1)}">
+          <input type="number" step="0.2" min="0.1" class="ed-inp" id="inpSY" value="${s.y.toFixed(1)}">
+          <input type="number" step="0.5" min="0.2" class="ed-inp" id="inpSZ" value="${s.z.toFixed(1)}">
+        </div></div>
+        <div class="prop-row"><label>Поворот°</label><div class="vec3">
+          <input type="number" step="15" class="ed-inp" id="inpRX" value="${Math.round(THREE.MathUtils.radToDeg(r.x))}">
+          <input type="number" step="15" class="ed-inp" id="inpRY" value="${Math.round(THREE.MathUtils.radToDeg(r.y))}">
+          <input type="number" step="15" class="ed-inp" id="inpRZ" value="${Math.round(THREE.MathUtils.radToDeg(r.z))}">
+        </div></div>
+        <div class="prop-row"><label>Множ. Коллайд.</label><div class="vec3">
+          <input type="number" step="0.1" min="0.1" class="ed-inp" id="inpCX" value="${cs.x}">
+          <input type="number" step="0.1" min="0.1" class="ed-inp" id="inpCY" value="${cs.y}">
+          <input type="number" step="0.1" min="0.1" class="ed-inp" id="inpCZ" value="${cs.z}">
+        </div></div>
+      </div>
+
+      <div class="prop-group">
+        <h5>⚡ Физические Свойства При Контакте</h5>
+        <div class="prop-row"><label>Урон (HP)</label><input type="number" step="5" min="0" class="ed-inp" id="inpDmg" value="${box.damageOnContact}"></div>
+        <div class="prop-row"><label>На чекпоинт</label><input type="checkbox" id="inpTpCp" ${box.teleportToCheckpoint?'checked':''}> <span>Телепорт при касании</span></div>
+        <div class="prop-row"><label>Прыгучесть</label><input type="number" step="1" min="0" class="ed-inp" id="inpBounce" value="${box.bounciness}"></div>
+        <div class="prop-row"><label>Конвейер Z/X</label><div class="vec3" style="grid-template-columns:1fr 1fr">
+          <input type="number" step="0.5" class="ed-inp" id="inpConvZ" value="${box.conveyorVz}">
+          <input type="number" step="0.5" class="ed-inp" id="inpConvX" value="${box.conveyorVx}">
+        </div></div>
+        <div class="prop-row"><label>Вращение Y</label><input type="number" step="0.5" class="ed-inp" id="inpSpin" value="${box.spinSpeed}"></div>
+      </div>
+
+      <div class="prop-group">
+        <h5>⭐ Свойства Чекпоинта <input type="checkbox" id="inpCpOn" ${cd.enabled?'checked':''}></h5>
+        <div id="cpFields" ${cd.enabled?'':'hidden'} style="display:flex;flex-direction:column;gap:5px">
+          <div class="prop-row"><label>Этап #</label><input type="number" min="1" class="ed-inp" id="inpCpStg" value="${cd.stage}"></div>
+          <div class="prop-row"><label>Название</label><input class="ed-inp" id="inpCpTitle" value="${cd.title}"></div>
+          <div class="prop-row"><label>Награда R$</label><input type="number" step="10" class="ed-inp" id="inpCpCash" value="${cd.rewardCash}"></div>
+          <div class="prop-row"><label>Пропуск мест</label><input type="number" min="0" class="ed-inp" id="inpCpSkip" value="${cd.skipSpots}"></div>
+        </div>
+      </div>
+
+      <div class="prop-group">
+        <h5>⚙️ Спавнер на Блоке</h5>
+        <div class="prop-row">
+          <label>Условие</label>
+          <select class="ed-inp" id="inpSpMode">
+            <option value="none" ${sd.mode==='none'?'selected':''}>Выключен</option>
+            <option value="timer" ${sd.mode==='timer'?'selected':''}>⏱️ По таймеру (каждые N сек)</option>
+            <option value="contact" ${sd.mode==='contact'?'selected':''}>👟 При контакте с игроком</option>
+            <option value="hit" ${sd.mode==='hit'?'selected':''}>🥊 При ударе рукой (ЛКМ)</option>
+            <option value="keyE" ${sd.mode==='keyE'?'selected':''}>🔘 По нажатию клавиши [E]</option>
+          </select>
+        </div>
+        <div class="prop-row">
+          <label>Кого спавнить</label>
+          <select class="ed-inp" id="inpSpType">
+            <option value="npc" ${sd.spawnType==='npc'?'selected':''}>🤖 NPC-Бота</option>
+            <option value="coin" ${sd.spawnType==='coin'?'selected':''}>🪙 Монетку (+25 R$)</option>
+            <option value="cube" ${sd.spawnType==='cube'?'selected':''}>🧱 Цветной Лего-Куб</option>
+          </select>
+        </div>
+        <div class="prop-row"><label>Таймер (сек)</label><input type="number" min="1" step="0.5" class="ed-inp" id="inpSpInt" value="${sd.interval||5}"></div>
+      </div>
+    `;
+
+    $('inpBlkName').oninput=e=>{box.label=e.target.value;refreshHierarchyUI();};
+    $('inpMatter').onchange=e=>{
+      box.matterState=e.target.value;
+      box.m.material=createBlockMaterial(box.colorHex,box.w/2.2,box.d/2.2,box.gold,box.customTexDataURL,box.matterState);
+      rebuildPhysicsArrays();refreshHierarchyUI();
+    };
+    $('inpBlkCol').oninput=e=>{
+      box.colorHex=e.target.value;
+      box.m.material.color.set(box.colorHex);
+      if(box.m.material.emissive && box.damageOnContact>0)box.m.material.emissive.set(box.colorHex);
+    };
+    $('btnEditBlockStuds').onclick=()=>openPaintModal('block');
+
+    const applyVec=()=>{
+      box.m.position.set(+$('inpPX').value||0, +$('inpPY').value||0, +$('inpPZ').value||0);
+      box.m.scale.set(Math.max(0.2,+$('inpSX').value||1), Math.max(0.1,+$('inpSY').value||1), Math.max(0.2,+$('inpSZ').value||1));
+      box.m.rotation.set(
+        THREE.MathUtils.degToRad(+$('inpRX').value||0),
+        THREE.MathUtils.degToRad(+$('inpRY').value||0),
+        THREE.MathUtils.degToRad(+$('inpRZ').value||0)
+      );
+      box.colliderScale={
+        x:Math.max(0.1,+$('inpCX').value||1),
+        y:Math.max(0.1,+$('inpCY').value||1),
+        z:Math.max(0.1,+$('inpCZ').value||1)
+      };
+      rebuildPhysicsArrays();
+      selBoxHelper.setFromObject(box.m);
+    };
+    ['inpPX','inpPY','inpPZ','inpSX','inpSY','inpSZ','inpRX','inpRY','inpRZ','inpCX','inpCY','inpCZ'].forEach(id=>$(id).oninput=applyVec);
+
+    $('inpDmg').oninput=e=>{box.damageOnContact=Math.max(0,+e.target.value||0);};
+    $('inpTpCp').onchange=e=>{box.teleportToCheckpoint=e.target.checked;};
+    $('inpBounce').oninput=e=>{box.bounciness=Math.max(0,+e.target.value||0);};
+    $('inpConvZ').oninput=e=>{box.conveyorVz=+e.target.value||0;};
+    $('inpConvX').oninput=e=>{box.conveyorVx=+e.target.value||0;};
+    $('inpSpin').oninput=e=>{box.spinSpeed=+e.target.value||0;};
+
+    const syncCp=()=>{
+      cd.enabled=$('inpCpOn').checked;
+      $('cpFields').hidden=!cd.enabled;
+      cd.stage=+$('inpCpStg').value||1;
+      cd.title=$('inpCpTitle').value||'Чекпоинт';
+      cd.rewardCash=+$('inpCpCash').value||50;
+      cd.skipSpots=+$('inpCpSkip').value||2;
+      syncBlockSpecialVisuals(box);
+      refreshHierarchyUI();
+    };
+    ['inpCpOn','inpCpStg','inpCpTitle','inpCpCash','inpCpSkip'].forEach(id=>$(id).oninput=syncCp);
+
+    $('inpSpMode').onchange=e=>{sd.mode=e.target.value;sd.timer=sd.interval;};
+    $('inpSpType').onchange=e=>{sd.spawnType=e.target.value;};
+    $('inpSpInt').oninput=e=>{sd.interval=Math.max(0.5,+e.target.value||5);sd.timer=sd.interval;};
+    return;
+  }
+
+  // 4. PLAYER OR NPC SELECTED
+  if(selectedRef.kind==='char'){
+    const ent = selectedRef.ent;
+    const rig = ent.rig;
+    const hexOf = m => '#'+(m.userData.baseColor ? new THREE.Color(m.userData.baseColor).getHexString() : m.color.getHexString());
+
+    const customList = ent.preset.customCosmetics || [];
+    const customCosHTML = customList.map((c,idx)=>`
+      <div class="hier-item" data-cidx="${idx}">
+        <span>✨ ${c.name} (${c.parentSlot})</span>
+        <small>Настроить 3D</small>
+      </div>
+    `).join('');
+
+    const libHTML = savedCosmeticsLibrary.map((c,idx)=>`
+      <button class="ed-btn" data-libidx="${idx}" type="button">➕ ${c.name}</button>
+    `).join('');
+
+    cont.innerHTML=`
+      <div class="prop-group">
+        <h5>👤 Персонаж и Здоровье (HP)</h5>
+        <div class="prop-row"><label>Никнейм</label><input class="ed-inp" id="inpCharName" value="${ent.name}"></div>
+        <div class="prop-row"><label>Чат-баббл</label><input class="ed-inp" id="inpCharChat" value="${ent.chat||''}"></div>
+        <div class="prop-row">
+          <label>Здоровье ВКЛ</label>
+          <input type="checkbox" id="inpHpOn" ${ent.hpEnabled?'checked':''}>
+          <input type="number" step="10" min="1" class="ed-inp" id="inpHpVal" value="${Math.ceil(ent.hp)}" style="width:60px" title="Текущее HP">
+          <span>/</span>
+          <input type="number" step="10" min="10" class="ed-inp" id="inpMaxHp" value="${ent.maxHp}" style="width:60px" title="Макс. HP">
+        </div>
+        <div class="prop-row"><label>Урон руки</label><input type="number" step="5" min="0" class="ed-inp" id="inpMeleeDmg" value="${ent.meleeDamage||20}"></div>
+        ${!ent.isP?`
+          <div class="prop-row"><label>Поведение</label>
+            <label style="flex:1"><input type="checkbox" id="inpCharWander" ${ent.wander?'checked':''}> Гуляет</label>
+            <label style="flex:1"><input type="checkbox" id="inpCharAggr" ${ent.aggressive?'checked':''}> 🥊 Драчун (Бьёт)</label>
+          </div>
+        `:''}
+      </div>
+
+      <div class="prop-group">
+        <h5>📐 Коллайдер и Физика Персонажа</h5>
+        <div class="prop-row"><label>Масштаб 3D</label><input type="number" step="0.1" min="0.4" max="5" class="ed-inp" id="inpCharScale" value="${rig.g.scale.x.toFixed(1)}"></div>
+        <div class="prop-row"><label>Коллайдер Ш/В</label><div class="vec3" style="grid-template-columns:1fr 1fr">
+          <input type="number" step="0.05" min="0.2" class="ed-inp" id="inpColR" value="${ent.colliderRadius||0.42}" title="Радиус коллайдера">
+          <input type="number" step="0.1" min="1.0" class="ed-inp" id="inpColH" value="${ent.colliderHeight||2.5}" title="Высота коллайдера">
+        </div></div>
+        ${ent.isP?`
+          <div class="prop-row"><label>Бег / Прыжок</label><div class="vec3" style="grid-template-columns:1fr 1fr">
+            <input type="number" step="0.5" min="2" class="ed-inp" id="inpWalkSpd" value="${ent.walkSpeed||7.6}">
+            <input type="number" step="0.5" min="4" class="ed-inp" id="inpJumpPwr" value="${ent.jumpPower||10.2}">
+          </div></div>
+        `:''}
+      </div>
+
+      <div class="prop-group">
+        <h5>🎨 Цвета и Принты Частей Тела (R6)</h5>
+        <button class="ed-btn apply-oneclick" id="btnCharFacePaint" type="button" style="justify-content:center">😀 Рисовать Принт Лица / Части Тела</button>
+        <div class="limb-grid">
+          <div class="limb-card"><span>Голова</span><input type="color" class="ed-color" id="cLimbHead" value="${hexOf(rig.mHead)}"><button class="ed-btn" data-plimb="head" type="button" title="Принт">🖌️</button></div>
+          <div class="limb-card"><span>Торс</span><input type="color" class="ed-color" id="cLimbTorso" value="${hexOf(rig.mTorso)}"><button class="ed-btn" data-plimb="torso" type="button" title="Принт">🖌️</button></div>
+          <div class="limb-card"><span>Л. Рука</span><input type="color" class="ed-color" id="cLimbArmL" value="${hexOf(rig.mArmL)}"><button class="ed-btn" data-plimb="armL" type="button" title="Принт">🖌️</button></div>
+          <div class="limb-card"><span>П. Рука</span><input type="color" class="ed-color" id="cLimbArmR" value="${hexOf(rig.mArmR)}"><button class="ed-btn" data-plimb="armR" type="button" title="Принт">🖌️</button></div>
+          <div class="limb-card"><span>Л. Нога</span><input type="color" class="ed-color" id="cLimbLegL" value="${hexOf(rig.mLegL)}"><button class="ed-btn" data-plimb="legL" type="button" title="Принт">🖌️</button></div>
+          <div class="limb-card"><span>П. Нога</span><input type="color" class="ed-color" id="cLimbLegR" value="${hexOf(rig.mLegR)}"><button class="ed-btn" data-plimb="legR" type="button" title="Принт">🖌️</button></div>
+        </div>
+      </div>
+
+      <div class="prop-group">
+        <h5>🎩 Конструктор Своих Косметических Предметов</h5>
+        <button class="ed-btn apply-oneclick" id="btnCreateCustomCos" type="button" style="justify-content:center">➕ Создать Свой 3D-Аксессуар на Персонаже</button>
+        ${customCosHTML ? `<div style="display:flex;flex-direction:column;gap:4px">${customCosHTML}</div>` : `<div style="font-size:10px;color:#8fa0bd">Нет кастомных аксессуаров. Нажми кнопку выше, чтобы создать!</div>`}
+        ${libHTML ? `<div style="font-size:10px;color:#ffce3a;margin-top:4px">Из сохранённого гардероба:</div><div style="display:flex;gap:4px;flex-wrap:wrap">${libHTML}</div>` : ''}
+      </div>
+
+      <div class="prop-group">
+        <h5>👑 Готовые Косметические Предметы</h5>
+        <div class="cos-grid">
+          <div class="cos-chip ${rig.hatGroup.visible?'on':''}" data-cos="hat">🎩 Цилиндр</div>
+          <div class="cos-chip ${rig.crown.visible?'on':''}" data-cos="crown">👑 Корона</div>
+          <div class="cos-chip ${rig.hair.visible?'on':''}" data-cos="hair">💇 Волосы</div>
+          <div class="cos-chip ${rig.glasses.visible?'on':''}" data-cos="glasses">🕶️ Очки</div>
+          <div class="cos-chip ${rig.halo.visible?'on':''}" data-cos="halo">😇 VIP Нимб</div>
+          <div class="cos-chip ${rig.wings.visible?'on':''}" data-cos="wings">🪽 Крылья</div>
+          <div class="cos-chip ${rig.backpack.visible?'on':''}" data-cos="backpack">🎒 Рюкзак</div>
+          <div class="cos-chip ${rig.sword.visible?'on':''}" data-cos="sword">🗡️ Меч</div>
+          <div class="cos-chip ${rig.coil.visible?'on':''}" data-cos="coil">🌀 Пружина</div>
+        </div>
+      </div>
+    `;
+
+    $('inpCharName').oninput=e=>{ent.name=e.target.value;refreshEntityTagWithHP(ent);refreshHierarchyUI();};
+    $('inpCharChat').oninput=e=>{ent.chat=e.target.value;ent.chatT=999;refreshEntityTagWithHP(ent);};
+    $('inpHpOn').onchange=e=>{ent.hpEnabled=e.target.checked;ent.hpBarTimer=3.0;refreshEntityTagWithHP(ent);if(ent.isP)updateShopUI();};
+    $('inpHpVal').oninput=e=>{ent.hp=clamp(+e.target.value||100,1,ent.maxHp);ent.hpBarTimer=3.0;refreshEntityTagWithHP(ent);if(ent.isP)updateShopUI();};
+    $('inpMaxHp').oninput=e=>{ent.maxHp=Math.max(10,+e.target.value||100);ent.hp=Math.min(ent.hp,ent.maxHp);ent.hpBarTimer=3.0;refreshEntityTagWithHP(ent);if(ent.isP)updateShopUI();};
+    $('inpMeleeDmg').oninput=e=>{ent.meleeDamage=Math.max(0,+e.target.value||20);};
+    if($('inpCharWander'))$('inpCharWander').onchange=e=>{ent.wander=e.target.checked;};
+    if($('inpCharAggr'))$('inpCharAggr').onchange=e=>{ent.aggressive=e.target.checked;};
+
+    $('inpCharScale').oninput=e=>{
+      const sc=clamp(+e.target.value||1,0.4,5);
+      rig.g.scale.setScalar(sc);
+      selBoxHelper.setFromObject(rig.g);
+    };
+    $('inpColR').oninput=e=>{ent.colliderRadius=Math.max(0.2,+e.target.value||0.42);if(showColliders)rebuildPhysicsArrays();};
+    $('inpColH').oninput=e=>{ent.colliderHeight=Math.max(1.0,+e.target.value||2.5);if(showColliders)rebuildPhysicsArrays();};
+    if($('inpWalkSpd'))$('inpWalkSpd').oninput=e=>{ent.walkSpeed=Math.max(2,+e.target.value||7.6);};
+    if($('inpJumpPwr'))$('inpJumpPwr').oninput=e=>{ent.jumpPower=Math.max(4,+e.target.value||10.2);};
+
+    const bindLimbCol=(id,matKey,presetKey)=>{
+      $(id).oninput=e=>{
+        const m=rig[matKey];
+        m.color.set(e.target.value);
+        m.userData.baseColor=m.color.getHex();
+        ent.preset[presetKey]=m.color.getHex();
+      };
+    };
+    bindLimbCol('cLimbHead','mHead','head');
+    bindLimbCol('cLimbTorso','mTorso','torso');
+    bindLimbCol('cLimbArmL','mArmL','armL');
+    bindLimbCol('cLimbArmR','mArmR','armR');
+    bindLimbCol('cLimbLegL','mLegL','legL');
+    bindLimbCol('cLimbLegR','mLegR','legR');
+
+    $('btnCharFacePaint').onclick=()=>openPaintModal('face');
+    cont.querySelectorAll('[data-plimb]').forEach(btn=>{
+      btn.onclick=()=>openPaintModal(btn.dataset.plimb);
+    });
+
+    // Custom 3D Cosmetic Builder Actions
+    $('btnCreateCustomCos').onclick=()=>{
+      if(!ent.preset.customCosmetics)ent.preset.customCosmetics=[];
+      const newItem={
+        id:'cos_'+Date.now(),
+        name:'Аксессуар #'+(ent.preset.customCosmetics.length+1),
+        shape:'box', parentSlot:'head',
+        x:0, y:0.55, z:0, rx:0, ry:0, rz:0, sx:0.6, sy:0.4, sz:0.6,
+        color:'#ffce3a', texDataURL:null
+      };
+      ent.preset.customCosmetics.push(newItem);
+      ent.rig.syncCustomCosmetics(ent.preset.customCosmetics);
+      attachRigToEntity(ent);
+      const mesh=ent.rig.customCosMeshes[ent.rig.customCosMeshes.length-1];
+      selectEditorObject({kind:'cosmetic',ent,mesh,item:newItem});
+      sfx.coil();
+      showBanner('🎩 Создан новый 3D-аксессуар! Двигай его стрелками прямо на персонаже.', '#00e676');
+    };
+
+    cont.querySelectorAll('[data-cidx]').forEach(el=>{
+      el.onclick=()=>{
+        const idx=+el.dataset.cidx;
+        const item=ent.preset.customCosmetics[idx];
+        const mesh=ent.rig.customCosMeshes[idx];
+        if(item&&mesh)selectEditorObject({kind:'cosmetic',ent,mesh,item});
+      };
+    });
+
+    cont.querySelectorAll('[data-libidx]').forEach(btn=>{
+      btn.onclick=()=>{
+        const copy=JSON.parse(JSON.stringify(savedCosmeticsLibrary[+btn.dataset.libidx]));
+        if(!ent.preset.customCosmetics)ent.preset.customCosmetics=[];
+        ent.preset.customCosmetics.push(copy);
+        ent.rig.syncCustomCosmetics(ent.preset.customCosmetics);
+        attachRigToEntity(ent);
+        renderInspectorUI();
+        sfx.jump();
+      };
+    });
+
+    cont.querySelectorAll('.cos-chip').forEach(chip=>{
+      chip.onclick=()=>{
+        const c=chip.dataset.cos;
+        if(c==='hat'){rig.hatGroup.visible=!rig.hatGroup.visible;ent.preset.hat=rig.hatGroup.visible?rig.hatMat.color.getHex():null;}
+        if(c==='crown'){rig.crown.visible=!rig.crown.visible;ent.preset.crown=rig.crown.visible;}
+        if(c==='hair'){rig.hair.visible=!rig.hair.visible;ent.preset.hair=rig.hair.visible?rig.hairMat.color.getHex():null;}
+        if(c==='glasses'){rig.glasses.visible=!rig.glasses.visible;ent.preset.glasses=rig.glasses.visible;}
+        if(c==='halo'){rig.halo.visible=!rig.halo.visible;ent.preset.halo=rig.halo.visible;if(ent.isP)ent.hasHalo=rig.halo.visible;}
+        if(c==='wings'){rig.wings.visible=!rig.wings.visible;ent.preset.wings=rig.wings.visible;}
+        if(c==='backpack'){rig.backpack.visible=!rig.backpack.visible;ent.preset.backpack=rig.backpack.visible;}
+        if(c==='sword'){rig.sword.visible=!rig.sword.visible;ent.preset.sword=rig.sword.visible;}
+        if(c==='coil'){rig.coil.visible=!rig.coil.visible;ent.preset.coil=rig.coil.visible;}
+        chip.classList.toggle('on');
+        sfx.jump();
+      };
+    });
+  }
+}
+
+function syncInspectorInputsFromObject(){
+  if(!selectedRef)return;
+  if(selectedRef.kind==='block' && $('inpPX')){
+    const m=selectedRef.box.m;
+    $('inpPX').value=m.position.x.toFixed(1);
+    $('inpPY').value=m.position.y.toFixed(1);
+    $('inpPZ').value=m.position.z.toFixed(1);
+    $('inpSX').value=m.scale.x.toFixed(1);
+    $('inpSY').value=m.scale.y.toFixed(1);
+    $('inpSZ').value=m.scale.z.toFixed(1);
+    $('inpRX').value=Math.round(THREE.MathUtils.radToDeg(m.rotation.x));
+    $('inpRY').value=Math.round(THREE.MathUtils.radToDeg(m.rotation.y));
+    $('inpRZ').value=Math.round(THREE.MathUtils.radToDeg(m.rotation.z));
+  }else if(selectedRef.kind==='char' && $('inpCharScale')){
+    $('inpCharScale').value=selectedRef.ent.rig.g.scale.x.toFixed(1);
+  }
+}
+
+/* ======================== 2D PRINT STUDIO (BRUSH, FLOOD FILL, EYEDROPPER, ERASER, ALPHA) ======================== */
+const paintCv=$('paintCv');
+const paintCtx=paintCv.getContext('2d',{willReadFrequently:true});
+let activePaintTool='brush'; // 'brush' | 'bucket' | 'picker' | 'eraser'
+let painting=false, symmetryOn=false, lastPX=0, lastPY=0;
+
+const SWATCH_COLORS=['#111111','#ffffff','#f5cd30','#ff3e3e','#00e676','#00a2ff','#9b59b6','#ff9ff3','#e67e22','#f2f6ff','#ffd24c','#2c3e50'];
+$('paintSwatches').innerHTML=SWATCH_COLORS.map(c=>`<div class="swatch" style="background:${c}" data-col="${c}"></div>`).join('');
+$('paintSwatches').querySelectorAll('.swatch').forEach(s=>{
+  s.onclick=()=>{$('paintColor').value=s.dataset.col;};
+});
+
+$('paintAlpha').oninput=e=>{$('paintAlphaTxt').textContent=e.target.value+'%';};
+
+function setPaintTool(tool){
+  activePaintTool=tool;
+  $('toolBrush').classList.toggle('active',tool==='brush');
+  $('toolBucket').classList.toggle('active',tool==='bucket');
+  $('toolPicker').classList.toggle('active',tool==='picker');
+  $('toolEraser').classList.toggle('active',tool==='eraser');
+}
+$('toolBrush').onclick=()=>setPaintTool('brush');
+$('toolBucket').onclick=()=>setPaintTool('bucket');
+$('toolPicker').onclick=()=>setPaintTool('picker');
+$('toolEraser').onclick=()=>setPaintTool('eraser');
+
+$('toolSym').onclick=()=>{
+  symmetryOn=!symmetryOn;
+  $('toolSym').classList.toggle('active',symmetryOn);
+};
+$('toolClearAlpha').onclick=()=>{
+  paintCtx.clearRect(0,0,128,128);
+};
+
+function hexToRgba(hex, alphaPct=100){
+  const v=parseInt(hex.replace('#',''),16);
+  const r=(v>>16)&255, g=(v>>8)&255, b=v&255;
+  const a=Math.round(clamp(alphaPct,0,100)/100*255);
+  return [r,g,b,a];
+}
+
+// Flood Fill (Bucket) with Alpha support
+function floodFillCanvas(startX, startY, fillR, fillG, fillB, fillA){
+  const x0=clamp(Math.floor(startX),0,127);
+  const y0=clamp(Math.floor(startY),0,127);
+  const imgData=paintCtx.getImageData(0,0,128,128);
+  const data=imgData.data;
+  const startIdx=(y0*128+x0)*4;
+  const sr=data[startIdx], sg=data[startIdx+1], sb=data[startIdx+2], sa=data[startIdx+3];
+  if(sr===fillR && sg===fillG && sb===fillB && sa===fillA)return;
+
+  const visited=new Uint8Array(128*128);
+  const queue=[x0 + (y0<<8)];
+  visited[y0*128+x0]=1;
+
+  const match=(idx)=>Math.abs(data[idx]-sr)<=12 && Math.abs(data[idx+1]-sg)<=12 && Math.abs(data[idx+2]-sb)<=12 && Math.abs(data[idx+3]-sa)<=18;
+
+  while(queue.length>0){
+    const cur=queue.pop();
+    const cx=cur&255, cy=cur>>8;
+    const pi=(cy*128+cx)*4;
+    data[pi]=fillR; data[pi+1]=fillG; data[pi+2]=fillB; data[pi+3]=fillA;
+
+    const neighbors=[[cx-1,cy],[cx+1,cy],[cx,cy-1],[cx,cy+1]];
+    for(const [nx,ny] of neighbors){
+      if(nx>=0&&nx<128&&ny>=0&&ny<128){
+        const ni=ny*128+nx;
+        if(!visited[ni] && match(ni*4)){
+          visited[ni]=1;
+          queue.push(nx+(ny<<8));
+        }
+      }
+    }
+  }
+  paintCtx.putImageData(imgData,0,0);
+}
+
+// Eyedropper (Color + Alpha Picker)
+function pickColorFromCanvas(x,y){
+  const px=clamp(Math.floor(x),0,127), py=clamp(Math.floor(y),0,127);
+  const d=paintCtx.getImageData(px,py,1,1).data;
+  const hex='#'+[d[0],d[1],d[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
+  const alphaPct=Math.round((d[3]/255)*100);
+  $('paintColor').value=hex;
+  $('paintAlpha').value=alphaPct;
+  $('paintAlphaTxt').textContent=alphaPct+'%';
+  setPaintTool('brush');
+  showBanner(`💧 Пипетка выбрала цвет ${hex.toUpperCase()} (Альфа: ${alphaPct}%)`, '#56f0ff');
+}
+
+function openPaintModal(defaultTarget='face'){
+  $('paintModal').hidden=false;
+  $('paintTargetSelect').value=defaultTarget;
+  loadTargetTextureIntoCanvas(defaultTarget);
+}
+
+function loadTargetTextureIntoCanvas(target){
+  paintCtx.clearRect(0,0,128,128);
+  const ent = (selectedRef&&selectedRef.kind==='char') ? selectedRef.ent : (selectedRef&&selectedRef.kind==='cosmetic' ? selectedRef.ent : player);
+  let url = null;
+  if(target==='face' && ent){
+    url = ent.preset.faceDataURL || defaultFaceURL;
+  }else if(['head','torso','armL','armR','legL','legR'].includes(target) && ent){
+    url = (ent.preset.limbTex && ent.preset.limbTex[target]) || null;
+    if(!url){
+      const col = '#' + new THREE.Color(ent.preset[target]||0xf5cd30).getHexString();
+      paintCtx.fillStyle = col; paintCtx.fillRect(0,0,128,128);
+      return;
+    }
+  }else if(target==='cosmetic' && selectedRef && selectedRef.kind==='cosmetic'){
+    url = selectedRef.item.texDataURL;
+    if(!url){
+      paintCtx.fillStyle = selectedRef.item.color||'#ffce3a'; paintCtx.fillRect(0,0,128,128);
+      return;
+    }
+  }else if(target==='block' && selectedRef && selectedRef.kind==='block'){
+    url = selectedRef.box.customTexDataURL;
+    if(!url){
+      drawStudPatternOnCtx(paintCtx, selectedRef.box.colorHex, 'rgba(0,0,0,.25)', 'round');
+      return;
+    }
+  }else{
+    drawStudPatternOnCtx(paintCtx, '#f2f6ff', 'rgba(160,185,220,.4)', 'round');
+    return;
+  }
+
+  if(url){
+    const img=new Image();
+    img.onload=()=>{paintCtx.clearRect(0,0,128,128);paintCtx.drawImage(img,0,0,128,128);};
+    img.src=url;
+  }
+}
+
+$('paintTargetSelect').onchange=e=>loadTargetTextureIntoCanvas(e.target.value);
+$('openFacePaintBtn').onclick=()=>{
+  if(selectedRef&&selectedRef.kind==='block')openPaintModal('block');
+  else if(selectedRef&&selectedRef.kind==='cosmetic')openPaintModal('cosmetic');
+  else openPaintModal('face');
+};
+$('closePaintBtn').onclick=()=>{$('paintModal').hidden=true;};
+
+document.querySelectorAll('[data-fpreset]').forEach(btn=>{
+  btn.onclick=()=>drawFacePresetOnCtx(paintCtx,'#f5cd30',btn.dataset.fpreset);
+});
+document.querySelectorAll('[data-spreset]').forEach(btn=>{
+  btn.onclick=()=>drawStudPatternOnCtx(paintCtx,$('paintColor').value,'rgba(0,0,0,.3)',btn.dataset.spreset);
+});
+
+function getCanvasCoords(e){
+  const rect=paintCv.getBoundingClientRect();
+  return [
+    clamp((e.clientX-rect.left)/rect.width*128,0,128),
+    clamp((e.clientY-rect.top)/rect.height*128,0,128)
+  ];
+}
+
+function strokeSegment(x0,y0,x1,y1){
+  paintCtx.save();
+  if(activePaintTool==='eraser'){
+    paintCtx.globalCompositeOperation='destination-out';
+    paintCtx.strokeStyle='rgba(0,0,0,1)';
+  }else{
+    paintCtx.globalCompositeOperation='source-over';
+    const [r,g,b,a]=hexToRgba($('paintColor').value, +$('paintAlpha').value);
+    paintCtx.strokeStyle=`rgba(${r},${g},${b},${a/255})`;
+  }
+  paintCtx.lineWidth=+$('paintSize').value;
+  paintCtx.lineCap='round';
+  paintCtx.beginPath();paintCtx.moveTo(x0,y0);paintCtx.lineTo(x1,y1);paintCtx.stroke();
+  if(symmetryOn){
+    paintCtx.beginPath();paintCtx.moveTo(128-x0,y0);paintCtx.lineTo(128-x1,y1);paintCtx.stroke();
+  }
+  paintCtx.restore();
+}
+
+paintCv.addEventListener('pointerdown',e=>{
+  const [cx,cy]=getCanvasCoords(e);
+  if(activePaintTool==='picker'){
+    pickColorFromCanvas(cx,cy);
+    return;
+  }
+  if(activePaintTool==='bucket'){
+    const [r,g,b,a]=hexToRgba($('paintColor').value, +$('paintAlpha').value);
+    floodFillCanvas(cx,cy,r,g,b,a);
+    return;
+  }
+  painting=true;
+  lastPX=cx;lastPY=cy;
+  strokeSegment(lastPX,lastPY,lastPX,lastPY);
+});
+paintCv.addEventListener('pointermove',e=>{
+  if(!painting)return;
+  const [nx,ny]=getCanvasCoords(e);
+  strokeSegment(lastPX,lastPY,nx,ny);
+  lastPX=nx;lastPY=ny;
+});
+addEventListener('pointerup',()=>{painting=false;});
+
+$('applyPaintBtn').onclick=()=>{
+  const dataURL=paintCv.toDataURL();
+  const target=$('paintTargetSelect').value;
+  const ent = (selectedRef&&selectedRef.kind==='char') ? selectedRef.ent : (selectedRef&&selectedRef.kind==='cosmetic' ? selectedRef.ent : player);
+
+  if(target==='face' && ent){
+    const nm=makePartMat(0xffffff,dataURL);
+    ent.rig.mFace=nm;
+    ent.rig.head.material[4]=nm;
+    ent.preset.faceDataURL=dataURL;
+    showBanner(`😀 Принт лица применён к «${ent.name}»!`, '#00e676');
+  }else if(['head','torso','armL','armR','legL','legR'].includes(target) && ent){
+    if(!ent.preset.limbTex)ent.preset.limbTex={};
+    ent.preset.limbTex[target]=dataURL;
+    const matMap={head:'mHead',torso:'mTorso',armL:'mArmL',armR:'mArmR',legL:'mLegL',legR:'mLegR'};
+    const m=ent.rig[matMap[target]];
+    m.color.setHex(0xffffff);
+    m.map=makeTexFromDataURL(dataURL,false);
+    m.needsUpdate=true;
+    showBanner(`👕 Принт части тела (${target}) применён к «${ent.name}»!`, '#00e676');
+  }else if(target==='cosmetic' && selectedRef && selectedRef.kind==='cosmetic'){
+    selectedRef.item.texDataURL=dataURL;
+    selectedRef.mesh.material.color.setHex(0xffffff);
+    selectedRef.mesh.material.map=makeTexFromDataURL(dataURL,false);
+    selectedRef.mesh.material.needsUpdate=true;
+    showBanner(`🎩 Принт применён к аксессуару «${selectedRef.item.name}»!`, '#00e676');
+  }else if(target==='block' && selectedRef && selectedRef.kind==='block'){
+    const box=selectedRef.box;
+    box.customTexDataURL=dataURL;
+    box.m.material=createBlockMaterial('#ffffff',box.w/2.2,box.d/2.2,box.gold,dataURL,box.matterState);
+    rebuildPhysicsArrays();
+    showBanner(`🧱 Принт применён к объекту «${box.label}»!`, '#00e676');
+  }else if(target==='globalStuds'){
+    customDefaultStudDataURL=dataURL;
+    for(const b of allBlocks){
+      if(!b.gold && b.damageOnContact===0){
+        b.customTexDataURL=dataURL;
+        b.m.material=createBlockMaterial(b.colorHex,b.w/2.2,b.d/2.2,false,dataURL,b.matterState);
+      }
+    }
+    rebuildPhysicsArrays();
+    showBanner('🌍 Новый принт кирпичиков применён ко всем платформам!', '#00e676');
+  }
+  sfx.cash();
+  $('paintModal').hidden=true;
+};
+
+/* ======================== 1-BUTTON SAVE, LOAD & STANDALONE HTML EXPORT ======================== */
+const STORAGE_KEY = 'roblox_heaven_studio_save_v2';
+
+function serializeSceneState(){
+  return {
+    worldSettings,
+    customDefaultStudDataURL,
+    savedCosmeticsLibrary,
+    playerData: player ? {
+      name:player.name, chat:player.chat, scale:player.rig.g.scale.x,
+      hpEnabled:player.hpEnabled, hp:player.hp, maxHp:player.maxHp, meleeDamage:player.meleeDamage,
+      colliderRadius:player.colliderRadius, colliderHeight:player.colliderHeight,
+      walkSpeed:player.walkSpeed, jumpPower:player.jumpPower,
+      preset:player.preset
+    } : null,
+    blocks: allBlocks.map(b=>({
+      label:b.label, shape:b.shape,
+      x:b.m.position.x, y:b.m.position.y+b.m.scale.y/2, z:b.m.position.z,
+      w:b.m.scale.x, h:b.m.scale.y, d:b.m.scale.z,
+      rx:b.m.rotation.x, ry:b.m.rotation.y, rz:b.m.rotation.z,
+      colorHex:b.colorHex, gold:b.gold, customTexDataURL:b.customTexDataURL,
+      matterState:b.matterState, bounciness:b.bounciness,
+      conveyorVz:b.conveyorVz, conveyorVx:b.conveyorVx,
+      damageOnContact:b.damageOnContact, teleportToCheckpoint:b.teleportToCheckpoint,
+      spinSpeed:b.spinSpeed, colliderScale:b.colliderScale,
+      checkpointData:b.checkpointData, spawnerData:b.spawnerData,
+      isCustom:b.isCustom
+    })),
+    customNPCs: customNPCs.map(n=>({
+      name:n.name, chat:n.chat, wander:n.wander, aggressive:n.aggressive,
+      hpEnabled:n.hpEnabled, hp:n.hp, maxHp:n.maxHp, meleeDamage:n.meleeDamage,
+      x:n.x, y:n.y, z:n.z, rot:n.rot, scale:n.rig.g.scale.x,
+      preset:n.preset
+    }))
+  };
+}
+
+function loadSceneState(data){
+  if(!data)return;
+  if(data.worldSettings){
+    Object.assign(worldSettings,data.worldSettings);
+    updateSkybox();
+  }
+  if(data.customDefaultStudDataURL)customDefaultStudDataURL=data.customDefaultStudDataURL;
+  if(Array.isArray(data.savedCosmeticsLibrary))savedCosmeticsLibrary=data.savedCosmeticsLibrary;
+
+  if(Array.isArray(data.blocks) && data.blocks.length>0){
+    for(const b of allBlocks){
+      scene.remove(b.m);
+      if(b.cpVisualGroup)scene.remove(b.cpVisualGroup);
+    }
+    allBlocks.length=0;
+    blockIdCounter=1;
+    for(const sb of data.blocks){
+      const box=addSceneBlock(sb);
+      box.m.rotation.set(sb.rx||0,sb.ry||0,sb.rz||0);
+      if(sb.colliderScale)box.colliderScale=sb.colliderScale;
+    }
+    rebuildPhysicsArrays();
+  }
+
+  if(Array.isArray(data.customNPCs)){
+    for(const n of customNPCs){scene.remove(n.rig.g);scene.remove(n.tag);}
+    customNPCs.length=0;
+    for(const sn of data.customNPCs){
+      spawnCustomNPC(Object.assign({},sn.preset,sn));
+    }
+  }
+
+  if(data.playerData && player){
+    const pd=data.playerData;
+    Object.assign(player,{
+      name:pd.name||player.name, chat:pd.chat||'',
+      hpEnabled:pd.hpEnabled!==undefined?pd.hpEnabled:true,
+      hp:pd.hp||100, maxHp:pd.maxHp||100, meleeDamage:pd.meleeDamage||25,
+      colliderRadius:pd.colliderRadius||0.42, colliderHeight:pd.colliderHeight||2.5,
+      walkSpeed:pd.walkSpeed||7.6, jumpPower:pd.jumpPower||10.2
+    });
+    if(pd.preset){
+      scene.remove(player.rig.g);
+      player.preset=pd.preset;
+      player.rig=createRobloxRig(player.preset, pd.scale||1, false);
+      player.rig.g.position.set(player.x,player.y,player.z);
+      scene.add(player.rig.g);
+      attachRigToEntity(player);
+    }
+    refreshQueueTags();
+    updateShopUI();
+  }
+}
+
+$('applyAndSaveBtn').addEventListener('click',()=>{
+  initAudio();
+  rebuildPhysicsArrays();
+  const stateObj = serializeSceneState();
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateObj));
+  }catch(_){}
+  sfx.gate();
+  toggleStudioMode('play');
+  showBanner('✅ Все изменения применены в игру и сохранены!', '#00e676');
+});
+
+$('exportHtmlBtn').addEventListener('click',()=>{
+  rebuildPhysicsArrays();
+  const stateJSON = JSON.stringify(serializeSceneState());
+  let fullHtml = '<!doctype html>\n' + document.documentElement.outerHTML;
+  fullHtml = fullHtml.replace(
+    /<script id="bakedSceneDataScript">[\s\S]*?<\/script>/,
+    `<script id="bakedSceneDataScript">\nwindow.__BAKED_SCENE_STATE__ = ${stateJSON};\n<\/script>`
+  );
+  const blob = new Blob([fullHtml], {type:'text/html;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'Heaven_Queue_Studio_v2.html';
+  a.click();
+  sfx.cash();
+  showBanner('📥 Готовый HTML-файл со всеми твоими изменениями скачан!', '#56f0ff');
+});
+
+$('resetSavedBtn').addEventListener('click',()=>{
+  if(!confirm('Сбросить все сохранённые изменения карты к стандартной игре?'))return;
+  localStorage.removeItem(STORAGE_KEY);
+  location.reload();
+});
+
+/* ---------- Input, Raycasting & Camera ---------- */
+const keys={};
+let yaw=0,pitch=-0.28,btnJump=false;
+const joy={id:null,ox:0,oy:0,vx:0,vy:0},look={id:null,lx:0,ly:0};
+const stick=$('stick'),knob=$('knob');
+
+addEventListener('keydown',e=>{
+  if(e.target && ['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName))return;
+  keys[e.code]=true;
+  if(e.code==='F2'){e.preventDefault();toggleStudioMode();return;}
+
+  if(state==='edit'){
+    if(!rmbDown){
+      if(e.code==='KeyW')setGizmoMode('translate');
+      if(e.code==='KeyE')setGizmoMode('rotate');
+      if(e.code==='KeyR')setGizmoMode('scale');
+      if(e.code==='KeyF')focusOnSelected();
+      if(e.code==='Delete'||e.code==='Backspace')deleteSelected();
+      if((e.ctrlKey||e.metaKey)&&e.code==='KeyD'){e.preventDefault();duplicateSelected();}
+    }
+    return;
+  }
+
+  if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)&&state==='play')e.preventDefault();
+  if(e.code==='KeyE')tryCutInLine();
+  if(e.code==='KeyF')performPlayerMeleeAttack(true);
+  if(e.code==='KeyR'||e.code==='Digit4')selectSlot(3);
+  if(e.code==='Digit1')selectSlot(0);
+  if(e.code==='Digit2')selectSlot(1);
+  if(e.code==='Digit3')selectSlot(2);
+});
+addEventListener('keyup',e=>{keys[e.code]=false;});
+
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+
+cv.addEventListener('wheel',e=>{
+  if(state!=='edit')return;
+  const fwd = new THREE.Vector3(-Math.sin(edYaw)*Math.cos(edPitch), Math.sin(edPitch), -Math.cos(edYaw)*Math.cos(edPitch));
+  edCamPos.addScaledVector(fwd, -Math.sign(e.deltaY)*2.8);
+},{passive:true});
+
+document.addEventListener('pointerdown',e=>{
+  initAudio();
+  if(state==='edit'){
+    if(e.target!==cv)return;
+    if(e.button===2){rmbDown=true;return;}
+    if(e.button===0 && !tControls.dragging){
+      mouseNDC.x = (e.clientX/SW)*2 - 1;
+      mouseNDC.y = -(e.clientY/SH)*2 + 1;
+      raycaster.setFromCamera(mouseNDC, camera);
+
+      const pickables=[];
+      for(const b of allBlocks)pickables.push(b.m);
+      for(const e of queueLine)pickables.push(e.rig.g);
+      for(const n of customNPCs)pickables.push(n.rig.g);
+      if(archangelEnt)pickables.push(archangelEnt.rig.g);
+
+      const hits = raycaster.intersectObjects(pickables, true);
+      if(hits.length>0){
+        let obj = hits[0].object;
+        // Check if clicked directly on a custom cosmetic piece
+        if(obj.userData && obj.userData.cosmeticItem){
+          let p=obj; while(p && !p.userData.editorRef)p=p.parent;
+          if(p && p.userData.editorRef && p.userData.editorRef.kind==='char'){
+            selectEditorObject({kind:'cosmetic',ent:p.userData.editorRef.ent,mesh:obj,item:obj.userData.cosmeticItem});
+            return;
+          }
+        }
+        while(obj && !obj.userData.editorRef) obj = obj.parent;
+        if(obj && obj.userData.editorRef){
+          selectEditorObject(obj.userData.editorRef);
+          return;
+        }
+      }
+      selectEditorObject(null);
+    }
+    return;
+  }
+
+  if(e.pointerType==='mouse'){
+    if(state!=='play'||e.target!==cv)return;
+    if(document.pointerLockElement!==cv){try{cv.requestPointerLock();}catch(_){}}
+    else if(e.button===0)performPlayerMeleeAttack(false);
+    return;
+  }
+  if(state!=='play'||e.target.closest('button,.slot,#shopPanel,#topbar')||!$('menu').hidden)return;
+  if(joy.id===null&&e.clientX<SW*0.45){
+    joy.id=e.pointerId;joy.ox=e.clientX;joy.oy=e.clientY;joy.vx=joy.vy=0;
+    stick.hidden=false;stick.style.left=joy.ox+'px';stick.style.top=joy.oy+'px';knob.style.transform='';
+  }else if(look.id===null){
+    look.id=e.pointerId;look.lx=e.clientX;look.ly=e.clientY;
+  }
+});
+
+document.addEventListener('pointermove',e=>{
+  if(state==='edit'){
+    if(rmbDown || (e.buttons&2)){
+      edYaw -= (e.movementX||0)*0.0032;
+      edPitch = clamp(edPitch - (e.movementY||0)*0.0032, -1.45, 1.45);
+    }
+    return;
+  }
+  if(e.pointerType==='mouse'){
+    if(state!=='play')return;
+    if(document.pointerLockElement===cv||e.buttons){
+      yaw-=(e.movementX||0)*0.0028;
+      pitch=clamp(pitch-(e.movementY||0)*0.0025,-1.15,0.55);
+    }
+    return;
+  }
+  if(e.pointerId===joy.id){
+    let dx=e.clientX-joy.ox,dy=e.clientY-joy.oy;
+    const d=Math.hypot(dx,dy),max=50;
+    if(d>max){dx=dx/d*max;dy=dy/d*max;}
+    joy.vx=dx/max;joy.vy=dy/max;
+    knob.style.transform=`translate(${dx}px,${dy}px)`;
+  }else if(e.pointerId===look.id){
+    yaw-=(e.clientX-look.lx)*0.006;
+    pitch=clamp(pitch-(e.clientY-look.ly)*0.005,-1.15,0.55);
+    look.lx=e.clientX;look.ly=e.clientY;
+  }
+});
+const endPtr=e=>{
+  if(e.button===2)rmbDown=false;
+  if(e.pointerId===joy.id){joy.id=null;joy.vx=joy.vy=0;stick.hidden=true;}
+  if(e.pointerId===look.id)look.id=null;
+};
+document.addEventListener('pointerup',endPtr);
+document.addEventListener('pointercancel',endPtr);
+$('bJump').addEventListener('pointerdown',e=>{e.preventDefault();btnJump=true;});
+$('bJump').addEventListener('pointerup',()=>{btnJump=false;});
+
+/* ---------- Main Game Update ---------- */
+let contactDamageCooldown = 0;
+
+function update(dt){
+  time+=dt;
+  if(contactDamageCooldown>0)contactDamageCooldown-=dt;
+
+  // 1. Archangel All-Seeing Eye Timer
+  eyeTimer-=dt;
+  if(eyeTimer<=0){
+    eyeWatching=!eyeWatching;
+    eyeTimer=eyeWatching?rnd(2.6,4.0):rnd(4.5,6.8);
+    const pill=$('eyePill');
+    if(eyeWatching){
+      pill.className='pill eye-warn';
+      pill.textContent='🚨 АРХАНГЕЛ СМОТРИТ! (НЕ ТОЛКАЙСЯ!)';
+      if(archangelEnt)archangelEnt.rig.g.rotation.y=0.1;
+    }else{
+      pill.className='pill eye-safe';
+      pill.textContent='👁️ АРХАНГЕЛ ОТВЕРНУЛСЯ (МОЖНО ТОЛКАТЬ — F!)';
+      if(archangelEnt)archangelEnt.rig.g.rotation.y=2.6;
+    }
+  }
+
+  // 2. Queue Advancement Timer
+  judgeTimer-=dt;
+  if(judgeTimer<=0){
+    judgeTimer=4.8;
+    advanceQueueFront();
+  }
+
+  // 3. Player Movement, States of Matter (Solid / Liquid / Gas) & Modular Block Properties
+  const p=player;
+  const pr = p.colliderRadius || 0.42;
+  const ph = p.colliderHeight || 2.5;
+
+  if(keys.ArrowLeft)yaw+=dt*2.4;
+  if(keys.ArrowRight)yaw-=dt*2.4;
+  let f=0,s=0;
+  if(keys.KeyW||keys.ArrowUp)f++;
+  if(keys.KeyS||keys.ArrowDown)f--;
+  if(keys.KeyA)s--;
+  if(keys.KeyD)s++;
+  if(joy.id!==null){f-=joy.vy;s+=joy.vx;}
+  let len=Math.hypot(f,s);if(len>1){f/=len;s/=len;len=1;}
+
+  // Check if player is inside a Liquid block
+  let inLiquid = false;
+  for(const b of allBlocks){
+    if(b.matterState==='liquid'){
+      if(b.m.material && b.m.material.map){
+        b.m.material.map.offset.y = (time*0.25)%1;
+      }
+      if(p.x+pr>b.x0 && p.x-pr<b.x1 && p.z+pr>b.z0 && p.z-pr<b.z1 && p.y+ph>b.y0 && p.y<b.y1){
+        inLiquid = true;
+        if(b.damageOnContact>0 && contactDamageCooldown<=0){
+          contactDamageCooldown=0.55;
+          dealDamage(p, b.damageOnContact);
+        }
+        if(b.teleportToCheckpoint){
+          oofRespawn('🌊 Водоворот вернул тебя на чекпоинт!');
+        }
+      }
+    }
+  }
+
+  const spdBoost = (p.hasSpeed || (activeSlot===1&&p.hasSpeed)) ? 1.55 : 1.0;
+  const spd = (p.walkSpeed||7.6) * spdBoost * (inLiquid ? 0.65 : 1.0);
+  const fx=-Math.sin(yaw),fz=-Math.cos(yaw),rx=-fz,rz=fx;
+  let vx=p.vxKnock||0, vz=p.vzKnock||0;
+  p.vxKnock = (p.vxKnock||0)*Math.pow(0.05,dt);
+  p.vzKnock = (p.vzKnock||0)*Math.pow(0.05,dt);
+
+  if(len>0.1){
+    vx+=(fx*f+rx*s)*spd;
+    vz+=(fz*f+rz*s)*spd;
+    p.rot=Math.atan2(vx,vz);
+    p.step+=spd*dt;
+  }
+
+  p.x+=vx*dt;
+  p.z+=vz*dt;
+
+  const gravBoost = p.hasGrav ? 0.62 : 1.0;
+  const baseJump = p.jumpPower || 10.2;
+  if(keys.Space||btnJump){
+    if(inLiquid){
+      p.vy = 6.2; // Swim upward in liquid!
+    }else if(p.grounded){
+      p.vy = p.hasGrav ? baseJump*1.32 : baseJump;
+      p.grounded=false;
+      sfx.jump();
+    }
+  }
+
+  const prevY=p.y;
+  if(inLiquid){
+    p.vy = clamp(p.vy - worldSettings.gravity*0.25*dt, -4.5, 6.8);
+  }else{
+    p.vy = Math.max(-28, p.vy - worldSettings.gravity*gravBoost*dt);
+  }
+  p.y+=p.vy*dt;
+  p.grounded=false;
+
+  // Iterate all blocks for Solid collisions, Spinners, Bounciness, Damage, Checkpoints & Spawners
+  for(const b of allBlocks){
+    // Timer Spawner
+    if(b.spawnerData && b.spawnerData.mode==='timer'){
+      b.spawnerData.timer -= dt;
+      if(b.spawnerData.timer <= 0){
+        b.spawnerData.timer = b.spawnerData.interval || 5;
+        triggerBlockSpawner(b);
+      }
+    }
+
+    // Spinning Beam logic
+    if(b.spinSpeed !== 0){
+      b.m.rotation.y += b.spinSpeed * dt;
+      const cx=(b.x0+b.x1)/2, cy=(b.y0+b.y1)/2, cz=(b.z0+b.z1)/2;
+      const r=Math.max(b.w,b.d)/2;
+      const dx=p.x-cx, dz=p.z-cz;
+      if(Math.hypot(dx,dz)<r && Math.abs((p.y+ph*0.4)-cy)<(b.h/2+ph*0.4)){
+        const ang=-b.m.rotation.y;
+        const lx=dx*Math.cos(ang)-dz*Math.sin(ang);
+        const lz=dx*Math.sin(ang)+dz*Math.cos(ang);
+        if(Math.abs(lx)<b.w/2 && Math.abs(lz)<b.d/2){
+          if(b.damageOnContact>0 && contactDamageCooldown<=0){
+            contactDamageCooldown=0.5;
+            dealDamage(p, b.damageOnContact);
+          }
+          if(b.teleportToCheckpoint){
+            oofRespawn('🌀 Тебя сбила вращающаяся балка!');
+          }
+        }
+      }
+      continue;
+    }
+
+    // Check overlap with block AABB
+    const overlapXZ = (p.x+pr>b.x0 && p.x-pr<b.x1 && p.z+pr>b.z0 && p.z-pr<b.z1);
+    if(!overlapXZ)continue;
+
+    // Gas blocks: walk through freely, but apply updraft if bounciness > 0
+    if(b.matterState==='gas'){
+      if(p.y+ph>b.y0 && p.y<b.y1){
+        if(b.bounciness>0)p.vy = b.bounciness;
+        if(b.damageOnContact>0 && contactDamageCooldown<=0){
+          contactDamageCooldown=0.6;
+          dealDamage(p, b.damageOnContact);
+        }
+        if(b.teleportToCheckpoint)oofRespawn('☁️ Газовая ловушка вернула тебя на чекпоинт!');
+      }
+      continue;
+    }
+
+    // Solid blocks: landing on top & touching hazards
+    if(b.matterState==='solid'){
+      const touchingHeight = (p.y+ph>b.y0 && p.y<=b.y1+0.3);
+      if(touchingHeight){
+        if(b.damageOnContact>0 && contactDamageCooldown<=0){
+          contactDamageCooldown=0.55;
+          dealDamage(p, b.damageOnContact);
+        }
+        if(b.teleportToCheckpoint){
+          oofRespawn('💥 Контакт с объектом вернул тебя на чекпоинт!');
+          break;
+        }
+        if(b.spawnerData && b.spawnerData.mode==='contact' && contactDamageCooldown<=0){
+          contactDamageCooldown=1.2;
+          triggerBlockSpawner(b);
+        }
+      }
+
+      if(p.vy<=0 && prevY>=b.y1-0.4 && p.y<=b.y1+0.28){
+        p.y=b.y1; p.vy=0; p.grounded=true;
+        if(b.conveyorVz) p.z += b.conveyorVz*dt;
+        if(b.conveyorVx) p.x += b.conveyorVx*dt;
+        if(b.bounciness>0){
+          p.vy = b.bounciness;
+          p.grounded = false;
+          sfx.coil();
+        }
+      }
+
+      // Checkpoint activation
+      if(b.checkpointData && b.checkpointData.enabled && Math.abs(p.y-b.y1)<1.8){
+        const cd=b.checkpointData;
+        const cx=(b.x0+b.x1)/2, cz=(b.z0+b.z1)/2;
+        p.respawnX=cx; p.respawnY=b.y1+0.5; p.respawnZ=cz;
+        if(cd.stage > p.bestObby){
+          p.bestObby = cd.stage;
+          const mult=(p.rebirths+1)*(p.hasHalo?2:1);
+          const earned=cd.rewardCash*mult;
+          p.cash+=earned;
+          sfx.checkpoint();
+          if(cd.skipSpots>0)movePlayerInQueue(-cd.skipSpots);
+          updateShopUI();
+          showBanner(`⭐ ${cd.title}! +${earned} R$ и -${cd.skipSpots} мест в очереди!`,'#00e676');
+          if(cd.stage===5){
+            setTimeout(()=>{p.bestObby=0;teleportToQueueSpot();},1100);
+          }
+        }
+      }
+    }
+  }
+
+  // Collect Spawned Coins
+  for(let i=spawnedCoins.length-1;i>=0;i--){
+    const c=spawnedCoins[i];
+    c.m.rotation.z += 3*dt;
+    if(Math.hypot(p.x-c.x, p.z-c.z)<1.6 && Math.abs(p.y-c.y)<2.2){
+      p.cash += c.val*(p.hasHalo?2:1);
+      scene.remove(c.m);
+      spawnedCoins.splice(i,1);
+      sfx.cash();
+      updateShopUI();
+    }
+  }
+
+  // Check Pearly Gates Entry when Player is at #1
+  const topSpot=queueCoords[0];
+  if(p.qIdx===0 && !p.inHeaven && Math.hypot(p.x-topSpot.x,p.z-(topSpot.z-4))<4.5){
+    enterHeaven();
+  }
+
+  // Void Respawn
+  if(p.y<-18){
+    oofRespawn('☁️ Ты упал с облаков! Возврат на чекпоинт.');
+  }
+
+  // 4. Update Health Bar Timers & Animate Queue NPCs + Player
+  if(archangelEnt && archangelEnt.hpBarTimer>0){
+    archangelEnt.hpBarTimer-=dt;
+    if(archangelEnt.hpBarTimer<=0)refreshEntityTagWithHP(archangelEnt);
+  }
+
+  for(let i=0;i<queueLine.length;i++){
+    const e=queueLine[i];
+    if(e.hpBarTimer>0){
+      e.hpBarTimer-=dt;
+      if(e.hpBarTimer<=0)refreshEntityTagWithHP(e);
+    }
+
+    if(!e.isP){
+      const target=queueCoords[i];
+      const dx=target.x-e.x,dz=target.z-e.z,d=Math.hypot(dx,dz);
+      if(d>0.08){
+        const step=Math.min(d,5.5*dt);
+        e.x+=(dx/d)*step;e.z+=(dz/d)*step;
+        e.y+=(target.y-e.y)*Math.min(1,dt*8);
+        e.step+=step*3;
+        e.rot=Math.atan2(dx,dz);
+      }else{
+        e.rot=Math.PI;
+      }
+      e.chatT-=dt;
+      if(e.chatT<=0){
+        e.chat = Math.random()<0.35 ? pick(CHAT_LINES) : '';
+        e.chatT = e.chat ? rnd(3.5,5.5) : rnd(4,10);
+        refreshEntityTagWithHP(e);
+      }
+    }
+
+    const swing = (e.isP ? len>0.1 : Math.hypot(queueCoords[i].x-e.x,queueCoords[i].z-e.z)>0.1) ? Math.sin(e.step*1.8)*0.65 : 0;
+    e.rig.legL.rotation.x=swing;
+    e.rig.legR.rotation.x=-swing;
+    e.rig.armL.rotation.x=-swing*0.8;
+    if(e.rig.armR.rotation.x>-1.1) e.rig.armR.rotation.x=swing*0.8;
+
+    e.rig.g.position.set(e.x,e.y,e.z);
+    e.rig.g.rotation.y=e.rot;
+    e.tag.position.set(e.x,e.y+3.35,e.z);
+  }
+
+  // 5. Animate Custom NPCs & Melee Combat AI
+  for(const npc of customNPCs){
+    if(npc.hpBarTimer>0){
+      npc.hpBarTimer-=dt;
+      if(npc.hpBarTimer<=0)refreshEntityTagWithHP(npc);
+    }
+    if(npc.attackCooldown>0)npc.attackCooldown-=dt;
+
+    npc.x += (npc.vxKnock||0)*dt;
+    npc.z += (npc.vzKnock||0)*dt;
+    npc.vxKnock = (npc.vxKnock||0)*Math.pow(0.05,dt);
+    npc.vzKnock = (npc.vzKnock||0)*Math.pow(0.05,dt);
+
+    let moving=false;
+    if(npc.aggressive && player){
+      const dx=player.x-npc.x, dz=player.z-npc.z, d=Math.hypot(dx,dz);
+      if(d<12 && d>1.6){
+        const step=4.2*dt;
+        npc.x+=(dx/d)*step; npc.z+=(dz/d)*step;
+        npc.rot=Math.atan2(dx,dz);
+        npc.step+=step*3;
+        moving=true;
+      }else if(d<=2.2 && npc.attackCooldown<=0){
+        npc.attackCooldown=1.4;
+        npc.rig.armR.rotation.x=-1.6;
+        setTimeout(()=>{if(npc.rig)npc.rig.armR.rotation.x=0;},200);
+        dealDamage(player, npc.meleeDamage||15, npc);
+      }
+    }else if(npc.wander){
+      npc.wTimer-=dt;
+      if(npc.wTimer<=0){
+        npc.wTimer=rnd(2.5,5.5);
+        npc.tx=npc.homeX+rnd(-3.5,3.5);
+        npc.tz=npc.homeZ+rnd(-3.5,3.5);
+      }
+      const dx=npc.tx-npc.x, dz=npc.tz-npc.z, d=Math.hypot(dx,dz);
+      if(d>0.12){
+        const step=Math.min(d,3.2*dt);
+        npc.x+=(dx/d)*step; npc.z+=(dz/d)*step;
+        npc.rot=Math.atan2(dx,dz);
+        npc.step+=step*3;
+        moving=true;
+      }
+    }
+
+    const sw=moving?Math.sin(npc.step*1.8)*0.55:0;
+    npc.rig.legL.rotation.x=sw;npc.rig.legR.rotation.x=-sw;
+    npc.rig.armL.rotation.x=-sw*0.7;
+    if(npc.rig.armR.rotation.x>-1.1)npc.rig.armR.rotation.x=sw*0.7;
+
+    npc.rig.g.position.set(npc.x,npc.y,npc.z);
+    npc.rig.g.rotation.y=npc.rot;
+    npc.tag.position.set(npc.x,npc.y+3.35,npc.z);
+  }
+
+  const qSp=queueCoords[p.qIdx];
+  const nearSpot=Math.hypot(p.x-qSp.x,p.z-qSp.z)<4.5;
+  let h='';
+  if(p.qIdx===0 && !p.inHeaven){
+    h='👑 ТЫ ПЕРВЫЙ В ОЧЕРЕДИ! Шагни в сияющие Врата Рая или нажми E!';
+  }else if(nearSpot){
+    h=`Очередь (#${p.qIdx+1}) · [ЛКМ] Ударить рукой · [F] Толкнуть · [E] Обогнать (${cutCost()} R$) · [F2] 3D Редактор`;
+  }else{
+    h='Небесное Обби! [ЛКМ] Удар рукой · [Пробел] Прыжок / Плавание · [R] В очередь · [F2] 3D Редактор';
+  }
+  if($('hint').textContent!==h){$('hint').textContent=h;$('hint').hidden=!h;}
+}
+
+function updateEditorCamera(dt){
+  if(!rmbDown)return;
+  const spd = (keys.ShiftLeft||keys.ShiftRight) ? 34 : 15;
+  const fwd = new THREE.Vector3(-Math.sin(edYaw)*Math.cos(edPitch), Math.sin(edPitch), -Math.cos(edYaw)*Math.cos(edPitch));
+  const right = new THREE.Vector3(Math.cos(edYaw), 0, -Math.sin(edYaw));
+
+  if(keys.KeyW||keys.ArrowUp)edCamPos.addScaledVector(fwd, spd*dt);
+  if(keys.KeyS||keys.ArrowDown)edCamPos.addScaledVector(fwd, -spd*dt);
+  if(keys.KeyD||keys.ArrowRight)edCamPos.addScaledVector(right, spd*dt);
+  if(keys.KeyA||keys.ArrowLeft)edCamPos.addScaledVector(right, -spd*dt);
+  if(keys.KeyE||keys.Space)edCamPos.y += spd*dt;
+  if(keys.KeyQ)edCamPos.y -= spd*dt;
+}
+
+function oofRespawn(msg){
+  sfx.oof();
+  showBanner(msg,'#ff3e3e');
+  if(player.bestObby>0){
+    player.x=player.respawnX;player.y=player.respawnY+1;player.z=player.respawnZ;player.vy=0;
+  }else{
+    const sp=queueCoords[player.qIdx];
+    player.x=sp.x;player.y=sp.y+1;player.z=sp.z;player.vy=0;
+  }
+}
+
+/* ---------- Render Loop ---------- */
+let menuAngle=0;
+function render(dt){
+  if(state==='play'&&player){
+    const cp=Math.cos(pitch),dx=Math.sin(yaw)*cp,dy=-Math.sin(pitch),dz=Math.cos(yaw)*cp;
+    const dist=7.2;
+    camera.position.set(player.x+dx*dist,player.y+2.4+dy*dist,player.z+dz*dist);
+    camera.lookAt(player.x,player.y+1.8,player.z);
+  }else if(state==='edit'){
+    updateEditorCamera(dt);
+    const cp=Math.cos(edPitch);
+    const lookTarget = new THREE.Vector3(
+      edCamPos.x - Math.sin(edYaw)*cp,
+      edCamPos.y + Math.sin(edPitch),
+      edCamPos.z - Math.cos(edYaw)*cp
+    );
+    camera.position.copy(edCamPos);
+    camera.lookAt(lookTarget);
+  }else{
+    menuAngle+=dt*0.18;
+    camera.position.set(Math.cos(menuAngle)*26,14,-35+Math.sin(menuAngle)*18);
+    camera.lookAt(0,6,-40);
+  }
+  skyDome.position.copy(camera.position);
+  renderer.render(scene,camera);
+}
+
+$('startBtn').addEventListener('click',()=>{
+  initAudio();
+  state='play';
+  $('menu').hidden=true;
+  $('topbar').hidden=false;
+  $('shopPanel').hidden=false;
+  $('hotbar').hidden=false;
+  if(coarse)$('touch').hidden=false;
+  updateShopUI();
+  showBanner('😇 Стой в очереди, бей и толкай ботов (ЛКМ / F), проходи Обби или открой 3D Редактор (F2)!');
+});
+
+buildWorld();
+initQueueAndPlayer();
+
+try{
+  const saved = window.__BAKED_SCENE_STATE__ || JSON.parse(localStorage.getItem(STORAGE_KEY)||'null');
+  if(saved)loadSceneState(saved);
+}catch(_){}
+
+let last=performance.now();
+function loop(now){
+  const dt=Math.min(0.05,(now-last)/1000);last=now;
+  if(state==='play')update(dt);
+  render(dt);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

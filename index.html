@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>DebiX Studio 3D — Очередь в Рай + Обби</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800;900&display=swap">
+  <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/hud.css">
+  <link rel="stylesheet" href="./css/studio.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- ===================== GAME HUD ===================== -->
+<div id="topbar" hidden>
+  <div class="top-left">
+    <div class="pill pos">ОЧЕРЕДЬ:<b id="posTxt">#30 / 30</b></div>
+    <div class="pill hp" id="hpPill">❤️ HP:<b id="hpTxt">100 / 100</b></div>
+    <div class="pill">КАРМА:<b id="cashTxt">25 R$</b></div>
+    <div class="pill">РЕБИРТЫ:<b id="rebTxt">0</b></div>
+    <div class="pill eye-safe" id="eyePill">👁️ АРХАНГЕЛ ОТВЕРНУЛСЯ (МОЖНО ТОЛКАТЬ!)</div>
+    <button class="btn-top" id="muteBtn" type="button">ЗВУК: 🟢</button>
+    <button class="btn-top btn-studio-toggle" id="openStudioBtn" type="button">🛠️ 3D РЕДАКТОР (F2)</button>
+  </div>
+  <div id="leader">
+    <h4><span>ОЧЕРЕДЬ В РАЙ</span><span>МЕСТО</span></h4>
+    <div id="lbList"></div>
+  </div>
+</div>
+
+<div id="shopPanel" hidden>
+  <button class="sbtn act" id="btnCut" type="button">
+    <span>⏩ Обогнать в очереди<br><small style="color:#b8ffda;font-weight:600">Занять место впереди (E)</small></span>
+    <span class="tag" id="costCut">35 R$</span>
+  </button>
+  <button class="sbtn troll" id="btnPush" type="button">
+    <span>🥊 Ударить / Толкнуть!<br><small style="color:#ffd0d0;font-weight:600">Удар рукой (ЛКМ / F)</small></span>
+    <span class="tag" style="background:#111">УДАР</span>
+  </button>
+  <button class="sbtn" id="buySpeed" type="button">
+    <span>🌀 Пружина Скорости<br><small style="color:#aaa;font-weight:600">+65% к бегу в Обби</small></span>
+    <span class="tag" id="costSpeed">80 R$</span>
+  </button>
+  <button class="sbtn" id="buyGrav" type="button">
+    <span>🚀 Пружина Прыжка<br><small style="color:#aaa;font-weight:600">Высокий прыжок (Gravity)</small></span>
+    <span class="tag" id="costGrav">120 R$</span>
+  </button>
+  <button class="sbtn" id="buyHalo" type="button">
+    <span>😇 VIP Нимб Донатера<br><small style="color:#aaa;font-weight:600">x2 R$ и защита от молнии</small></span>
+    <span class="tag" id="costHalo">250 R$</span>
+  </button>
+</div>
+
+<div id="banner" hidden>Добро пожаловать в Очередь в Рай!</div>
+<div id="hint" hidden></div>
+
+<div id="hotbar" hidden>
+  <div class="slot active" data-slot="0"><span class="num">1</span><span class="ico">🥊</span>Кулак</div>
+  <div class="slot" data-slot="1"><span class="num">2</span><span class="ico">🌀</span>Speed</div>
+  <div class="slot" data-slot="2"><span class="num">3</span><span class="ico">🚀</span>Gravity</div>
+  <div class="slot" data-slot="3"><span class="num">4</span><span class="ico">☁️</span>В очередь</div>
+</div>
+
+<div id="touch" hidden>
+  <div id="stick" hidden><div id="knob"></div></div>
+  <button class="tbtn" id="bJump" type="button">ПРЫЖОК</button>
+  <button class="tbtn" id="bPush" type="button">УДАР</button>
+  <button class="tbtn" id="bCut" type="button">ДЕЙСТВИЕ</button>
+</div>
+
+<!-- ===================== DEBIX STUDIO 3D EDITOR OVERLAY ===================== -->
+<div id="studioUI" hidden>
+  <div class="ed-topbar">
+    <div class="ed-brand">
+      <span>DEBIX STUDIO 3D</span> РЕДАКТОР ИГРЫ
+    </div>
+    <div class="ed-tools">
+      <button class="ed-btn active" id="gizmoMove" type="button" title="Перемещение (W)">✥ Двигать (W)</button>
+      <button class="ed-btn" id="gizmoRot" type="button" title="Вращение (E)">🔄 Вращать (E)</button>
+      <button class="ed-btn" id="gizmoScale" type="button" title="Масштаб / Размер (R)">📐 Размер (R)</button>
+      <button class="ed-btn" id="btnSnapToggle" type="button" title="Привязка к сетке">🧲 Сетка: 🔴</button>
+      <button class="ed-btn" id="btnColliderVis" type="button" title="Показать 3D коллайдеры">🔲 Коллайдеры: 🔴</button>
+      <button class="ed-btn" id="openFacePaintBtn" type="button" title="Открыть 2D Студию принтов и партиклов">🎨 2D Студия</button>
+      <button class="ed-btn icon-only" id="dupObjBtn" type="button" title="Дублировать (Ctrl+D)">📋</button>
+      <button class="ed-btn danger icon-only" id="delObjBtn" type="button" title="Удалить выбранный объект (Delete)">🗑️</button>
+      <button class="ed-btn" id="undoObjBtn" type="button" title="Отменить последнее действие (Ctrl+Z)">↩️ Отмена</button>
+    </div>
+    <div class="ed-tools">
+      <button class="ed-btn icon-only" id="studioHubBtn" type="button" title="Выйти в Хаб проектов">🏠</button>
+      <button class="ed-btn apply-oneclick icon-only" id="applyAndSaveBtn" type="button" title="Сохранить проект и играть (1 клик)">💾</button>
+      <button class="ed-btn active" id="openWorldSettingsBtn" type="button" title="Настройки мира, скайбокса, импорт/экспорт и сборка билда">🌤️ Мир</button>
+    </div>
+  </div>
+
+  <div class="ed-body">
+    <!-- Left Sidebar: Spawner & Scene Hierarchy -->
+    <div class="ed-sidebar">
+      <div class="ed-sec-title"><span>➕ СПАВН БЛОКОВ, МЕХАНИК И ОРУЖИЯ</span></div>
+      <div class="spawn-grid">
+        <div class="spawn-card" data-spawn="solid"><span class="ico">🧱</span>Лего-Блок (Твёрдый)</div>
+        <div class="spawn-card" data-spawn="liquid"><span class="ico">💧</span>Вода / Лава (Жидкость)</div>
+        <div class="spawn-card" data-spawn="gas"><span class="ico">☁️</span>Облако / Пар (Газ)</div>
+        <div class="spawn-card" data-spawn="checkpoint"><span class="ico">⭐</span>Чекпоинт Обби</div>
+        <div class="spawn-card" data-spawn="door" style="border-color:#00e676"><span class="ico">🚪</span>Дверь / Лифт [E]</div>
+        <div class="spawn-card" data-spawn="button" style="border-color:#00e676"><span class="ico">🔘</span>Кнопка / Рычаг [E]</div>
+        <div class="spawn-card" data-spawn="plate" style="border-color:#00e676"><span class="ico">👟</span>Нажимная Плита</div>
+        <div class="spawn-card" data-spawn="teleport" style="border-color:#56f0ff"><span class="ico">🌀</span>Пара Телепортов</div>
+        <div class="spawn-card" data-spawn="vip_gate" style="border-color:#ffce3a"><span class="ico">🔓</span>VIP-Ворота за R$</div>
+        <div class="spawn-card" data-spawn="shop_pad" style="border-color:#ffce3a"><span class="ico">🛒</span>Магазин за R$</div>
+        <div class="spawn-card" data-spawn="item_sword" style="border-color:#ff6b6b"><span class="ico">🗡️</span>Меч (Ближний бой)</div>
+        <div class="spawn-card" data-spawn="item_blaster" style="border-color:#ff6b6b"><span class="ico">🔫</span>Бластер (Дальний)</div>
+        <div class="spawn-card" data-spawn="item_staff" style="border-color:#a29bfe"><span class="ico">🪄</span>Посох Фаерболов</div>
+        <div class="spawn-card" data-spawn="item_grenade" style="border-color:#ff9f43"><span class="ico">💣</span>Снаряд (Метание)</div>
+        <div class="spawn-card" data-spawn="item_medkit" style="border-color:#00e676"><span class="ico">🍗</span>Аптечка / Еда</div>
+        <div class="spawn-card" data-spawn="item_torch" style="border-color:#ffce3a"><span class="ico">🔦</span>Факел (Свет)</div>
+        <div class="spawn-card" data-spawn="item_shield" style="border-color:#56f0ff"><span class="ico">🛡️</span>Щит (+Броня)</div>
+        <div class="spawn-card" data-spawn="item_crate" style="border-color:#e67e22"><span class="ico">📦</span>Контейнер (2 руки)</div>
+        <div class="spawn-card" data-spawn="kill"><span class="ico">🚨</span>Урон-Лазер (Kill)</div>
+        <div class="spawn-card" data-spawn="trampoline"><span class="ico">🟢</span>Батут (Прыгучий)</div>
+        <div class="spawn-card" data-spawn="spawner"><span class="ico">⚙️</span>Спавнер Ботов/Монет</div>
+        <div class="spawn-card" data-spawn="npc"><span class="ico">🤖</span>Спавн NPC-Бота</div>
+      </div>
+      <div class="ed-sec-title">
+        <span>📂 ВСЕ ОБЪЕКТЫ СЦЕНЫ</span>
+        <select id="hierFilter" class="ed-inp" style="width:126px;padding:2px 4px;font-size:10px">
+          <option value="all">Все объекты</option>
+          <option value="items">🗡️ Предметы / Оружие</option>
+          <option value="logic">⚡ Двери / Триггеры</option>
+          <option value="chars">Игрок и Боты</option>
+          <option value="checkpoints">Чекпоинты</option>
+          <option value="clouds">Облака / Газ</option>
+          <option value="blocks">Блоки / Платформы</option>
+        </select>
+      </div>
+      <div class="ed-scroll" id="hierContainer"></div>
+    </div>
+
+    <!-- Center Viewport Help Bar -->
+    <div class="ed-helpbar">
+      <b>ЛКМ</b> — выбрать · <b>СКМ (Зажать)</b> — панорама · <b>ПКМ + WASD/QE</b> — полёт · <b>W/E/R</b> — Гизмо · <b>Ctrl+Z</b> — Отмена
+    </div>
+
+    <!-- Right Sidebar: Inspector -->
+    <div class="ed-sidebar right">
+      <div class="ed-sec-title">
+        <span>⚙️ ИНСПЕКТОР СВОЙСТВ</span>
+        <span id="inspTypeBadge" style="color:#56f0ff">🌤️ Мир</span>
+      </div>
+      <div class="ed-scroll" id="inspectorContent"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== 2D PRINT PAINTER MODAL ===================== -->
+<div id="paintModal" hidden>
+  <div class="paint-box">
+    <div class="paint-head">
+      <h3 id="paintModalTitle">🎨 2D СТУДИЯ ПРИНТОВ И ТЕКСТУР (С ПРОЗРАЧНОСТЬЮ АЛЬФА)</h3>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="ed-btn" id="paintUndoBtn" type="button" title="Отменить мазок в 2D Студии (Ctrl+Z)">↩️ Отмена</button>
+        <button class="ed-btn danger" id="closePaintBtn" type="button">✕ Закрыть</button>
+      </div>
+    </div>
+    <div class="paint-main">
+      <div class="paint-canvas-wrap">
+        <div class="checkerboard">
+          <canvas id="paintCv" width="128" height="128"></canvas>
+        </div>
+        <div style="font-size:10.5px;color:#94a3b8">Холст 128×128 / 16×16 (Ctrl+Z отменяет только рисунок)</div>
+      </div>
+      <div class="paint-controls">
+        <div class="prop-group">
+          <h5>Инструменты: Кисть, Заливка, Пипетка, Ластик и Альфа</h5>
+          <div class="prop-row">
+            <label>Цвет и Альфа</label>
+            <input type="color" id="paintColor" class="ed-color" value="#111111">
+            <input type="range" id="paintAlpha" min="0" max="100" value="100" title="Прозрачность (Alpha)" style="flex:1">
+            <span id="paintAlphaTxt" style="font-size:10px;width:34px;text-align:right">100%</span>
+          </div>
+          <div class="prop-row">
+            <label>Размер кисти</label>
+            <input type="range" id="paintSize" min="1" max="28" value="6" style="flex:1">
+          </div>
+          <div class="swatch-row" id="paintSwatches"></div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px">
+            <button class="ed-btn active" id="toolBrush" type="button">🖌️ Кисть</button>
+            <button class="ed-btn" id="toolBucket" type="button">🪣 Заливка</button>
+            <button class="ed-btn" id="toolPicker" type="button">💧 Пипетка</button>
+            <button class="ed-btn" id="toolEraser" type="button">🧽 Ластик (Прозр.)</button>
+            <button class="ed-btn" id="toolSym" type="button">🦋 Симметрия</button>
+            <button class="ed-btn" id="toolClearAlpha" type="button">🗑️ Очистить в 0%</button>
+          </div>
+        </div>
+
+        <div class="prop-group">
+          <h5>Быстрые шаблоны (Лица, Кирпичики и Партиклы)</h5>
+          <div style="display:flex;gap:4px;flex-wrap:wrap">
+            <button class="ed-btn" data-fpreset="classic" type="button">🙂 Нуб</button>
+            <button class="ed-btn" data-fpreset="cool" type="button">😎 Очки</button>
+            <button class="ed-btn" data-fpreset="angry" type="button">😠 Злой</button>
+            <button class="ed-btn" data-fpreset="angel" type="button">😇 Ангел</button>
+            <button class="ed-btn" data-spreset="round" type="button">🧱 Лего Круг</button>
+            <button class="ed-btn" data-spreset="square" type="button">⬜ Лего Квадрат</button>
+            <button class="ed-btn" data-spreset="neonGrid" type="button">💠 Неон</button>
+          </div>
+        </div>
+
+        <div class="prop-group">
+          <h5>Куда применить нарисованный принт?</h5>
+          <div class="prop-row">
+            <label>Цель наложения</label>
+            <select id="paintTargetSelect" class="ed-inp">
+              <option value="face">😀 Лицо персонажа (Перед головы)</option>
+              <option value="head">🟨 Вся Голова персонажа</option>
+              <option value="torso">👕 Торс / Футболка персонажа</option>
+              <option value="armL">💪 Левая рука персонажа</option>
+              <option value="armR">💪 Правая рука персонажа</option>
+              <option value="legL">👖 Левая нога персонажа</option>
+              <option value="legR">👖 Правая нога персонажа</option>
+              <option value="cosmetic">🎩 Выбранный свой аксессуар / предмет</option>
+              <option value="block">🧱 Выбранный Блок / Платформа</option>
+              <option value="globalStuds">🌍 Все стандартные Лего-Платформы</option>
+            </select>
+          </div>
+          <button class="ed-btn apply-oneclick" id="applyPaintBtn" type="button" style="justify-content:center;width:100%">✅ ПРИМЕНИТЬ ПРИНТ К ВЫБРАННОЙ ЦЕЛИ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== START MODAL ===================== -->
+<div id="menu">
+  <div class="modal" id="modalBox">
+    <span class="badge">DEBIX STUDIO 3D & UGC PLATFORM</span>
+    <h1>ОЧЕРЕДЬ В <span>РАЙ</span><br>+ DEBIX STUDIO 3D</h1>
+    <ul class="rules">
+      <li><b>Очередь к Вратам Рая (#30 → #1):</b> обгоняй за `R$` (`E`), проходи Обби справа или толкай и бей рукой (`ЛКМ` / `F`)!</li>
+      <li><b>Оружие, Снаряды и Контейнеры:</b> мечи, бластеры с прицелом (`ПКМ`), метательные снаряды с замахом (`ЛКМ`), аптечки, факелы и двуручные ящики!</li>
+      <li><b>Полный 3D-Редактор (`F2`):</b> двери, кнопки, телепорты, 3D-конструктор оружия и снарядов до 16 примитивов с точками хвата и вылета!</li>
+    </ul>
+    <div class="ctrls">
+      <div><b>ИГРА</b>Мышь — камера · WASD — бег · <b>ЛКМ</b> — удар/огонь/бросок · <b>ПКМ</b> — прицел · <b>E</b> — подобрать / кнопка · <b>G</b> — выбросить · <b>R</b> — перезарядка</div>
+      <div><b>3D РЕДАКТОР (`F2`)</b>ЛКМ — выбрать любой блок/предмет/бота · ПКМ + WASD/QE — полёт камеры · <b>W/E/R</b> — Сдвиг/Поворот/Размер</div>
+    </div>
+    <div class="menu-row">
+      <button class="play-btn" id="startBtn" type="button">▶ ИГРАТЬ В ОЧЕРЕДЬ</button>
+      <button class="play-btn" id="startEditorBtn" type="button" style="background:linear-gradient(180deg,#3498db,#1f6dad);box-shadow:0 5px 0 #12436b">🛠️ ОТКРЫТЬ 3D РЕДАКТОР</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
+<script id="bakedSceneDataScript">
+window.__BAKED_SCENE_STATE__ = null;
+</script>
+<script type="module">
+  import { bootstrapGame } from './src/player/PlayerController.js';
+  bootstrapGame();
+</script>
+</body>
+</html>

@@ -1,0 +1,174 @@
+/* Roblox Top Bar & HUD */
+#topbar{
+  position:fixed;top:calc(10px + env(safe-area-inset-top,0px));
+  left:12px;right:12px;display:flex;justify-content:space-between;
+  align-items:flex-start;pointer-events:none;z-index:10;gap:10px;
+}
+.top-left{
+  display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+  pointer-events:auto;max-width:calc(100vw - 220px);
+}
+.pill{
+  background:var(--ui-bg);border:2px solid var(--ui-border);
+  border-radius:11px;padding:6px 11px;font-weight:800;font-size:12px;
+  display:flex;align-items:center;gap:6px;backdrop-filter:blur(8px);
+  box-shadow:0 4px 14px rgba(0,0,0,.3);white-space:nowrap;
+}
+.pill b{color:var(--rbx-gold);font-size:14px}
+.pill.pos b{color:#56f0ff}
+.pill.hp b{color:#ff5252}
+.pill.eye-safe{border-color:#00e676;background:rgba(10,55,30,.85);color:#8affc1}
+.pill.eye-warn{
+  border-color:#ff3e3e;background:rgba(85,12,12,.9);
+  color:#ff9e9e;animation:pulse .6s infinite alternate;
+}
+@keyframes pulse{from{transform:scale(1)}to{transform:scale(1.04)}}
+.btn-top{
+  cursor:pointer;background:var(--ui-bg);border:2px solid var(--ui-border);
+  color:#fff;border-radius:10px;padding:6px 11px;font:800 11.5px var(--f);
+  transition:background .15s,transform .08s;white-space:nowrap;
+}
+.btn-top:hover{background:rgba(50,55,70,.95)}
+.btn-studio-toggle{
+  background:linear-gradient(135deg,#8e44ad,#00a2ff)!important;
+  border-color:#88ddff!important;box-shadow:0 4px 14px rgba(0,162,255,.45);
+}
+
+/* Roblox Leaderboard */
+#leader{
+  background:var(--ui-bg);border:2px solid var(--ui-border);
+  border-radius:12px;padding:8px 12px;width:195px;flex-shrink:0;
+  backdrop-filter:blur(8px);font-size:11.5px;pointer-events:auto;
+  box-shadow:0 4px 16px rgba(0,0,0,.35);
+}
+#leader h4{
+  margin:0 0 6px;font-size:11px;letter-spacing:.08em;
+  color:#aaa;text-transform:uppercase;display:flex;justify-content:space-between;
+}
+.lb-row{display:flex;justify-content:space-between;padding:3px 4px;border-radius:5px;font-weight:700}
+.lb-row.me{background:rgba(0,162,255,.35);color:#fff}
+.lb-row span:last-child{color:var(--rbx-gold)}
+
+/* Left Shop & Actions Panel */
+#shopPanel{
+  position:fixed;left:12px;top:calc(64px + env(safe-area-inset-top,0px));
+  display:flex;flex-direction:column;gap:6px;z-index:10;width:230px;
+}
+.sbtn{
+  pointer-events:auto;cursor:pointer;display:flex;align-items:center;
+  justify-content:space-between;gap:8px;background:var(--ui-bg);
+  border:2px solid var(--ui-border);border-radius:11px;padding:7px 11px;
+  color:#fff;font:800 11.5px/1.2 var(--f);text-align:left;
+  backdrop-filter:blur(8px);box-shadow:0 4px 12px rgba(0,0,0,.3);
+  transition:transform .08s,border-color .15s;
+}
+.sbtn:hover{border-color:var(--rbx-gold);transform:translateX(3px)}
+.sbtn:active{transform:scale(.96)}
+.sbtn .tag{background:var(--rbx-green);color:#fff;padding:4px 7px;border-radius:6px;font-size:10.5px;white-space:nowrap}
+.sbtn.owned .tag{background:#3a8bff}
+.sbtn.act{background:linear-gradient(135deg,#00b06f,#008a57);border-color:#5cffb6}
+.sbtn.troll{background:linear-gradient(135deg,#e53935,#b71c1c);border-color:#ff8a80}
+
+/* Center Notification & Prompt */
+#banner{
+  position:fixed;top:calc(58px + env(safe-area-inset-top,0px));left:50%;
+  transform:translateX(-50%);background:rgba(15,20,30,.94);
+  border:2px solid var(--rbx-gold);color:#fff;padding:8px 18px;
+  border-radius:99px;font:800 12.5px var(--f);pointer-events:none;
+  z-index:45;text-align:center;box-shadow:0 6px 22px rgba(0,0,0,.45);
+  transition:opacity .25s;max-width:90vw;
+}
+#hint{
+  position:fixed;bottom:calc(88px + env(safe-area-inset-bottom,0px));left:50%;
+  transform:translateX(-50%);background:rgba(18,22,30,.92);
+  border:2px solid rgba(255,255,255,.35);padding:7px 15px;
+  border-radius:11px;font:800 12px var(--f);pointer-events:none;
+  z-index:11;text-align:center;max-width:88vw;
+}
+
+/* Roblox Classic Bottom Hotbar */
+#hotbar{
+  position:fixed;bottom:calc(12px + env(safe-area-inset-bottom,0px));left:50%;
+  transform:translateX(-50%);display:flex;gap:8px;z-index:11;pointer-events:auto;
+}
+.slot{
+  width:64px;height:64px;background:rgba(20,22,28,.88);
+  border:2.5px solid rgba(255,255,255,.25);border-radius:10px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  cursor:pointer;position:relative;color:#fff;font:800 10px/1.1 var(--f);
+  text-align:center;padding:4px;transition:transform .08s,border-color .12s;
+}
+.slot.active{
+  border-color:var(--rbx-blue);background:rgba(0,162,255,.28);
+  transform:translateY(-4px);box-shadow:0 6px 16px rgba(0,162,255,.4);
+}
+.slot .num{position:absolute;top:3px;left:5px;font-size:10px;color:#99a}
+.slot .ico{font-size:20px;margin-bottom:2px}
+
+/* Touch Controls */
+#touch{position:fixed;inset:0;pointer-events:none;z-index:9}
+#stick{
+  position:fixed;width:114px;height:114px;margin:-57px 0 0 -57px;
+  border:3px dashed rgba(255,255,255,.65);border-radius:50%;pointer-events:none;
+}
+#knob{
+  position:absolute;left:50%;top:50%;width:46px;height:46px;
+  margin:-23px 0 0 -23px;border-radius:50%;
+  background:rgba(255,255,255,.8);border:2px solid #111;
+}
+.tbtn{
+  position:fixed;pointer-events:auto;border-radius:50%;
+  background:rgba(25,28,36,.85);border:3px solid rgba(255,255,255,.6);
+  color:#fff;font:900 10.5px var(--f);display:grid;place-items:center;touch-action:none;
+}
+.tbtn:active{transform:scale(.92);background:var(--rbx-blue)}
+#bJump{width:74px;height:74px;right:18px;bottom:90px;background:rgba(0,176,111,.88)}
+#bPush{width:66px;height:66px;right:102px;bottom:94px;background:rgba(229,57,53,.88)}
+#bCut{width:66px;height:66px;right:22px;bottom:174px;background:rgba(255,180,0,.9);color:#111}
+
+@media (max-width:900px){
+  #leader{display:none}
+  #shopPanel{top:auto;bottom:84px;left:8px;width:185px;transform:scale(.9);transform-origin:bottom left}
+}
+
+/* 2D Crosshair & Hold-to-Reload HUD */
+#crosshairHUD{
+  position:fixed;left:50%;top:50%;width:44px;height:44px;
+  transform:translate(-50%,-50%);pointer-events:none;z-index:17;
+  transition:transform .12s ease;
+}
+#crosshairHUD .ch-dot{
+  position:absolute;left:50%;top:50%;width:4px;height:4px;
+  margin:-2px 0 0 -2px;border-radius:50%;background:#ffffff;
+  box-shadow:0 0 6px #56f0ff,0 0 2px #000;transition:background .12s,transform .12s;
+}
+#crosshairHUD .ch-ring{
+  position:absolute;left:50%;top:50%;width:28px;height:28px;
+  margin:-14px 0 0 -14px;border-radius:50%;
+  border:1.5px solid rgba(255,255,255,.32);
+  box-shadow:0 0 8px rgba(0,0,0,.45);
+  transition:all .14s cubic-bezier(.2,.8,.2,1);
+}
+#crosshairHUD .ch-line{
+  position:absolute;background:#ffffff;border-radius:2px;
+  box-shadow:0 0 4px rgba(0,0,0,.85);
+  transition:all .14s cubic-bezier(.2,.8,.2,1);
+}
+#crosshairHUD .ch-top{width:2px;height:8px;left:50%;top:3px;margin-left:-1px}
+#crosshairHUD .ch-bot{width:2px;height:8px;left:50%;bottom:3px;margin-left:-1px}
+#crosshairHUD .ch-left{width:8px;height:2px;top:50%;left:3px;margin-top:-1px}
+#crosshairHUD .ch-right{width:8px;height:2px;top:50%;right:3px;margin-top:-1px}
+
+#crosshairHUD.aiming .ch-dot{
+  background:#00ff88;box-shadow:0 0 8px #00ff88,0 0 2px #000;transform:scale(1.15);
+}
+#crosshairHUD.aiming .ch-ring{
+  width:16px;height:16px;margin:-8px 0 0 -8px;
+  border-color:rgba(0,255,136,.85);box-shadow:0 0 10px rgba(0,255,136,.35);
+}
+#crosshairHUD.aiming .ch-line{background:#00ff88}
+#crosshairHUD.aiming .ch-top{top:8px;height:6px}
+#crosshairHUD.aiming .ch-bot{bottom:8px;height:6px}
+#crosshairHUD.aiming .ch-left{left:8px;width:6px}
+#crosshairHUD.aiming .ch-right{right:8px;width:6px}
+#crosshairHUD.firing{transform:translate(-50%,-50%) scale(1.22)}
