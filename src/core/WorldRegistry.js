@@ -186,8 +186,8 @@ export function updateWorldLights(camPos) {
   for (const wi of S.worldItems) {
     if (wi && wi.group) collectGroupRealLights(wi.group);
   }
-  for (const prj of S.projectiles) {
-    if (prj && prj.mesh) collectGroupRealLights(prj.mesh);
+  for (const prj of S.activeProjectiles || []) {
+    if (prj && (prj.mesh || prj.m || prj.group)) collectGroupRealLights(prj.mesh || prj.m || prj.group);
   }
 
   const collectEntityRealLights = ent => {

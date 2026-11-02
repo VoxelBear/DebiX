@@ -195,7 +195,7 @@ export function syncItemStudioPreview() {
         } else {
           studioMannequinRig.armL.rotation.set(0, 0, 0);
           studioMannequinRig.armR.rotation.set(-Math.PI / 2, 0, 0);
-          studioMannequinRig.handSocketR.add(previewMesh);
+          studioMannequinRig.handGripSocket.add(previewMesh);
         }
         studioMannequinRig.g.updateMatrixWorld(true);
         S.workbenchPreviewGroup = previewMesh;

@@ -318,8 +318,8 @@ export function updateParticles(dt) {
   for (const wi of S.worldItems) {
     if (wi && wi.group) emitFromObjectGroup(wi.group, dt);
   }
-  for (const prj of S.projectiles) {
-    if (prj && prj.mesh) emitFromObjectGroup(prj.mesh, dt);
+  for (const prj of S.activeProjectiles || []) {
+    if (prj && (prj.mesh || prj.m || prj.group)) emitFromObjectGroup(prj.mesh || prj.m || prj.group, dt);
   }
 
   const emitFromEntity = ent => {
