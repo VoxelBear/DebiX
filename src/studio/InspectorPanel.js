@@ -1439,12 +1439,14 @@ export function renderInspectorUI() {
       $('inpCosPtLDist').oninput = e => {
         part.lightDistance = Math.max(2, +e.target.value || 12);
         syncLibraryItemIfEditing(selectedRef);
+        syncItemStudioPreview();
       };
     }
     if ($('inpCosPtPreset')) {
       $('inpCosPtPreset').onchange = e => {
         ptData.preset = e.target.value;
         syncLibraryItemIfEditing(selectedRef);
+        syncItemStudioPreview();
       };
     }
     if ($('btnPaintCosPtSpr')) {
@@ -1457,30 +1459,35 @@ export function renderInspectorUI() {
       $('inpCosPtPCol').oninput = e => {
         ptData.color = e.target.value;
         syncLibraryItemIfEditing(selectedRef);
+        syncItemStudioPreview();
       };
     }
     if ($('inpCosPtPRate')) {
       $('inpCosPtPRate').oninput = e => {
         ptData.rate = Math.max(1, +e.target.value || 10);
         syncLibraryItemIfEditing(selectedRef);
+        syncItemStudioPreview();
       };
     }
     if ($('inpCosPtPSize')) {
       $('inpCosPtPSize').oninput = e => {
         ptData.sizeStart = Math.max(0.05, +e.target.value || 0.28);
         syncLibraryItemIfEditing(selectedRef);
+        syncItemStudioPreview();
       };
     }
     if ($('inpCosPtPSpd')) {
       $('inpCosPtPSpd').oninput = e => {
         ptData.speed = Math.max(0, +e.target.value || 1.6);
         syncLibraryItemIfEditing(selectedRef);
+        syncItemStudioPreview();
       };
     }
     if ($('inpCosPtPGrav')) {
       $('inpCosPtPGrav').oninput = e => {
         ptData.gravity = +e.target.value || 0;
         syncLibraryItemIfEditing(selectedRef);
+        syncItemStudioPreview();
       };
     }
 

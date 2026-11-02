@@ -1,5 +1,5 @@
 // src/studio/StudioController.js
-import { S, $, coarse, showBanner } from '../core/State.js';
+import { S, $, coarse, showBanner, ITEM_STUDIO_ORIGIN } from '../core/State.js';
 import { cv, scene, camera } from '../core/SceneManager.js';
 import { initAudio, sfx } from '../core/AudioEngine.js';
 import {
@@ -44,7 +44,7 @@ const cosmeticUndoStack = [];
 const itemUndoStack = [];
 
 // Изолированная 3D-Студия предметов и аксессуаров (на манер 2D STUDIO)
-export const ITEM_STUDIO_ORIGIN = new THREE.Vector3(0, 650, 0);
+export { ITEM_STUDIO_ORIGIN };
 let itemStudioStageGroup = null;
 let studioMannequinRig = null;
 let savedMapCamera = null;
@@ -122,6 +122,7 @@ function ensureItemStudioStage() {
     o.userData.noCollider = true;
   });
   itemStudioStageGroup.add(studioMannequinRig.g);
+  S.studioMannequinRig = studioMannequinRig;
 
   scene.add(itemStudioStageGroup);
   return itemStudioStageGroup;
@@ -201,35 +202,53 @@ export function syncItemStudioPreview() {
         S.workbenchPreviewGroup = previewMesh;
       }
     }
-  } else if (ref.kind === 'cosmetic' && ref.ent && ref.item) {
+  } else if (ref.kind === 'cosmetic' && ref.item) {
     const { ent, item } = ref;
-    activeStudioCharEnt = ent;
-    if (studioMannequinRig) studioMannequinRig.g.visible = false;
+    activeStudioCharEnt = ent || null;
     if ($('btnISPlaceInWorld')) $('btnISPlaceInWorld').hidden = true;
     if ($('itemStudioSubjectTitle')) {
       const ico = item.parentSlot === 'pet' ? '🐾' : '🎩';
-      $('itemStudioSubjectTitle').textContent = `${ico} ${item.name} (${ent.name}) — 3D STUDIO`;
+      $('itemStudioSubjectTitle').textContent = `${ico} ${item.name || 'Аксессуар'}${ent ? ' (' + ent.name + ')' : ''} — 3D STUDIO`;
     }
 
-    if (ent.rig && ent.rig.g) {
-      ent.rig.g.position.set(ITEM_STUDIO_ORIGIN.x, ITEM_STUDIO_ORIGIN.y + 0.02, ITEM_STUDIO_ORIGIN.z);
-      ent.rig.g.rotation.set(0, 0, 0);
-      setCharacterBodyMeshesVisible(ent.rig, showMannequin);
-      if (ent.tag) ent.tag.visible = false;
+    // Для примерки и редактирования косметики используем чистый студийный манекен без встроенных головных уборов
+    if (studioMannequinRig) {
+      studioMannequinRig.g.position.set(ITEM_STUDIO_ORIGIN.x, ITEM_STUDIO_ORIGIN.y + 0.02, ITEM_STUDIO_ORIGIN.z);
+      studioMannequinRig.g.rotation.set(0, 0, 0);
+      studioMannequinRig.g.visible = true;
 
-      // Если редактируем питомца и манекен выключен — ставим питомца прямо в центр пьедестала
-      if (item.parentSlot === 'pet' && ref.group) {
-        const sc = Math.max(0.1, ent.rig.g.scale.x || 1);
-        if (showMannequin) {
-          const dist = Math.max(0.8, Number(item.petDistance) ?? 2.2);
-          const height = Number(item.petHeight) ?? 1.5;
-          ref.group.position.set(dist / sc, height / sc, 0);
-        } else {
-          ref.group.position.set(0, 1.25 / sc, 0);
+      // Надеваем только редактируемый аксессуар на манекен
+      studioMannequinRig.syncCustomCosmetics([item]);
+
+      const studioGroup = studioMannequinRig.customCosMeshes[0];
+      if (studioGroup) {
+        studioGroup.visible = true;
+        if (item.parentSlot === 'pet') {
+          if (showMannequin) {
+            const dist = Math.max(0.8, Number(item.petDistance) || 2.2);
+            const height = Number(item.petHeight) || 1.5;
+            studioGroup.position.set(dist, height, 0);
+          } else {
+            studioGroup.position.set(0, 1.25, 0);
+          }
         }
-        ref.group.rotation.set(0, 0, 0);
+        setCharacterBodyMeshesVisible(studioMannequinRig, showMannequin);
+
+        const partMeshes = studioGroup.userData?.partMeshes || [];
+        const partIdx = Math.min(Math.max(0, ref.partIdx ?? 0), Math.max(0, item.parts.length - 1));
+        const activeMesh = partMeshes[partIdx] || studioGroup;
+        ref.group = studioGroup;
+        ref.mesh = activeMesh;
+
+        if (tControls.object !== activeMesh) {
+          tControls.detach();
+          tControls.setSpace('local');
+          tControls.attach(activeMesh);
+          selBoxHelper.setFromObject(activeMesh);
+          selBoxHelper.visible = true;
+        }
       }
-      ent.rig.g.updateMatrixWorld(true);
+      studioMannequinRig.g.updateMatrixWorld(true);
     }
   }
 }
@@ -270,6 +289,13 @@ export function restoreItemStudioSubjectsToWorld() {
   }
   S.workbenchPreviewGroup = null;
 
+  if (studioMannequinRig) {
+    studioMannequinRig.syncCustomCosmetics([]);
+    studioMannequinRig.g.position.set(ITEM_STUDIO_ORIGIN.x - 1.95, ITEM_STUDIO_ORIGIN.y + 0.02, ITEM_STUDIO_ORIGIN.z);
+    studioMannequinRig.g.rotation.set(0, 0.25, 0);
+    setCharacterBodyMeshesVisible(studioMannequinRig, true);
+  }
+
   if (activeStudioWorldEntry) {
     const wi = activeStudioWorldEntry;
     activeStudioWorldEntry = null;
@@ -282,10 +308,16 @@ export function restoreItemStudioSubjectsToWorld() {
   if (activeStudioCharEnt) {
     const ent = activeStudioCharEnt;
     activeStudioCharEnt = null;
-    if (ent.rig) {
+    if (ent.rig && ent.rig.g) {
+      ent.rig.g.position.set(ent.x, ent.y, ent.z);
+      ent.rig.g.rotation.set(0, ent.yaw || 0, 0);
       setCharacterBodyMeshesVisible(ent.rig, true);
       if (ent.tag) ent.tag.visible = true;
       attachRigToEntity(ent);
+      if (ent.preset && ent.preset.customCosmetics) {
+        ent.rig.syncCustomCosmetics(ent.preset.customCosmetics);
+      }
+      ent.rig.g.updateMatrixWorld(true);
     }
   }
 }
@@ -985,6 +1017,7 @@ export function selectEditorObject(ref, keepUndoStack = false) {
     return;
   }
   if (ref.kind === 'block') {
+    tControls.setSpace('world');
     ref.box.m.updateMatrixWorld(true);
     tControls.attach(ref.box.m);
     selBoxHelper.setFromObject(ref.box.m);
@@ -997,6 +1030,7 @@ export function selectEditorObject(ref, keepUndoStack = false) {
     if (ent.rig.syncGripSockets) ent.rig.syncGripSockets(ent.preset);
     if (ent.rig.setGripMarkersVisible) ent.rig.setGripMarkersVisible(true);
 
+    tControls.setSpace(ref.editMode === 'root' ? 'world' : 'local');
     if (ref.editMode === 'hand_grip' && ent.rig.handGripMarker) {
       ent.rig.armR.rotation.set(-Math.PI / 2, 0, 0);
       ent.rig.g.updateMatrixWorld(true);
@@ -1024,26 +1058,8 @@ export function selectEditorObject(ref, keepUndoStack = false) {
   } else if (ref.kind === 'cosmetic') {
     const { ent, item } = ref;
     normalizeCosmeticItem(item);
-    const group = ref.group || ent.rig.customCosMeshes.find(g => g.userData.cosmeticItem === item);
-    if (group) group.visible = true;
-    const partMeshes = (group && group.userData.partMeshes) || [];
-    const partIdx = Math.min(Math.max(0, ref.partIdx ?? 0), Math.max(0, item.parts.length - 1));
-    const part = item.parts[partIdx];
-    const mesh = ref.mesh || partMeshes[partIdx] || group;
-
-    ref.group = group;
-    ref.partIdx = partIdx;
-    ref.part = part;
-    ref.mesh = mesh;
-
+    tControls.setSpace('local');
     openItemStudio3D(ref);
-
-    if (mesh) {
-      mesh.updateMatrixWorld(true);
-      tControls.attach(mesh);
-      selBoxHelper.setFromObject(mesh);
-      selBoxHelper.visible = true;
-    }
     $('inspTypeBadge').textContent = item.parentSlot === 'pet' ? '🐾 3D Питомец' : '🎩 3D Аксессуар';
   } else if (ref.kind === 'world_item') {
     const { worldEntry } = ref;
@@ -1091,6 +1107,7 @@ export function selectEditorObject(ref, keepUndoStack = false) {
 
     if (ref.mesh) {
       ref.mesh.updateMatrixWorld(true);
+      tControls.setSpace(ref.editMode === 'root' ? 'world' : 'local');
       tControls.attach(ref.mesh);
       if (ref.editMode === 'grip' || ref.editMode === 'muzzle') {
         selBoxHelper.visible = false;

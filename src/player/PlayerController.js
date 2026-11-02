@@ -309,10 +309,15 @@ export function initInputControls() {
         S.mmbDown = true;
         return;
       }
-      if (e.button === 0 && !tControls.dragging) {
+      if (e.button === 0) {
+        if (tControls.dragging || (tControls.object && tControls.axis)) return;
         mouseNDC.x = (e.clientX / S.SW) * 2 - 1;
         mouseNDC.y = -(e.clientY / S.SH) * 2 + 1;
         raycaster.setFromCamera(mouseNDC, camera);
+
+        if (tControls.object && raycaster.intersectObjects([tControls], true).length > 0) {
+          return;
+        }
 
         const pickables = [];
         for (const b of S.allBlocks) pickables.push(b.m);

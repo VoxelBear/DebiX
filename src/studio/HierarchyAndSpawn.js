@@ -171,20 +171,23 @@ export function initHierarchyAndSpawn() {
         return;
       }
 
-      // Спавн предметов, оружия и переносимых контейнеров (открывает 3D STUDIO!)
+      // Спавн предметов, оружия и переносимых контейнеров прямо в мир на карту
       if (isItemSpawn) {
         const presetKey = st.replace('item_', '');
         const itemData = createStarterItemTemplate(presetKey);
         const worldEntry = spawnWorldItem(itemData, sp.x, sp.y + 0.5, sp.z);
+        // Выбираем созданный предмет в режиме размещения на карте (inWorldPlacement: true),
+        // чтобы игрок мог сразу подвинуть его стрелками Гизмо, не улетая в 3D STUDIO
         selectEditorObject({
           kind: 'world_item',
           worldEntry,
           item: worldEntry.item,
-          editMode: 'part',
-          partIdx: 0
+          editMode: 'root',
+          partIdx: 0,
+          inWorldPlacement: true
         });
         sfx.coil();
-        showBanner(`${itemData.icon} Открыта 3D STUDIO для «${itemData.name}»! Настрой внешний вид, свечение, частицы и свойства справа.`, '#00e676');
+        showBanner(`${itemData.icon} Создан «${itemData.name}»! Двигай стрелками Гизмо или нажми «🛠️ Открыть в 3D STUDIO» в инспекторе.`, '#00e676');
         return;
       }
 

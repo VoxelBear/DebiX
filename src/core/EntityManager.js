@@ -1,5 +1,5 @@
 // src/core/EntityManager.js
-import { S, $, rnd, showBanner } from './State.js';
+import { S, $, rnd, showBanner, ITEM_STUDIO_ORIGIN } from './State.js';
 import { scene } from './SceneManager.js';
 import { sfx } from './AudioEngine.js';
 import {
@@ -86,8 +86,13 @@ export function rebuildWorldItemVisual(
     showMarkers,
     applyGripOffset: false
   });
-  group.position.set(worldEntry.x, worldEntry.y, worldEntry.z);
-  group.rotation.y = worldEntry.rotY || 0;
+  if (S.itemStudioOpen && S.selectedRef?.worldEntry === worldEntry) {
+    group.position.set(ITEM_STUDIO_ORIGIN.x, ITEM_STUDIO_ORIGIN.y + 1.25, ITEM_STUDIO_ORIGIN.z);
+    group.rotation.set(0, 0, 0);
+  } else {
+    group.position.set(worldEntry.x, worldEntry.y, worldEntry.z);
+    group.rotation.y = worldEntry.rotY || 0;
+  }
   group.traverse(o => {
     o.userData.editorRef = { kind: 'world_item', worldEntry };
   });

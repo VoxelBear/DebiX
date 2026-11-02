@@ -340,6 +340,11 @@ export function updateParticles(dt) {
   }
   if (S.archangelEnt) emitFromEntity(S.archangelEnt);
   if (S.workbenchPreviewGroup) emitFromObjectGroup(S.workbenchPreviewGroup, dt);
+  if (S.studioMannequinRig && Array.isArray(S.studioMannequinRig.customCosMeshes)) {
+    for (const cg of S.studioMannequinRig.customCosMeshes) {
+      emitFromObjectGroup(cg, dt);
+    }
+  }
 
   // 2. Обновление 2D-спрайтов частиц
   for (let i = activeParticles.length - 1; i >= 0; i--) {

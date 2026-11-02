@@ -208,6 +208,7 @@ export function updateWorldLights(camPos) {
   }
   if (S.archangelEnt) collectEntityRealLights(S.archangelEnt);
   if (S.workbenchPreviewGroup) collectGroupRealLights(S.workbenchPreviewGroup);
+  if (S.studioMannequinRig) collectEntityRealLights(S.studioMannequinRig);
 
   if (pointCandidates.length > MAX_ACTIVE_POINT_LIGHTS) {
     pointCandidates.sort((a, b) => a.distSq - b.distSq);

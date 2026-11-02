@@ -46,6 +46,8 @@ export const SWATCH_COLORS = [
   '#9b59b6','#ff9ff3','#e67e22','#f2f6ff','#ffd24c','#2c3e50'
 ];
 
+export const ITEM_STUDIO_ORIGIN = new THREE.Vector3(0, 650, 0);
+
 // Единое реактивное состояние движка, игры и DebiX Studio 3D
 export const S = {
   state: 'menu', // 'menu' | 'play' | 'edit'
