@@ -32,6 +32,7 @@ import {
   initStudioController,
   toggleStudioMode,
   setGizmoMode,
+  toggleGizmoSpace,
   focusOnSelected,
   deleteSelected,
   duplicateSelected,
@@ -163,6 +164,7 @@ export function initInputControls() {
         if (e.code === 'KeyW') setGizmoMode('translate');
         if (e.code === 'KeyE') setGizmoMode('rotate');
         if (e.code === 'KeyR') setGizmoMode('scale');
+        if (e.code === 'KeyX') toggleGizmoSpace();
         if (e.code === 'KeyF') focusOnSelected();
         if (e.code === 'Delete' || e.code === 'Backspace') deleteSelected();
         if ((e.ctrlKey || e.metaKey) && e.code === 'KeyD') {
@@ -310,13 +312,16 @@ export function initInputControls() {
         return;
       }
       if (e.button === 0) {
-        if (tControls.dragging || (tControls.object && tControls.axis)) return;
+        if (tControls.dragging) return;
         mouseNDC.x = (e.clientX / S.SW) * 2 - 1;
         mouseNDC.y = -(e.clientY / S.SH) * 2 + 1;
         raycaster.setFromCamera(mouseNDC, camera);
 
-        if (tControls.object && raycaster.intersectObjects([tControls], true).length > 0) {
-          return;
+        if (tControls.object) {
+          if (tControls.axis) return;
+          if (tControls._gizmo && raycaster.intersectObject(tControls._gizmo, true).length > 0) {
+            return;
+          }
         }
 
         const pickables = [];

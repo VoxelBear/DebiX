@@ -307,6 +307,59 @@ function lerpAngle(a, b, t) {
 }
 
 // Подсчитывает количество активных (включённых) предметов в указанном слоте у сущности
+export function syncBuiltinCosmetics(rig, preset = {}, isAngel = false) {
+  if (!rig) return;
+  if (rig.hatGroup) {
+    rig.hatGroup.visible = !!preset.hat;
+    if (preset.hat && rig.hatMat) {
+      if (typeof preset.hat === 'number') rig.hatMat.color.setHex(preset.hat);
+      else rig.hatMat.color.set(preset.hat);
+    }
+  }
+  if (rig.hair) {
+    rig.hair.visible = !!preset.hair;
+    if (preset.hair && rig.hairMat) {
+      if (typeof preset.hair === 'number') rig.hairMat.color.setHex(preset.hair);
+      else rig.hairMat.color.set(preset.hair);
+    }
+  }
+  if (rig.crown) rig.crown.visible = !!preset.crown;
+  if (rig.glasses) rig.glasses.visible = !!preset.glasses;
+  if (rig.backpack) rig.backpack.visible = !!preset.backpack;
+  if (rig.sword) rig.sword.visible = !!preset.sword;
+  if (rig.halo) rig.halo.visible = isAngel || !!preset.halo;
+  if (rig.coil) rig.coil.visible = !!preset.coil;
+  if (rig.wings) rig.wings.visible = isAngel || !!preset.wings;
+}
+
+export function syncRigAppearanceFromPreset(rig, preset = {}, isAngel = false) {
+  if (!rig || !preset) return;
+  const cHead = isAngel ? 0xfff3d6 : (preset.head ?? 0xf5cd30);
+  const cTorso = isAngel ? 0xffffff : (preset.torso ?? 0x00a2ff);
+  const cArmL = isAngel ? 0xfff3d6 : (preset.armL ?? cHead);
+  const cArmR = isAngel ? 0xfff3d6 : (preset.armR ?? cHead);
+  const cLegL = isAngel ? 0xf4d068 : (preset.legL ?? (preset.legs ?? 0x2ecc71));
+  const cLegR = isAngel ? 0xf4d068 : (preset.legR ?? (preset.legs ?? 0x2ecc71));
+
+  if (rig.mHead) { rig.mHead.color.set(cHead); rig.mHead.userData.baseColor = rig.mHead.color.getHex(); }
+  if (rig.mTorso) { rig.mTorso.color.set(cTorso); rig.mTorso.userData.baseColor = rig.mTorso.color.getHex(); }
+  if (rig.mArmL) { rig.mArmL.color.set(cArmL); rig.mArmL.userData.baseColor = rig.mArmL.color.getHex(); }
+  if (rig.mArmR) { rig.mArmR.color.set(cArmR); rig.mArmR.userData.baseColor = rig.mArmR.color.getHex(); }
+  if (rig.mLegL) { rig.mLegL.color.set(cLegL); rig.mLegL.userData.baseColor = rig.mLegL.color.getHex(); }
+  if (rig.mLegR) { rig.mLegR.color.set(cLegR); rig.mLegR.userData.baseColor = rig.mLegR.color.getHex(); }
+
+  syncBuiltinCosmetics(rig, preset, isAngel);
+
+  const limbTex = preset.limbTex || {};
+  if (rig.head) setMeshFrontSprite(rig.head, preset.faceDataURL || limbTex.head || defaultFaceURL);
+  if (rig.torso) setMeshFrontSprite(rig.torso, limbTex.torso || null);
+  if (rig.armL) setMeshFrontSprite(rig.armL, limbTex.armL || null);
+  if (rig.armR) setMeshFrontSprite(rig.armR, limbTex.armR || null);
+  if (rig.legL) setMeshFrontSprite(rig.legL, limbTex.legL || null);
+  if (rig.legR) setMeshFrontSprite(rig.legR, limbTex.legR || null);
+}
+
+// Подсчитывает количество активных (включённых) предметов в указанном слоте у сущности
 export function countActiveItemsInSlot(ent, slotName, ignoreCustomItem = null, ignoreBuiltinKey = null) {
   if (!ent) return 0;
   let count = 0;
@@ -1389,7 +1442,8 @@ export function createRobloxRig(preset, scale = 1, isAngel = false) {
     wings,
     customCosMeshes,
     petEntries,
-    syncCustomCosmetics
+    syncCustomCosmetics,
+    syncBuiltinCosmetics: (p = preset) => syncBuiltinCosmetics({ hatGroup, hatMat, hair, hairMat, crown, glasses, backpack, sword, halo, coil, wings }, p, isAngel)
   };
 }
 

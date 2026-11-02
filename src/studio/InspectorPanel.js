@@ -1245,22 +1245,27 @@ export function renderInspectorUI() {
           item,
           group: newGroup,
           partIdx: clamp(newPartIdx, 0, item.parts.length - 1),
+          inWorldPlacement: Boolean(selectedRef.inWorldPlacement),
           libIdx
         },
         true
       );
-      syncItemStudioPreview();
+      if (S.itemStudioOpen) {
+        syncItemStudioPreview();
+      }
     };
 
     if ($('btnCosOpenStudio3D')) {
       $('btnCosOpenStudio3D').onclick = () => {
+        selectedRef.inWorldPlacement = false;
+        selectEditorObject(selectedRef, true);
         openItemStudio3D(selectedRef);
         renderInspectorUI();
       };
     }
     if ($('btnCosExitStudio3D')) {
       $('btnCosExitStudio3D').onclick = () => {
-        closeItemStudio3D(false);
+        closeItemStudio3D(true);
         renderInspectorUI();
       };
     }
@@ -2279,10 +2284,11 @@ export function renderInspectorUI() {
       const subTxt = isPet ? (c.petBehavior === 'follow' ? 'Следует' : 'Орбита') : slotNameRu;
       return `
         <div style="display:flex;align-items:center;gap:4px">
-          <div class="cos-chip ${isOn ? 'on' : ''}" data-ctoggle="${idx}" style="flex:1;justify-content:space-between">
+          <div class="cos-chip ${isOn ? 'on' : ''}" data-ctoggle="${idx}" style="flex:1;justify-content:space-between;cursor:pointer" title="Включить / выключить">
             <span style="overflow:hidden;text-overflow:ellipsis">${isOn ? '🟢' : '🔴'} ${ico} ${c.name}</span>
             <small style="color:#8fa0bd;font-size:9.5px;flex-shrink:0">${subTxt}</small>
           </div>
+          <button class="ed-btn icon-only" data-cedit="${idx}" type="button" title="Редактировать аксессуар в 3D">🛠️</button>
           <button class="ed-btn danger icon-only" data-cdel="${idx}" type="button" title="Удалить предмет">🗑️</button>
         </div>
       `;
@@ -2337,6 +2343,10 @@ export function renderInspectorUI() {
 
     cont.innerHTML = `
       <div class="prop-group">
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <button class="ed-btn ${S.itemStudioOpen ? 'active' : ''}" id="btnCharOpenStudio3D" type="button" style="flex:1;justify-content:center" title="Открыть персонажа в изолированной 3D Студии">🛠️ 3D Студия</button>
+          <button class="ed-btn ${!S.itemStudioOpen ? 'active' : ''}" id="btnCharPlaceInWorld" type="button" style="flex:1;justify-content:center" title="Редактировать персонажа на карте мира">📍 На карте</button>
+        </div>
         <h5>👤 Персонаж и Здоровье (HP)</h5>
         <div class="prop-row"><label>Никнейм</label><input class="ed-inp" id="inpCharName" value="${ent.name}"></div>
         <div class="prop-row"><label>Чат-баббл</label><input class="ed-inp" id="inpCharChat" value="${ent.chat || ''}"></div>
@@ -2652,6 +2662,19 @@ export function renderInspectorUI() {
     bindLimbCol('cLimbLegL', 'mLegL', 'legL');
     bindLimbCol('cLimbLegR', 'mLegR', 'legR');
 
+    if ($('btnCharOpenStudio3D')) {
+      $('btnCharOpenStudio3D').onclick = () => {
+        selectEditorObject({ kind: 'char', ent, inStudio: true }, true);
+      };
+    }
+    if ($('btnCharPlaceInWorld')) {
+      $('btnCharPlaceInWorld').onclick = () => {
+        closeItemStudio3D(false);
+        selectEditorObject({ kind: 'char', ent, inStudio: false }, true);
+        focusOnSelected();
+      };
+    }
+
     $('btnCharFacePaint').onclick = () => openPaintModal('face');
     cont.querySelectorAll('[data-plimb]').forEach(btn => {
       btn.onclick = () => openPaintModal(btn.dataset.plimb);
@@ -2722,6 +2745,26 @@ export function renderInspectorUI() {
         attachRigToEntity(ent);
         renderInspectorUI();
         sfx.jump();
+      };
+    });
+
+    cont.querySelectorAll('[data-cedit]').forEach(btn => {
+      btn.onclick = e => {
+        e.stopPropagation();
+        const idx = +btn.dataset.cedit;
+        const item = ent.preset.customCosmetics[idx];
+        if (!item) return;
+        normalizeCosmeticItem(item);
+        const group = ent.rig?.customCosMeshes?.find(g => g.userData?.cosmeticItem === item);
+        selectEditorObject({
+          kind: 'cosmetic',
+          ent,
+          item,
+          group,
+          partIdx: 0,
+          inWorldPlacement: false
+        });
+        sfx.coil();
       };
     });
 

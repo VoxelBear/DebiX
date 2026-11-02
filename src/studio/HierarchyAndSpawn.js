@@ -100,9 +100,11 @@ export function refreshHierarchyUI() {
             kind: 'world_item',
             worldEntry,
             item: worldEntry.item,
-            editMode: 'part',
-            partIdx: 0
+            editMode: S.itemStudioOpen ? 'part' : 'root',
+            partIdx: 0,
+            inWorldPlacement: !S.itemStudioOpen
           });
+          focusOnSelected();
         }
       } else {
         const ent = hid === 'player'
