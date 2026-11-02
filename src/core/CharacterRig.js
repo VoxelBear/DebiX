@@ -1149,6 +1149,19 @@ export function createRobloxRig(preset, scale = 1, isAngel = false) {
   const mLegL = makePartMat(cLegL);
   const mLegR = makePartMat(cLegR);
 
+  // Объёмный невидимый меш для мгновенного и надёжного клика по персонажу на любой дистанции
+  const pickBoxGeo = new THREE.BoxGeometry(1.8, 2.45, 0.55);
+  const pickBoxMat = new THREE.MeshBasicMaterial({
+    transparent: true,
+    opacity: 0,
+    depthWrite: false
+  });
+  const charPickMesh = new THREE.Mesh(pickBoxGeo, pickBoxMat);
+  charPickMesh.position.set(0, 1.225, 0);
+  charPickMesh.userData.isCharPickMesh = true;
+  charPickMesh.userData.noCollider = true;
+  g.add(charPickMesh);
+
   // 1. Ноги: пивот в тазобедренном суставе (y = 0.95), геометрия смещена вниз на -0.475
   // В локальном пространстве рига лицо смотрит в +Z, поэтому анатомическая ПРАВАЯ сторона персонажа — это -X, а ЛЕВАЯ — +X.
   const legGeo = new THREE.BoxGeometry(0.46, 0.95, 0.46);

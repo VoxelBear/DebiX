@@ -298,6 +298,144 @@ export function initInputControls() {
     return true;
   };
 
+  let editPointerDownPos = { x: 0, y: 0 };
+  let editPointerDownBtn = -1;
+  let isGizmoDragging = false;
+
+  tControls.addEventListener('dragging-changed', e => {
+    isGizmoDragging = !!e.value;
+  });
+
+  function handleStudioSelectionClick(e) {
+    const rect = cv.getBoundingClientRect();
+    mouseNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    mouseNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouseNDC, camera);
+
+    const pickables = [];
+    for (const b of S.allBlocks) pickables.push(b.m);
+    for (const wi of S.worldItems) pickables.push(wi.group);
+    if (S.player) {
+      if (!S.queueLine.includes(S.player)) pickables.push(S.player.rig.g);
+      if (S.player.tag) pickables.push(S.player.tag);
+    }
+    for (const ent of S.queueLine) {
+      pickables.push(ent.rig.g);
+      if (ent.tag) pickables.push(ent.tag);
+    }
+    for (const n of S.customNPCs) {
+      pickables.push(n.rig.g);
+      if (n.tag) pickables.push(n.tag);
+    }
+    if (S.archangelEnt) {
+      pickables.push(S.archangelEnt.rig.g);
+      if (S.archangelEnt.tag) pickables.push(S.archangelEnt.tag);
+    }
+    if (S.studioMannequinRig && S.itemStudioOpen) {
+      pickables.push(S.studioMannequinRig.g);
+    }
+
+    const rawHits = raycaster.intersectObjects(pickables, true);
+    const hits = rawHits.filter(h => isObjVisibleInHierarchy(h.object));
+
+    if (hits.length > 0) {
+      // Приоритет явно видимым X-Ray маркерам хватов
+      const markerHit = hits.find(
+        h =>
+          (h.object.userData?.isGripMarker ||
+           h.object.userData?.isMuzzleMarker ||
+           h.object.userData?.isCharHandGripMarker ||
+           h.object.userData?.isCharCarryGripMarker) &&
+          h.object.visible !== false &&
+          h.distance <= hits[0].distance + 0.35
+      );
+
+      // Приоритет деталям аксессуаров, если клик попал по аксессуару в радиусе силуэта
+      const cosmeticHit = hits.find(h => {
+        let cur = h.object;
+        while (cur) {
+          if (cur.userData && cur.userData.cosmeticItem) return true;
+          cur = cur.parent;
+        }
+        return false;
+      });
+
+      let obj;
+      if (markerHit) {
+        obj = markerHit.object;
+      } else if (cosmeticHit && cosmeticHit.distance <= hits[0].distance + 0.6) {
+        obj = cosmeticHit.object;
+      } else {
+        obj = hits[0].object;
+      }
+
+      if (obj.userData?.isCharHandGripMarker || obj.userData?.isCharCarryGripMarker) {
+        let p = obj;
+        while (p && !(p.userData && p.userData.editorRef && p.userData.editorRef.kind === 'char')) {
+          p = p.parent;
+        }
+        if (p && p.userData.editorRef) {
+          selectEditorObject({
+            kind: 'char',
+            ent: p.userData.editorRef.ent,
+            editMode: obj.userData.isCharHandGripMarker ? 'hand_grip' : 'carry_grip'
+          });
+          return;
+        }
+      }
+
+      let cosObj = obj;
+      while (cosObj && !(cosObj.userData && cosObj.userData.cosmeticItem)) {
+        cosObj = cosObj.parent;
+      }
+      if (cosObj && cosObj.userData && cosObj.userData.cosmeticItem) {
+        let p = cosObj;
+        while (p && !(p.userData && p.userData.editorRef)) p = p.parent;
+        if (p && p.userData.editorRef && p.userData.editorRef.kind === 'char') {
+          selectEditorObject({
+            kind: 'cosmetic',
+            ent: p.userData.editorRef.ent,
+            item: cosObj.userData.cosmeticItem,
+            group: cosObj.userData.cosmeticGroup || cosObj,
+            partIdx: cosObj.userData.cosmeticPartIdx ?? 0,
+            part: cosObj.userData.cosmeticPart,
+            mesh: cosObj,
+            inWorldPlacement: true
+          });
+          return;
+        }
+      }
+
+      let hitMesh = obj.userData?.markerGroup || obj;
+      while (obj && !obj.userData.editorRef) obj = obj.parent;
+      if (obj && obj.userData.editorRef) {
+        if (obj.userData.editorRef.kind === 'world_item') {
+          const worldEntry = obj.userData.editorRef.worldEntry;
+          const partIdx = hitMesh.userData?.itemPartIdx ?? 0;
+          const isProjPart = !!hitMesh.userData?.isProjectilePart;
+          const editMode = hitMesh.userData?.isGripMarker
+            ? 'grip'
+            : (hitMesh.userData?.isMuzzleMarker ? 'muzzle' : (isProjPart ? 'proj_part' : 'part'));
+          selectEditorObject({
+            kind: 'world_item',
+            worldEntry,
+            item: worldEntry.item,
+            partIdx,
+            editMode,
+            mesh: hitMesh,
+            inWorldPlacement: true
+          });
+          return;
+        }
+        selectEditorObject(obj.userData.editorRef);
+        return;
+      }
+    }
+    if (!S.itemStudioOpen) {
+      selectEditorObject(null);
+    }
+  }
+
   document.addEventListener('pointerdown', e => {
     initAudio();
     if (S.state === 'edit') {
@@ -312,103 +450,9 @@ export function initInputControls() {
         return;
       }
       if (e.button === 0) {
-        if (tControls.dragging) return;
-        mouseNDC.x = (e.clientX / S.SW) * 2 - 1;
-        mouseNDC.y = -(e.clientY / S.SH) * 2 + 1;
-        raycaster.setFromCamera(mouseNDC, camera);
-
-        if (tControls.object) {
-          if (tControls.axis) return;
-          if (tControls._gizmo && raycaster.intersectObject(tControls._gizmo, true).length > 0) {
-            return;
-          }
-        }
-
-        const pickables = [];
-        for (const b of S.allBlocks) pickables.push(b.m);
-        for (const wi of S.worldItems) pickables.push(wi.group);
-        if (S.player && !S.queueLine.includes(S.player)) pickables.push(S.player.rig.g);
-        for (const ent of S.queueLine) pickables.push(ent.rig.g);
-        for (const n of S.customNPCs) pickables.push(n.rig.g);
-        if (S.archangelEnt) pickables.push(S.archangelEnt.rig.g);
-
-        const rawHits = raycaster.intersectObjects(pickables, true);
-        const hits = rawHits.filter(h => isObjVisibleInHierarchy(h.object));
-
-        if (hits.length > 0) {
-          // Приоритет сквозным X-Ray маркерам (даже если они находятся внутри корпуса оружия или руки персонажа)
-          const markerHit = hits.find(
-            h =>
-              h.object.userData?.isGripMarker ||
-              h.object.userData?.isMuzzleMarker ||
-              h.object.userData?.isCharHandGripMarker ||
-              h.object.userData?.isCharCarryGripMarker
-          );
-          let obj = markerHit ? markerHit.object : hits[0].object;
-
-          if (obj.userData?.isCharHandGripMarker || obj.userData?.isCharCarryGripMarker) {
-            let p = obj;
-            while (p && !(p.userData && p.userData.editorRef && p.userData.editorRef.kind === 'char')) {
-              p = p.parent;
-            }
-            if (p && p.userData.editorRef) {
-              selectEditorObject({
-                kind: 'char',
-                ent: p.userData.editorRef.ent,
-                editMode: obj.userData.isCharHandGripMarker ? 'hand_grip' : 'carry_grip'
-              });
-              return;
-            }
-          }
-
-          let cosObj = obj;
-          while (cosObj && !(cosObj.userData && cosObj.userData.cosmeticItem)) {
-            cosObj = cosObj.parent;
-          }
-          if (cosObj && cosObj.userData && cosObj.userData.cosmeticItem) {
-            let p = cosObj;
-            while (p && !(p.userData && p.userData.editorRef)) p = p.parent;
-            if (p && p.userData.editorRef && p.userData.editorRef.kind === 'char') {
-              selectEditorObject({
-                kind: 'cosmetic',
-                ent: p.userData.editorRef.ent,
-                item: cosObj.userData.cosmeticItem,
-                group: cosObj.userData.cosmeticGroup || cosObj,
-                partIdx: cosObj.userData.cosmeticPartIdx ?? 0,
-                part: cosObj.userData.cosmeticPart,
-                mesh: cosObj
-              });
-              return;
-            }
-          }
-
-          let hitMesh = obj.userData?.markerGroup || obj;
-          while (obj && !obj.userData.editorRef) obj = obj.parent;
-          if (obj && obj.userData.editorRef) {
-            if (obj.userData.editorRef.kind === 'world_item') {
-              const worldEntry = obj.userData.editorRef.worldEntry;
-              const partIdx = hitMesh.userData?.itemPartIdx ?? 0;
-              const isProjPart = !!hitMesh.userData?.isProjectilePart;
-              const editMode = hitMesh.userData?.isGripMarker
-                ? 'grip'
-                : (hitMesh.userData?.isMuzzleMarker ? 'muzzle' : (isProjPart ? 'proj_part' : 'part'));
-              selectEditorObject({
-                kind: 'world_item',
-                worldEntry,
-                item: worldEntry.item,
-                partIdx,
-                editMode,
-                mesh: hitMesh
-              });
-              return;
-            }
-            selectEditorObject(obj.userData.editorRef);
-            return;
-          }
-        }
-        if (!S.itemStudioOpen) {
-          selectEditorObject(null);
-        }
+        editPointerDownPos = { x: e.clientX, y: e.clientY };
+        editPointerDownBtn = 0;
+        return;
       }
       return;
     }
@@ -512,6 +556,25 @@ export function initInputControls() {
   });
 
   const endPtr = e => {
+    if (S.state === 'edit') {
+      if (e.button === 2 || !(e.buttons & 2)) S.rmbDown = false;
+      if (e.button === 1 || !(e.buttons & 4)) S.mmbDown = false;
+
+      if (e.button === 0) {
+        const wasDown = editPointerDownBtn === 0;
+        editPointerDownBtn = -1;
+
+        if (wasDown && (e.target === cv || e.target === document.body) && !isGizmoDragging && !tControls.dragging) {
+          const moveDist = Math.hypot(e.clientX - editPointerDownPos.x, e.clientY - editPointerDownPos.y);
+          if (moveDist <= 6) {
+            handleStudioSelectionClick(e);
+          }
+        }
+        isGizmoDragging = false;
+        return;
+      }
+    }
+
     if (e.button === 0 || !(e.buttons & 1)) {
       setPlayLMBState(false);
     }

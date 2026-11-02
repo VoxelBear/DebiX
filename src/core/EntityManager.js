@@ -17,6 +17,9 @@ export function attachRigToEntity(ent) {
       o.userData.editorRef = { kind: 'char', ent };
     }
   });
+  if (ent.tag) {
+    ent.tag.userData.editorRef = { kind: 'char', ent };
+  }
 }
 
 /* ---------- УПРАВЛЕНИЕ ПРЕДМЕТАМИ В МИРЕ И В РУКАХ ИГРОКА / NPC ---------- */
