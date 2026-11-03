@@ -1245,7 +1245,7 @@ export function renderInspectorUI() {
           item,
           group: newGroup,
           partIdx: clamp(newPartIdx, 0, item.parts.length - 1),
-          inWorldPlacement: Boolean(selectedRef.inWorldPlacement),
+          inWorldPlacement: Boolean(selectedRef.inWorldPlacement) && !S.itemStudioOpen,
           libIdx
         },
         true

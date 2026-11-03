@@ -196,6 +196,9 @@ export function syncItemStudioPreview() {
 
     // Показываем манекен рядом с предметом с живым превью хвата в руке / 2 руках
     if (studioMannequinRig) {
+      studioMannequinRig.g.position.set(-1.95, 0.02, 0);
+      studioMannequinRig.g.rotation.set(0, 0.25, 0);
+      studioMannequinRig.g.scale.setScalar(1);
       studioMannequinRig.g.visible = showMannequin;
       if (showMannequin) {
         if (S.player && S.player.preset) {
@@ -233,7 +236,8 @@ export function syncItemStudioPreview() {
 
     // Для примерки и редактирования косметики синхронизируем студийный манекен с персонажем
     if (studioMannequinRig) {
-      studioMannequinRig.g.position.set(ITEM_STUDIO_ORIGIN.x, ITEM_STUDIO_ORIGIN.y + 0.02, ITEM_STUDIO_ORIGIN.z);
+      // Манекен — дочерний объект itemStudioStageGroup, поэтому позиция ЛОКАЛЬНАЯ (центр подиума)
+      studioMannequinRig.g.position.set(0, 0.02, 0);
       studioMannequinRig.g.rotation.set(0, 0, 0);
       studioMannequinRig.g.visible = true;
 
@@ -287,7 +291,7 @@ export function syncItemStudioPreview() {
     }
 
     if (studioMannequinRig) {
-      studioMannequinRig.g.position.set(ITEM_STUDIO_ORIGIN.x, ITEM_STUDIO_ORIGIN.y + 0.02, ITEM_STUDIO_ORIGIN.z);
+      studioMannequinRig.g.position.set(0, 0.02, 0);
       studioMannequinRig.g.rotation.set(0, 0, 0);
       studioMannequinRig.g.visible = true;
 
@@ -366,7 +370,7 @@ export function restoreItemStudioSubjectsToWorld() {
 
   if (studioMannequinRig) {
     studioMannequinRig.syncCustomCosmetics([]);
-    studioMannequinRig.g.position.set(ITEM_STUDIO_ORIGIN.x - 1.95, ITEM_STUDIO_ORIGIN.y + 0.02, ITEM_STUDIO_ORIGIN.z);
+    studioMannequinRig.g.position.set(-1.95, 0.02, 0);
     studioMannequinRig.g.rotation.set(0, 0.25, 0);
     setMannequinBodyVisible(studioMannequinRig, true);
   }
