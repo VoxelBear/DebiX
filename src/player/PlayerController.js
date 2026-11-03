@@ -4,7 +4,7 @@ import { cv, renderer, scene, camera, skyDome } from '../core/SceneManager.js';
 import { initAudio } from '../core/AudioEngine.js';
 import { updateParticles } from '../core/ParticleSystem.js';
 import { updateWorldLights, resetAllLogicRuntime } from '../core/WorldRegistry.js';
-import { initSerializerEvents, loadSavedStateOnBoot, switchGameTemplate, startPlaySession } from '../core/Serializer.js';
+import { initSerializerEvents, loadSavedStateOnBoot, switchGameTemplate } from '../core/Serializer.js';
 import {
   selectSlot,
   updateShopUI,
@@ -669,7 +669,6 @@ export function bootstrapGame(defaultTemplateId = 'heaven_queue') {
           setTimeout(() => {
             if (screen) screen.hidden = true;
           }, 450);
-          startPlaySession();
         }, 220);
       }, 220);
     }, 220);

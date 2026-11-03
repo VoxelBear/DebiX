@@ -669,9 +669,7 @@ export function renderLauncherModal() {
 }
 
 export function loadSavedStateOnBoot() {
-  if (window.__PLAY_ONLY_BUILD__ && window.__BAKED_SCENE_STATE__) {
-    loadSceneState(window.__BAKED_SCENE_STATE__);
-  }
+  renderLauncherModal();
 }
 
 // Сборка ЧИСТОГО БИЛДА ИГРЫ (Play-Only Standalone HTML без кода src/studio/*)
