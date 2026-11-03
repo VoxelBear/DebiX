@@ -400,7 +400,7 @@ export function initInputControls() {
             partIdx: cosObj.userData.cosmeticPartIdx ?? 0,
             part: cosObj.userData.cosmeticPart,
             mesh: cosObj,
-            inWorldPlacement: true
+            inWorldPlacement: false
           });
           return;
         }

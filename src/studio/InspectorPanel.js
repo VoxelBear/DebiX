@@ -2707,8 +2707,7 @@ export function renderInspectorUI() {
       ent.rig.syncCustomCosmetics(ent.preset.customCosmetics);
       attachRigToEntity(ent);
       const group = ent.rig.customCosMeshes[ent.rig.customCosMeshes.length - 1];
-      selectEditorObject({ kind: 'cosmetic', ent, item: newItem, group, partIdx: 0, inWorldPlacement: true });
-      focusOnSelected();
+      selectEditorObject({ kind: 'cosmetic', ent, item: newItem, group, partIdx: 0, inWorldPlacement: false });
       sfx.coil();
     };
 
@@ -2722,8 +2721,7 @@ export function renderInspectorUI() {
       ent.rig.syncCustomCosmetics(ent.preset.customCosmetics);
       attachRigToEntity(ent);
       const group = ent.rig.customCosMeshes[ent.rig.customCosMeshes.length - 1];
-      selectEditorObject({ kind: 'cosmetic', ent, item: newPet, group, partIdx: 0, inWorldPlacement: true });
-      focusOnSelected();
+      selectEditorObject({ kind: 'cosmetic', ent, item: newPet, group, partIdx: 0, inWorldPlacement: false });
       sfx.coil();
     };
 
@@ -2764,9 +2762,8 @@ export function renderInspectorUI() {
           item,
           group,
           partIdx: 0,
-          inWorldPlacement: true
+          inWorldPlacement: false
         });
-        focusOnSelected();
         sfx.coil();
       };
     });
@@ -2829,9 +2826,8 @@ export function renderInspectorUI() {
           group,
           partIdx: 0,
           libIdx,
-          inWorldPlacement: true
+          inWorldPlacement: false
         });
-        focusOnSelected();
         sfx.coil();
       };
     });
