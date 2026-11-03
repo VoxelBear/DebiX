@@ -66,3 +66,50 @@ html,body{
 .play-btn:active{transform:translateY(3px);box-shadow:0 2px 0 #00663d}
 .menu-row{display:flex;gap:10px;flex-wrap:wrap}
 .menu-row .play-btn{flex:1;min-width:200px}
+
+/* Loading Splash Screen & Progress Bar */
+#loadingScreen{
+  position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(ellipse at 50% 50%,#18233c,#0a0f1d);
+  z-index:100;transition:opacity .45s cubic-bezier(.2,.8,.2,1),visibility .45s ease,transform .45s ease;
+}
+#loadingScreen.fade-out{
+  opacity:0;visibility:hidden;pointer-events:none;transform:scale(1.03);
+}
+.loader-box{
+  width:90%;max-width:440px;text-align:center;display:flex;flex-direction:column;align-items:center;
+  padding:20px;
+}
+.loader-badge{
+  display:inline-block;background:linear-gradient(90deg,#00a2ff,#00e676);color:#0a0f1d;
+  font:900 11px var(--f);padding:5px 14px;border-radius:20px;letter-spacing:.12em;
+  text-transform:uppercase;margin-bottom:14px;box-shadow:0 0 20px rgba(0,230,118,.35);
+}
+.loader-title{
+  margin:0 0 24px;font:900 clamp(26px,6vw,38px)/1 var(--f);letter-spacing:.02em;color:#fff;
+  text-shadow:0 4px 18px rgba(0,0,0,.6);
+}
+.loader-title span{color:var(--rbx-gold)}
+.loader-track{
+  width:100%;height:12px;background:rgba(255,255,255,.08);border-radius:12px;
+  overflow:hidden;position:relative;border:1px solid rgba(255,255,255,.16);
+  box-shadow:inset 0 2px 4px rgba(0,0,0,.6);margin-bottom:14px;
+}
+.loader-fill{
+  width:0%;height:100%;border-radius:12px;
+  background:linear-gradient(90deg,#00a2ff,#00e676,#ffce3a);
+  background-size:200% 100%;animation:loaderGlow 1.8s linear infinite;
+  transition:width .25s ease-out;
+  box-shadow:0 0 16px rgba(0,230,118,.6);
+}
+@keyframes loaderGlow{
+  0%{background-position:100% 0}
+  100%{background-position:-100% 0}
+}
+.loader-status{
+  font-size:13px;font-weight:700;color:#94a3b8;letter-spacing:.04em;margin-bottom:10px;
+  min-height:20px;transition:color .2s;
+}
+.loader-hint{
+  font-size:11.5px;font-weight:600;color:rgba(255,255,255,.4);letter-spacing:.02em;
+}

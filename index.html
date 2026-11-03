@@ -254,24 +254,21 @@
   </div>
 </div>
 
-<!-- ===================== START MODAL ===================== -->
-<div id="menu">
-  <div class="modal" id="modalBox">
-    <span class="badge">DEBIX STUDIO 3D & UGC PLATFORM</span>
-    <h1>ОЧЕРЕДЬ В <span>РАЙ</span><br>+ DEBIX STUDIO 3D</h1>
-    <ul class="rules">
-      <li><b>Очередь к Вратам Рая (#30 → #1):</b> обгоняй за `R$` (`E`), проходи Обби справа или толкай и бей рукой (`ЛКМ` / `F`)!</li>
-      <li><b>Оружие, Снаряды и Контейнеры:</b> мечи, бластеры с прицелом (`ПКМ`), метательные снаряды с замахом (`ЛКМ`), аптечки, факелы и двуручные ящики!</li>
-      <li><b>Полный 3D-Редактор (`F2`):</b> двери, кнопки, телепорты, 3D-конструктор оружия и снарядов до 16 примитивов с точками хвата и вылета!</li>
-    </ul>
-    <div class="ctrls">
-      <div><b>ИГРА</b>Мышь — камера · WASD — бег · <b>ЛКМ</b> — удар/огонь/бросок · <b>ПКМ</b> — прицел · <b>E</b> — подобрать / кнопка · <b>G</b> — выбросить · <b>R</b> — перезарядка</div>
-      <div><b>3D РЕДАКТОР (`F2`)</b>ЛКМ — выбрать любой блок/предмет/бота · ПКМ + WASD/QE — полёт камеры · <b>W/E/R</b> — Сдвиг/Поворот/Размер</div>
+<!-- ===================== MODAL OVERLAYS (PROJECT HUB / REBIRTH) ===================== -->
+<div id="menu" hidden>
+  <div class="modal" id="modalBox"></div>
+</div>
+
+<!-- ===================== LOADING SCREEN & PROGRESS BAR ===================== -->
+<div id="loadingScreen">
+  <div class="loader-box">
+    <div class="loader-badge">DEBIX 3D UGC PLATFORM</div>
+    <h1 class="loader-title">ОЧЕРЕДЬ В <span>РАЙ</span></h1>
+    <div class="loader-track">
+      <div class="loader-fill" id="loaderFill"></div>
     </div>
-    <div class="menu-row">
-      <button class="play-btn" id="startBtn" type="button">▶ ИГРАТЬ В ОЧЕРЕДЬ</button>
-      <button class="play-btn" id="startEditorBtn" type="button" style="background:linear-gradient(180deg,#3498db,#1f6dad);box-shadow:0 5px 0 #12436b">🛠️ ОТКРЫТЬ 3D РЕДАКТОР</button>
-    </div>
+    <div class="loader-status" id="loaderStatus">Загрузка игрового мира...</div>
+    <div class="loader-hint">💡 F2 — 3D Редактор мира в любой момент</div>
   </div>
 </div>
 

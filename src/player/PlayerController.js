@@ -4,7 +4,7 @@ import { cv, renderer, scene, camera, skyDome } from '../core/SceneManager.js';
 import { initAudio } from '../core/AudioEngine.js';
 import { updateParticles } from '../core/ParticleSystem.js';
 import { updateWorldLights, resetAllLogicRuntime } from '../core/WorldRegistry.js';
-import { initSerializerEvents, loadSavedStateOnBoot, switchGameTemplate } from '../core/Serializer.js';
+import { initSerializerEvents, loadSavedStateOnBoot, switchGameTemplate, startPlaySession } from '../core/Serializer.js';
 import {
   selectSlot,
   updateShopUI,
@@ -638,13 +638,42 @@ export function loop(now) {
 }
 
 export function bootstrapGame(defaultTemplateId = 'heaven_queue') {
+  const fill = document.getElementById('loaderFill');
+  const status = document.getElementById('loaderStatus');
+  const screen = document.getElementById('loadingScreen');
+
+  const setProgress = (pct, text) => {
+    if (fill) fill.style.width = pct + '%';
+    if (status) status.textContent = text;
+  };
+
+  setProgress(15, 'Инициализация 3D сцены...');
   switchGameTemplate(defaultTemplateId);
-  initStudioController();
-  initHierarchyAndSpawn();
-  initPaintStudio2D();
-  initSerializerEvents();
-  initInputControls();
-  loadSavedStateOnBoot();
+
+  setTimeout(() => {
+    setProgress(45, 'Загрузка компонентов 3D Студии...');
+    initStudioController();
+    initHierarchyAndSpawn();
+    initPaintStudio2D();
+
+    setTimeout(() => {
+      setProgress(75, 'Настройка физики и сохранений...');
+      initSerializerEvents();
+      initInputControls();
+      loadSavedStateOnBoot();
+
+      setTimeout(() => {
+        setProgress(100, 'Готово!');
+        setTimeout(() => {
+          if (screen) screen.classList.add('fade-out');
+          setTimeout(() => {
+            if (screen) screen.hidden = true;
+          }, 450);
+          startPlaySession();
+        }, 220);
+      }, 220);
+    }, 220);
+  }, 180);
 
   lastTime = performance.now();
   requestAnimationFrame(loop);
