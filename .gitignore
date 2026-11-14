@@ -13,3 +13,8 @@ tools/.public_key.pem
 *.exe
 DebiX-Launcher.exe
 .pkg-cache/
+# DebiX Release Signer Private Key & Staging
+.launcher_staging/
+local-version.json
+DebiX-Launcher.exe 
+node_modules/ 
