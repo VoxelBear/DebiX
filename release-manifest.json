@@ -1,13 +1,13 @@
 {
   "app": "DebiX",
-  "version": "0.0.3",
-  "commitSha": "c476e4b920b0ad3e3e04b321e824c0eb65a1585a",
-  "timestamp": 1794652653790,
-  "notes": "Пись...ка, Какашь...ка,... блять... Мама",
+  "version": "0.0.4",
+  "commitSha": "e7e0d925609cc2b7aa8b07ef94654a3438c220e3",
+  "timestamp": 1794654274869,
+  "notes": "Синхронизация контрольных сумм SHA-256",
   "files": {
     "index.html": {
-      "sha256": "f95ab73caf57a16a31463ba5875f884b57905d09bad600084d9e53c783b72366",
-      "size": 24761
+      "sha256": "46900eda40e18e6747436ecac19094c12f40e82a52270b1c486dc1110534dcf7",
+      "size": 24438
     },
     "lan-server.js": {
       "sha256": "0b13fe26078b69f83b8a65b7baa4112d814a81d877a9d4ed35eb31a9f33d20e6",
@@ -38,16 +38,16 @@
       "size": 50922
     },
     "src/core/CharacterRig.js": {
-      "sha256": "220d8d4117a8aee8c64f8ea66d6a27627afc17dbdaaba63ebad62db6f0d47f45",
-      "size": 110740
+      "sha256": "96e0ddcc956e208f72439f3dfcfc5f9a515bc468ade8eae12a1c00bbbc1e77b8",
+      "size": 108022
     },
     "src/core/EntityManager.js": {
       "sha256": "5d08d8493aff3cbfe27ea8ffe822ce7b589a66edc19b598ee4785fa93410a361",
       "size": 27046
     },
     "src/core/MultiplayerManager.js": {
-      "sha256": "2b2e2ba696cb409dd8c7e11a365a8bbfd1e4a7e5ae36b98a81d0576673979771",
-      "size": 144388
+      "sha256": "6095d8efa4e56295d44f4dc719e3e867f16dd5ce8397c97e5d663dd99c14dd0c",
+      "size": 140559
     },
     "src/core/ParticleSystem.js": {
       "sha256": "06a43ec5ba8a85585f2e8f1f2218a14f5b87493367d542916ce2cd257328453d",
@@ -74,36 +74,36 @@
       "size": 59452
     },
     "src/games/HeavenQueueGame.js": {
-      "sha256": "fa717ab1ea382d9a3942296ca336006b3d4b49971ab15ee9001ed42ab703a3ac",
-      "size": 26681
+      "sha256": "3ce43a321418b1054c4900aec451042a514fbb73d23b90e34a9c1a9045352b60",
+      "size": 25761
     },
     "src/games/SandboxGame.js": {
-      "sha256": "61af36be4d8ae3652c84a773eec78fb0584d40884b14cdb1cd18a503e2c7c0f9",
-      "size": 3233
+      "sha256": "dd52d25578dc02a45a21c8b0a56e894ea49fd87be4ff064200c1be1a04648c0b",
+      "size": 3124
     },
     "src/player/LiquidCameraFilter.js": {
       "sha256": "6387f692faa44a7d30e467ee66ff679006b67c8462b0cfffaf546ed93086b24d",
       "size": 14133
     },
     "src/player/NpcTacticalAI.js": {
-      "sha256": "732243d3d06c2a759424c1bf94d25112e347e17b49c90a409fa139450ba95842",
-      "size": 45886
+      "sha256": "d94b5bc2eddb30eb33b1ce589429798b6892f1989a5fe15feb9a81c98c8a3131",
+      "size": 44638
     },
     "src/player/PhysicsAndCombat.js": {
-      "sha256": "73b042a8d82de99d7e01544172bcdd8d6dbf0ea7250d854aaf938dafa885b3df",
-      "size": 240827
+      "sha256": "1cd553ab65ee5cf93a30b98ebc7d90b2ce797425d6977af8048773cd4d993e93",
+      "size": 234697
     },
     "src/player/PlayerController.js": {
-      "sha256": "09981dd9f31dcd02031a5af38f209403686a1a76fb2de66e7ee949a1032e42f3",
-      "size": 45926
+      "sha256": "02932ba41ee9837442c787ad061043eb487118bfae7d264db6d1142b672a342d",
+      "size": 45272
     },
     "src/studio/HierarchyAndSpawn.js": {
       "sha256": "51aae37fb13eba94f2f3b51174f3a15236946e11e7b45c5b30de18bb15445d7d",
       "size": 152003
     },
     "src/studio/InspectorPanel.js": {
-      "sha256": "0cf0bc2b9dcf605ee2e7adc991fdd12531af8693e64d156d1f16e55f8f609d98",
-      "size": 301671
+      "sha256": "6a27b01644d77d5a2b60046b8507becd3d84ff8d32bc24bd4b481d67d94d42e6",
+      "size": 299698
     },
     "src/studio/PaintStudio2D.js": {
       "sha256": "03916079e1df97598e1fd18259d173f18504fe75b141171851f11da93ee74825",
@@ -118,5 +118,5 @@
       "size": 17171
     }
   },
-  "signature": "i3JRaUyCvUmMCmJ5DBNXEBDzBCDkKjhkvPk+NK1TzRbsbGk5fPxFQDoTwWb7+HrblSlXzYA8fQ1JYawjV/klCQ=="
+  "signature": "coy0KnhZQgkg5h21CxdrrVjhj1kAxBu9V81C50WEXA4scIM28aWV0Cv7yvQou4wiY+dkpbwrSppPAYKFc2qoBA=="
 }
