@@ -1,9 +1,9 @@
 {
   "app": "DebiX",
-  "version": "0.0.2",
-  "commitSha": "7a9db7cb826e3e56daecbeb1d39117da27eca273",
-  "timestamp": 1794650104079,
-  "notes": "Проверка раз-два",
+  "version": "0.0.3",
+  "commitSha": "c476e4b920b0ad3e3e04b321e824c0eb65a1585a",
+  "timestamp": 1794652653790,
+  "notes": "Пись...ка, Какашь...ка,... блять... Мама",
   "files": {
     "index.html": {
       "sha256": "f95ab73caf57a16a31463ba5875f884b57905d09bad600084d9e53c783b72366",
@@ -14,8 +14,8 @@
       "size": 8922
     },
     "launcher.html": {
-      "sha256": "70521648d71d69361b067bedcd177085a9824a93fd65a8a8e0c31aee172a86a1",
-      "size": 17748
+      "sha256": "47f8e525ac254e03c319a9e4215be818df66788611ba23a5cbee3fa969dcf4e9",
+      "size": 18446
     },
     "package.json": {
       "sha256": "1d534c7bc57ffc540b17196de66e25588ac3496d7dc1c67926260ae7594dd407",
@@ -118,5 +118,5 @@
       "size": 17171
     }
   },
-  "signature": "aAw04vkNk9aKbphgaEYUh/8MYkvA6Ahl7l0IY5oUNd+SRxBtj+FtmmNdwpcAoCboHFArroYByKVl9U5YDXsvBA=="
+  "signature": "i3JRaUyCvUmMCmJ5DBNXEBDzBCDkKjhkvPk+NK1TzRbsbGk5fPxFQDoTwWb7+HrblSlXzYA8fQ1JYawjV/klCQ=="
 }
