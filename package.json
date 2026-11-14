@@ -1,0 +1,22 @@
+{
+  "name": "debix",
+  "version": "1.0.0",
+  "bin": "debix-launcher.js",
+  "scripts": {
+    "build-exe": "pkg . --targets node18-win-x64 --output DebiX-Launcher.exe"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "pkg": {
+    "scripts": ["lan-server.js"],
+    "assets": [
+      "launcher.html",
+      "lan-server.js",
+      "node_modules/ws/**/*"
+    ]
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  }
+}

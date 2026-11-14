@@ -6,7 +6,8 @@ import {
   drawFacePresetOnCtx,
   defaultFaceURL,
   setMeshFrontSprite,
-  drawParticlePreset16
+  drawParticlePreset16,
+  flipCanvasHorizontally
 } from '../core/TextureFactory.js';
 import { sfx } from '../core/AudioEngine.js';
 import { rebuildPhysicsArrays } from '../core/WorldRegistry.js';
@@ -21,6 +22,14 @@ let painting = false;
 let symmetryOn = false;
 let lastPX = 0;
 let lastPY = 0;
+
+// Режим сглаживания в стиле Adobe Flash
+let flashSmoothEnabled = true;
+let flashSmoothStrength = 70; // 0..100
+let flashTaperEnabled = true;
+let flashStraightenEnabled = true;
+let strokeStartSnapshot = null;
+let currentStrokePoints = [];
 
 // Изолированный стек Undo для 2D Студии (до 30 шагов рисования)
 const MAX_PAINT_UNDO = 30;
@@ -143,6 +152,77 @@ export function pickColorFromCanvas(x, y) {
   showBanner(`💧 Пипетка выбрала цвет ${hex.toUpperCase()} (Альфа: ${alphaPct}%)`, '#56f0ff');
 }
 
+export function setCanvasResolution(newRes) {
+  if (!paintCv || !paintCtx) return;
+  const currentRes = getCanvasRes();
+  if (currentRes === newRes) return;
+  if (newRes === 16) return;
+
+  pushPaintUndoSnapshot();
+  const tempCv = document.createElement('canvas');
+  tempCv.width = currentRes;
+  tempCv.height = currentRes;
+  const tempCtx = tempCv.getContext('2d');
+  tempCtx.drawImage(paintCv, 0, 0);
+
+  paintCv.width = newRes;
+  paintCv.height = newRes;
+  paintCtx.clearRect(0, 0, newRes, newRes);
+  paintCtx.imageSmoothingEnabled = true;
+  paintCtx.drawImage(tempCv, 0, 0, newRes, newRes);
+
+  if ($('btnRes128')) $('btnRes128').classList.toggle('active', newRes === 128);
+  if ($('btnRes256')) $('btnRes256').classList.toggle('active', newRes === 256);
+  if ($('paintCanvasResTxt')) {
+    $('paintCanvasResTxt').textContent = `Холст ${newRes}×${newRes} ${newRes === 256 ? '(HD Flash Режим)' : ''} (Ctrl+Z отменяет только рисунок)`;
+  }
+  showBanner(`📐 Разрешение 2D Студии переключено на ${newRes}×${newRes}!`, '#56f0ff');
+}
+
+export function smoothCanvasEdges() {
+  if (!paintCtx || !paintCv) return;
+  const res = getCanvasRes();
+  if (res === 16) {
+    showBanner('⚠️ 16×16 партиклы используют пиксель-арт без размытия', '#ffce3a');
+    return;
+  }
+  pushPaintUndoSnapshot();
+  const imgData = paintCtx.getImageData(0, 0, res, res);
+  const data = imgData.data;
+  const copy = new Uint8ClampedArray(data);
+
+  // 3x3 сглаживающий фильтр для смягчения резких ступенчатых границ
+  for (let y = 1; y < res - 1; y++) {
+    for (let x = 1; x < res - 1; x++) {
+      const idx = (y * res + x) * 4;
+      if (copy[idx + 3] === 0) continue;
+
+      let rSum = copy[idx] * 4;
+      let gSum = copy[idx + 1] * 4;
+      let bSum = copy[idx + 2] * 4;
+      let aSum = copy[idx + 3] * 4;
+      let weight = 4;
+
+      const neighbors = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+      for (const [dx, dy] of neighbors) {
+        const ni = ((y + dy) * res + (x + dx)) * 4;
+        rSum += copy[ni];
+        gSum += copy[ni + 1];
+        bSum += copy[ni + 2];
+        aSum += copy[ni + 3];
+        weight += 1;
+      }
+      data[idx] = Math.round(rSum / weight);
+      data[idx + 1] = Math.round(gSum / weight);
+      data[idx + 2] = Math.round(bSum / weight);
+      data[idx + 3] = Math.round(aSum / weight);
+    }
+  }
+  paintCtx.putImageData(imgData, 0, 0);
+  sfx.jump();
+  showBanner('🌊 2D Студия: Сглаживание краёв холста применено!', '#56f0ff');
+}
+
 export function openPaintModal(defaultTarget = 'face') {
   const sel = $('paintTargetSelect');
   if (sel && !sel.querySelector('option[value="particle"]')) {
@@ -176,14 +256,31 @@ function getActiveParticleDataForPainter() {
 export function loadTargetTextureIntoCanvas(target) {
   paintUndoStack.length = 0;
   const isParticle = target === 'particle';
-  const res = isParticle ? 16 : 128;
+  const res = isParticle ? 16 : (paintCv && paintCv.width === 256 ? 256 : 128);
   paintCv.width = res;
   paintCv.height = res;
+
   if (isParticle) {
+    paintCv.classList.add('pixel-art');
     $('paintSize').value = 1;
-  } else if (+$('paintSize').value < 3) {
-    $('paintSize').value = 6;
+    if ($('paintSizeTxt')) $('paintSizeTxt').textContent = '1px';
+    if ($('paintResGroup')) $('paintResGroup').style.display = 'none';
+  } else {
+    paintCv.classList.remove('pixel-art');
+    if (+$('paintSize').value < 3) {
+      $('paintSize').value = res === 256 ? 10 : 6;
+    }
+    if ($('paintSizeTxt')) $('paintSizeTxt').textContent = $('paintSize').value + 'px';
+    if ($('paintResGroup')) $('paintResGroup').style.display = 'flex';
   }
+
+  if ($('paintCanvasResTxt')) {
+    $('paintCanvasResTxt').textContent = isParticle
+      ? 'Холст 16×16 (Пиксель-Арт партикл)'
+      : `Холст ${res}×${res} ${res === 256 ? '(HD Flash Режим)' : ''} (Ctrl+Z отменяет только рисунок)`;
+  }
+  if ($('btnRes128')) $('btnRes128').classList.toggle('active', res === 128);
+  if ($('btnRes256')) $('btnRes256').classList.toggle('active', res === 256);
 
   paintCtx.clearRect(0, 0, res, res);
   const ent = (S.selectedRef && S.selectedRef.kind === 'char')
@@ -237,6 +334,325 @@ function getCanvasCoords(e) {
   ];
 }
 
+// =========================================================================
+// МАТЕМАТИЧЕСКИЙ ДВИЖОК СГЛАЖИВАНИЯ КРИВЫХ В СТИЛЕ ADOBE FLASH
+// =========================================================================
+
+function perpendicularDistance(p, p1, p2) {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const dSq = dx * dx + dy * dy;
+  if (dSq === 0) return Math.hypot(p.x - p1.x, p.y - p1.y);
+  const t = Math.max(0, Math.min(1, ((p.x - p1.x) * dx + (p.y - p1.y) * dy) / dSq));
+  const projX = p1.x + t * dx;
+  const projY = p1.y + t * dy;
+  return Math.hypot(p.x - projX, p.y - projY);
+}
+
+// Алгоритм Рамера-Дугласа-Пекера: отсекает дрожание и шум руки
+function simplifyDouglasPeucker(points, tolerance) {
+  if (points.length <= 2) return points;
+  let dmax = 0;
+  let index = 0;
+  const end = points.length - 1;
+  for (let i = 1; i < end; i++) {
+    const d = perpendicularDistance(points[i], points[0], points[end]);
+    if (d > dmax) {
+      index = i;
+      dmax = d;
+    }
+  }
+  if (dmax > tolerance) {
+    const rec1 = simplifyDouglasPeucker(points.slice(0, index + 1), tolerance);
+    const rec2 = simplifyDouglasPeucker(points.slice(index), tolerance);
+    return rec1.slice(0, -1).concat(rec2);
+  }
+  return [points[0], points[end]];
+}
+
+// Алгоритм Чайкина (Corner-Cutting Subdivision): превращает угловатости в гармоничные B-сплайны
+function chaikinSmooth(pts, iterations = 1) {
+  if (pts.length < 3 || iterations <= 0) return pts;
+  let current = pts;
+  for (let it = 0; it < iterations; it++) {
+    if (current.length < 3) break;
+    const next = [current[0]];
+    for (let i = 0; i < current.length - 1; i++) {
+      const p0 = current[i];
+      const p1 = current[i + 1];
+      next.push({
+        x: 0.75 * p0.x + 0.25 * p1.x,
+        y: 0.75 * p0.y + 0.25 * p1.y
+      });
+      next.push({
+        x: 0.25 * p0.x + 0.75 * p1.x,
+        y: 0.25 * p0.y + 0.75 * p1.y
+      });
+    }
+    next.push(current[current.length - 1]);
+    current = next;
+  }
+  return current;
+}
+
+// Распознавание намеренных острых углов (сохраняет форму углов вместо размытия в овал)
+function findCornerIndices(pts, minDist = 3.5) {
+  const corners = [0];
+  for (let i = 1; i < pts.length - 1; i++) {
+    let prev = null;
+    for (let j = i - 1; j >= 0; j--) {
+      if (Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y) >= minDist) {
+        prev = pts[j];
+        break;
+      }
+    }
+    let next = null;
+    for (let j = i + 1; j < pts.length; j++) {
+      if (Math.hypot(pts[j].x - pts[i].x, pts[j].y - pts[i].y) >= minDist) {
+        next = pts[j];
+        break;
+      }
+    }
+    if (prev && next) {
+      const v1x = pts[i].x - prev.x;
+      const v1y = pts[i].y - prev.y;
+      const v2x = next.x - pts[i].x;
+      const v2y = next.y - pts[i].y;
+      const l1 = Math.hypot(v1x, v1y);
+      const l2 = Math.hypot(v2x, v2y);
+      if (l1 > 0.001 && l2 > 0.001) {
+        const dot = (v1x * v2x + v1y * v2y) / (l1 * l2);
+        if (dot < 0.35) {
+          const lastC = corners[corners.length - 1];
+          if (Math.hypot(pts[i].x - pts[lastC].x, pts[i].y - pts[lastC].y) >= minDist * 1.5) {
+            corners.push(i);
+          }
+        }
+      }
+    }
+  }
+  if (corners[corners.length - 1] !== pts.length - 1) {
+    corners.push(pts.length - 1);
+  }
+  return corners;
+}
+
+// Отрисовка сглаженной кривой Безье с поддержкой Flash Taper (заострения) и симметрии
+function renderSmoothedPath(ctx, pts, brushSize, r, g, b, a, isEraser, taperOn, symmetry, res) {
+  if (pts.length < 2) return;
+
+  function drawStrokePath(points) {
+    ctx.save();
+    if (isEraser) {
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.strokeStyle = 'rgba(0,0,0,1)';
+      ctx.fillStyle = 'rgba(0,0,0,1)';
+    } else {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.strokeStyle = `rgba(${r},${g},${b},${a / 255})`;
+      ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
+    }
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (taperOn && points.length >= 4 && brushSize >= 3) {
+      // Художественное сужение концов (как у мультяшных линий во Flash)
+      const total = points.length - 1;
+      for (let i = 0; i < total; i++) {
+        const p0 = points[i];
+        const p1 = points[i + 1];
+        const t = (i + 0.5) / total;
+        let factor = 1.0;
+        if (t < 0.2) {
+          factor = 0.25 + 0.75 * Math.sin((t / 0.2) * (Math.PI / 2));
+        } else if (t > 0.8) {
+          factor = 0.25 + 0.75 * Math.sin(((1 - t) / 0.2) * (Math.PI / 2));
+        }
+        ctx.lineWidth = Math.max(1, brushSize * factor);
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+      }
+    } else {
+      // Идеально плавная кривая Безье постоянной толщины
+      ctx.lineWidth = brushSize;
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      if (points.length === 2) {
+        ctx.lineTo(points[1].x, points[1].y);
+      } else {
+        for (let i = 1; i < points.length - 1; i++) {
+          const midX = (points[i].x + points[i + 1].x) / 2;
+          const midY = (points[i].y + points[i + 1].y) / 2;
+          ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
+        }
+        ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  drawStrokePath(pts);
+  if (symmetry) {
+    const mirrored = pts.map(p => ({ x: res - p.x, y: p.y }));
+    drawStrokePath(mirrored);
+  }
+}
+
+// Главный алгоритм Flash-сглаживания после завершения мазка
+function applyFlashSmoothing(points, ctx, isEraser, symmetry, res) {
+  if (points.length < 2) return;
+
+  const smoothStrength = +$('flashSmoothStrength').value || 70;
+  const taperOn = $('flashTaperCheck') ? $('flashTaperCheck').checked : true;
+  const straightenOn = $('flashStraightenCheck') ? $('flashStraightenCheck').checked : true;
+  const brushSize = +$('paintSize').value || 6;
+  const [r, g, b, a] = hexToRgba($('paintColor').value, +$('paintAlpha').value);
+
+  // 1. Фильтр плотности (убираем частотный шум курсора ближе 1.2px)
+  const filtered = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    const prev = filtered[filtered.length - 1];
+    const cur = points[i];
+    if (Math.hypot(cur.x - prev.x, cur.y - prev.y) >= 1.2) {
+      filtered.push(cur);
+    }
+  }
+  if (filtered[filtered.length - 1] !== points[points.length - 1]) {
+    filtered.push(points[points.length - 1]);
+  }
+
+  if (filtered.length <= 1) {
+    drawLivePoint(points[0].x, points[0].y);
+    return;
+  }
+
+  // 2. Распознавание прямых линий (Flash "Straighten")
+  if (straightenOn) {
+    const pStart = filtered[0];
+    const pEnd = filtered[filtered.length - 1];
+    const chordLen = Math.hypot(pEnd.x - pStart.x, pEnd.y - pStart.y);
+    const straightTolerance = 1.0 + (smoothStrength / 100) * 2.2;
+    let isStraight = chordLen > 8;
+    if (isStraight) {
+      for (let i = 1; i < filtered.length - 1; i++) {
+        if (perpendicularDistance(filtered[i], pStart, pEnd) > straightTolerance) {
+          isStraight = false;
+          break;
+        }
+      }
+    }
+    if (isStraight) {
+      renderSmoothedPath(ctx, [pStart, pEnd], brushSize, r, g, b, a, isEraser, taperOn, symmetry, res);
+      return;
+    }
+  }
+
+  // 3. Выявление намеренных углов
+  const cornerIndices = findCornerIndices(filtered, 3.5);
+
+  // 4. Упрощение Дугласа-Пекера + сабдивижн Чайкина для каждого участка между углами
+  const dpTolerance = 0.4 + (smoothStrength / 100) * 2.6;
+  const chaikinIters = smoothStrength > 65 ? 2 : (smoothStrength > 30 ? 1 : 0);
+
+  const fullSmoothedPath = [];
+
+  for (let c = 0; c < cornerIndices.length - 1; c++) {
+    const startIdx = cornerIndices[c];
+    const endIdx = cornerIndices[c + 1];
+    const subPts = filtered.slice(startIdx, endIdx + 1);
+
+    if (subPts.length <= 2) {
+      for (const p of subPts) fullSmoothedPath.push(p);
+      continue;
+    }
+
+    const simplified = simplifyDouglasPeucker(subPts, dpTolerance);
+    const smoothed = chaikinSmooth(simplified, chaikinIters);
+
+    if (fullSmoothedPath.length > 0) {
+      smoothed.shift();
+    }
+    for (const p of smoothed) fullSmoothedPath.push(p);
+  }
+
+  // 5. Отрисовка финальной гладкой кривой
+  renderSmoothedPath(ctx, fullSmoothedPath, brushSize, r, g, b, a, isEraser, taperOn, symmetry, res);
+}
+
+// =========================================================================
+// ЖИВОЙ СТИЛЬ И ОТРИСОВКА В РЕАЛЬНОМ ВРЕМЕНИ
+// =========================================================================
+
+function setupLiveStyle(ctx) {
+  const [r, g, b, a] = hexToRgba($('paintColor').value, +$('paintAlpha').value);
+  if (activePaintTool === 'eraser') {
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.strokeStyle = 'rgba(0,0,0,1)';
+    ctx.fillStyle = 'rgba(0,0,0,1)';
+  } else {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = `rgba(${r},${g},${b},${a / 255})`;
+    ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
+  }
+  ctx.lineWidth = +$('paintSize').value;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+}
+
+function drawLivePoint(cx, cy) {
+  const res = getCanvasRes();
+  const radius = Math.max(0.5, (+$('paintSize').value) / 2);
+  paintCtx.save();
+  setupLiveStyle(paintCtx);
+  paintCtx.beginPath();
+  paintCtx.arc(cx, cy, radius, 0, Math.PI * 2);
+  paintCtx.fill();
+  if (symmetryOn) {
+    paintCtx.beginPath();
+    paintCtx.arc(res - cx, cy, radius, 0, Math.PI * 2);
+    paintCtx.fill();
+  }
+  paintCtx.restore();
+}
+
+function drawLiveSegment(x0, y0, x1, y1) {
+  const res = getCanvasRes();
+  paintCtx.save();
+  setupLiveStyle(paintCtx);
+  paintCtx.beginPath();
+  paintCtx.moveTo(x0, y0);
+  paintCtx.lineTo(x1, y1);
+  paintCtx.stroke();
+  if (symmetryOn) {
+    paintCtx.beginPath();
+    paintCtx.moveTo(res - x0, y0);
+    paintCtx.lineTo(res - x1, y1);
+    paintCtx.stroke();
+  }
+  paintCtx.restore();
+}
+
+function drawLiveQuadratic(x0, y0, cx, cy, x1, y1) {
+  const res = getCanvasRes();
+  paintCtx.save();
+  setupLiveStyle(paintCtx);
+  paintCtx.beginPath();
+  paintCtx.moveTo(x0, y0);
+  paintCtx.quadraticCurveTo(cx, cy, x1, y1);
+  paintCtx.stroke();
+  if (symmetryOn) {
+    paintCtx.beginPath();
+    paintCtx.moveTo(res - x0, y0);
+    paintCtx.quadraticCurveTo(res - cx, cy, res - x1, y1);
+    paintCtx.stroke();
+  }
+  paintCtx.restore();
+}
+
+// Стандартный попиксельный мазок для 16×16 и режима без сглаживания
 function strokeSegment(x0, y0, x1, y1) {
   const res = getCanvasRes();
   const [r, g, b, a] = hexToRgba($('paintColor').value, +$('paintAlpha').value);
@@ -271,6 +687,7 @@ function strokeSegment(x0, y0, x1, y1) {
   }
   paintCtx.lineWidth = +$('paintSize').value;
   paintCtx.lineCap = 'round';
+  paintCtx.lineJoin = 'round';
   paintCtx.beginPath();
   paintCtx.moveTo(x0, y0);
   paintCtx.lineTo(x1, y1);
@@ -329,6 +746,12 @@ export function initPaintStudio2D() {
     $('paintAlphaTxt').textContent = e.target.value + '%';
   };
 
+  if ($('paintSize')) {
+    $('paintSize').oninput = e => {
+      if ($('paintSizeTxt')) $('paintSizeTxt').textContent = e.target.value + 'px';
+    };
+  }
+
   $('toolBrush').onclick = () => setPaintTool('brush');
   $('toolBucket').onclick = () => setPaintTool('bucket');
   $('toolPicker').onclick = () => setPaintTool('picker');
@@ -343,6 +766,53 @@ export function initPaintStudio2D() {
     const res = getCanvasRes();
     paintCtx.clearRect(0, 0, res, res);
   };
+
+  if ($('toolSmoothCanvas')) {
+    $('toolSmoothCanvas').onclick = () => smoothCanvasEdges();
+  }
+
+  // Flash Smoothing controls
+  if ($('toolFlashSmooth')) {
+    $('toolFlashSmooth').onclick = () => {
+      flashSmoothEnabled = !flashSmoothEnabled;
+      $('toolFlashSmooth').classList.toggle('active', flashSmoothEnabled);
+      $('toolFlashSmooth').textContent = flashSmoothEnabled ? '⚡ Flash: ВКЛ' : '⚪ Flash: ВЫКЛ';
+      showBanner(
+        flashSmoothEnabled
+          ? '⚡ Adobe Flash сглаживание ВКЛЮЧЕНО (плавные векторные линии)!'
+          : '⚪ Flash сглаживание выключено (прямой ввод без сглаживания)',
+        '#56f0ff'
+      );
+    };
+  }
+
+  if ($('flashSmoothStrength')) {
+    $('flashSmoothStrength').oninput = e => {
+      flashSmoothStrength = +e.target.value;
+      if ($('flashSmoothTxt')) $('flashSmoothTxt').textContent = e.target.value + '%';
+    };
+  }
+
+  const updateFlashPresetUI = (val, btn) => {
+    flashSmoothStrength = val;
+    if ($('flashSmoothStrength')) $('flashSmoothStrength').value = val;
+    if ($('flashSmoothTxt')) $('flashSmoothTxt').textContent = val + '%';
+    ['flashPresetSoft', 'flashPresetClassic', 'flashPresetMax'].forEach(id => {
+      if ($(id)) $(id).classList.remove('active');
+    });
+    if (btn) btn.classList.add('active');
+    if (!flashSmoothEnabled && $('toolFlashSmooth')) {
+      $('toolFlashSmooth').click();
+    }
+  };
+
+  if ($('flashPresetSoft')) $('flashPresetSoft').onclick = e => updateFlashPresetUI(40, e.currentTarget);
+  if ($('flashPresetClassic')) $('flashPresetClassic').onclick = e => updateFlashPresetUI(70, e.currentTarget);
+  if ($('flashPresetMax')) $('flashPresetMax').onclick = e => updateFlashPresetUI(95, e.currentTarget);
+
+  // Переключение разрешения 128 / 256 HD
+  if ($('btnRes128')) $('btnRes128').onclick = () => setCanvasResolution(128);
+  if ($('btnRes256')) $('btnRes256').onclick = () => setCanvasResolution(256);
 
   $('paintTargetSelect').onchange = e => loadTargetTextureIntoCanvas(e.target.value);
   $('openFacePaintBtn').onclick = () => {
@@ -382,19 +852,71 @@ export function initPaintStudio2D() {
     painting = true;
     lastPX = cx;
     lastPY = cy;
-    strokeSegment(lastPX, lastPY, lastPX, lastPY);
+    const res = getCanvasRes();
+
+    if (res === 16 || !flashSmoothEnabled) {
+      strokeSegment(lastPX, lastPY, lastPX, lastPY);
+    } else {
+      strokeStartSnapshot = paintCtx.getImageData(0, 0, res, res);
+      currentStrokePoints = [{ x: cx, y: cy, t: performance.now() }];
+      drawLivePoint(cx, cy);
+    }
   });
 
   paintCv.addEventListener('pointermove', e => {
     if (!painting) return;
     const [nx, ny] = getCanvasCoords(e);
-    strokeSegment(lastPX, lastPY, nx, ny);
+    const res = getCanvasRes();
+
+    if (res === 16 || !flashSmoothEnabled) {
+      strokeSegment(lastPX, lastPY, nx, ny);
+      lastPX = nx;
+      lastPY = ny;
+      return;
+    }
+
+    const last = currentStrokePoints[currentStrokePoints.length - 1];
+    if (Math.hypot(nx - last.x, ny - last.y) < 0.5) return;
+
+    currentStrokePoints.push({ x: nx, y: ny, t: performance.now() });
+
+    // Живая сглаженная отрисовка в реальном времени при ведении курсора
+    const len = currentStrokePoints.length;
+    if (len === 2) {
+      const p0 = currentStrokePoints[0];
+      const p1 = currentStrokePoints[1];
+      const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+      drawLiveSegment(p0.x, p0.y, mid.x, mid.y);
+    } else if (len >= 3) {
+      const p0 = currentStrokePoints[len - 3];
+      const p1 = currentStrokePoints[len - 2];
+      const p2 = currentStrokePoints[len - 1];
+      const mid0 = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+      const mid1 = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+      drawLiveQuadratic(mid0.x, mid0.y, p1.x, p1.y, mid1.x, mid1.y);
+    }
+
     lastPX = nx;
     lastPY = ny;
   });
 
   addEventListener('pointerup', () => {
+    if (!painting) return;
     painting = false;
+    const res = getCanvasRes();
+
+    if (res > 16 && flashSmoothEnabled && currentStrokePoints.length >= 2 && strokeStartSnapshot) {
+      paintCtx.putImageData(strokeStartSnapshot, 0, 0);
+      applyFlashSmoothing(currentStrokePoints, paintCtx, activePaintTool === 'eraser', symmetryOn, res);
+    }
+    currentStrokePoints = [];
+    strokeStartSnapshot = null;
+  });
+
+  addEventListener('pointercancel', () => {
+    painting = false;
+    currentStrokePoints = [];
+    strokeStartSnapshot = null;
   });
 
   $('applyPaintBtn').onclick = () => {
@@ -429,9 +951,26 @@ export function initPaintStudio2D() {
       pushUndoState(`Применение принта (${target})`);
       if (!ent.preset.limbTex) ent.preset.limbTex = {};
       ent.preset.limbTex[target] = dataURL;
-      const limbMesh = ent.rig.sockets[target];
-      setMeshFrontSprite(limbMesh, dataURL);
+      const limbMesh = ent.rig.sockets ? ent.rig.sockets[target] : ent.rig[target];
+      if (limbMesh) setMeshFrontSprite(limbMesh, dataURL);
       showBanner(`👕 Спрайт (${target}) наложен на лицевую грань «${ent.name}» с сохранением цвета тела!`, '#00e676');
+
+      // Автоматическое зеркалирование принта конечностей при активном буле
+      if ((target === 'armL' || target === 'armR') && ent.preset.mirrorArms) {
+        const otherTarget = target === 'armL' ? 'armR' : 'armL';
+        const flippedURL = flipCanvasHorizontally(paintCv);
+        ent.preset.limbTex[otherTarget] = flippedURL;
+        const otherMesh = ent.rig.sockets ? ent.rig.sockets[otherTarget] : ent.rig[otherTarget];
+        if (otherMesh) setMeshFrontSprite(otherMesh, flippedURL);
+        showBanner(`🪞 Спрайт руки зеркально наложен на противоположную сторону!`, '#00e676');
+      } else if ((target === 'legL' || target === 'legR') && ent.preset.mirrorLegs) {
+        const otherTarget = target === 'legL' ? 'legR' : 'legL';
+        const flippedURL = flipCanvasHorizontally(paintCv);
+        ent.preset.limbTex[otherTarget] = flippedURL;
+        const otherMesh = ent.rig.sockets ? ent.rig.sockets[otherTarget] : ent.rig[otherTarget];
+        if (otherMesh) setMeshFrontSprite(otherMesh, flippedURL);
+        showBanner(`🪞 Спрайт ноги зеркально наложен на противоположную сторону!`, '#00e676');
+      }
     } else if (target === 'cosmetic' && S.selectedRef && S.selectedRef.kind === 'cosmetic') {
       pushCosmeticUndoState('Наложение спрайта на примитив');
       const activePart = S.selectedRef.part || S.selectedRef.item.parts[0];

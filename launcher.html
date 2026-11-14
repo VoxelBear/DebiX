@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DebiX — Официальный Лаунчер</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #0b0f19;
+            --card-bg: rgba(18, 25, 43, 0.88);
+            --border-clr: rgba(255, 255, 255, 0.1);
+            --accent: #3b82f6;
+            --accent-glow: rgba(59, 130, 246, 0.45);
+            --ok: #10b981;
+            --warn: #f59e0b;
+            --danger: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            font-family: 'Montserrat', sans-serif;
+            background: radial-gradient(circle at 20% 20%, #1e293b 0%, #090d16 70%);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            overflow: hidden;
+        }
+
+        /* Декоративная сетка пупырышек LEGO/Studs на фоне */
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background-image: radial-gradient(rgba(255, 255, 255, 0.04) 2px, transparent 2px);
+            background-size: 28px 28px;
+            pointer-events: none;
+        }
+
+        .launcher-shell {
+            width: 100%;
+            max-width: 820px;
+            background: var(--card-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-clr);
+            border-radius: 20px;
+            box-shadow: 0 25px 65px rgba(0, 0, 0, 0.65);
+            overflow: hidden;
+            position: relative;
+            z-index: 1;
+        }
+
+        .launcher-header {
+            padding: 28px 32px 22px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(16, 185, 129, 0.08));
+            border-bottom: 1px solid var(--border-clr);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .brand-wrap {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .brand-cube {
+            width: 54px;
+            height: 54px;
+            border-radius: 14px;
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 900;
+            font-size: 24px;
+            box-shadow: 0 8px 24px var(--accent-glow);
+            border: 2px solid rgba(255, 255, 255, 0.25);
+        }
+
+        .brand-title h1 {
+            font-size: 26px;
+            font-weight: 900;
+            letter-spacing: 0.5px;
+        }
+
+        .brand-title p {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 600;
+            margin-top: 3px;
+        }
+
+        .security-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border-clr);
+        }
+
+        .security-badge.verified {
+            background: rgba(16, 185, 129, 0.15);
+            border-color: rgba(16, 185, 129, 0.45);
+            color: #34d399;
+        }
+
+        .security-badge.unverified {
+            background: rgba(239, 68, 68, 0.15);
+            border-color: rgba(239, 68, 68, 0.45);
+            color: #f87171;
+        }
+
+        .launcher-body {
+            padding: 28px 32px;
+            display: grid;
+            grid-template-columns: 1.15fr 0.85fr;
+            gap: 24px;
+        }
+
+        .panel-box {
+            background: rgba(10, 14, 24, 0.65);
+            border: 1px solid var(--border-clr);
+            border-radius: 14px;
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .panel-title {
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .version-row {
+            display: flex;
+            gap: 12px;
+        }
+
+        .ver-pill {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-clr);
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .ver-pill span {
+            display: block;
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .ver-pill strong {
+            display: block;
+            font-size: 18px;
+            font-weight: 900;
+            margin-top: 4px;
+            color: #fff;
+        }
+
+        .changelog-text {
+            font-size: 13px;
+            line-height: 1.55;
+            color: #cbd5e1;
+            white-space: pre-wrap;
+            max-height: 150px;
+            overflow-y: auto;
+            user-select: text;
+        }
+
+        .delta-list {
+            list-style: none;
+            max-height: 195px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .delta-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+            padding: 7px 10px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .delta-tag {
+            font-size: 9px;
+            font-weight: 800;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .delta-tag.outdated { background: rgba(59, 130, 246, 0.25); color: #60a5fa; }
+        .delta-tag.missing  { background: rgba(245, 158, 11, 0.25); color: #fbbf24; }
+        .delta-tag.tampered { background: rgba(239, 68, 68, 0.25); color: #f87171; }
+
+        .launcher-footer {
+            padding: 20px 32px 28px;
+            border-top: 1px solid var(--border-clr);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .progress-wrap {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .status-line {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            font-weight: 700;
+            color: #e2e8f0;
+        }
+
+        .progress-bar-bg {
+            width: 100%;
+            height: 10px;
+            background: rgba(255, 255, 255, 0.07);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #3b82f6, #10b981);
+            transition: width 0.25s ease;
+        }
+
+        .error-alert {
+            display: none;
+            padding: 12px 14px;
+            border-radius: 10px;
+            background: rgba(239, 68, 68, 0.16);
+            border: 1px solid rgba(239, 68, 68, 0.45);
+            color: #fca5a5;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .actions-row {
+            display: flex;
+            gap: 12px;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .btn {
+            font-family: 'Montserrat', sans-serif;
+            font-weight: 800;
+            font-size: 13px;
+            padding: 13px 22px;
+            border-radius: 12px;
+            border: 1px solid var(--border-clr);
+            cursor: pointer;
+            transition: all 0.18s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.06);
+            color: #e2e8f0;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+        .btn-update {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: #fff;
+            border: none;
+            box-shadow: 0 8px 22px rgba(245, 158, 11, 0.35);
+        }
+
+        .btn-play {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: #fff;
+            border: none;
+            font-size: 15px;
+            padding: 14px 32px;
+            box-shadow: 0 8px 25px rgba(16, 185, 129, 0.4);
+        }
+
+        .btn-play:hover:not(:disabled) {
+            transform: translateY(-1px);
+            filter: brightness(1.08);
+        }
+    </style>
+</head>
+<body>
+
+<div class="launcher-shell">
+    <div class="launcher-header">
+        <div class="brand-wrap">
+            <div class="brand-cube">DX</div>
+            <div class="brand-title">
+                <h1>DebiX Launcher</h1>
+                <p id="repoSubtitle">Автономный клиент • Защита Ed25519 + SHA-256</p>
+            </div>
+        </div>
+        <div id="sigBadge" class="security-badge">
+            <span>🛡️ Проверка подписи...</span>
+        </div>
+    </div>
+
+    <div class="launcher-body">
+        <div class="panel-box">
+            <div class="panel-title">
+                <span>Версия и журнал релиза</span>
+                <span id="commitTag" style="font-family: monospace; color: #60a5fa;">—</span>
+            </div>
+            <div class="version-row">
+                <div class="ver-pill">
+                    <span>Установлена</span>
+                    <strong id="localVerText">v0.0.0</strong>
+                </div>
+                <div class="ver-pill">
+                    <span>Актуальный релиз</span>
+                    <strong id="remoteVerText">—</strong>
+                </div>
+            </div>
+            <div class="panel-title" style="margin-top: 6px;">Описание обновления от разработчика</div>
+            <div id="changelogBox" class="changelog-text">Проверка официальной ветки релизов...</div>
+        </div>
+
+        <div class="panel-box">
+            <div class="panel-title">
+                <span>Инспектор игровых файлов</span>
+                <span id="deltaCountBadge">0 файлов</span>
+            </div>
+            <ul id="deltaList" class="delta-list">
+                <li class="delta-item" style="color: var(--text-muted);">Ожидание сверки SHA-256...</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="launcher-footer">
+        <div id="errorAlert" class="error-alert"></div>
+
+        <div class="progress-wrap">
+            <div class="status-line">
+                <span id="statusText">Инициализация лаунчера...</span>
+                <span id="percentText">0%</span>
+            </div>
+            <div class="progress-bar-bg">
+                <div id="progressBar" class="progress-bar-fill"></div>
+            </div>
+        </div>
+
+        <div class="actions-row">
+            <div style="display: flex; gap: 10px;">
+                <button id="btnCheck" class="btn btn-secondary">🔄 Проверить файлы и обновления</button>
+                <button id="btnUpdate" class="btn btn-update" style="display: none;">⬇️ Скачать обновление</button>
+            </div>
+            <button id="btnPlay" class="btn btn-play">▶ ИГРАТЬ В DEBIX</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const $ = id => document.getElementById(id);
+    let pollTimer = null;
+
+    function renderState(st) {
+        $('localVerText').textContent = 'v' + (st.localVersion || '0.0.0');
+        $('remoteVerText').textContent = st.remoteVersion ? ('v' + st.remoteVersion) : '—';
+        $('commitTag').textContent = st.remoteCommit ? ('#' + st.remoteCommit.slice(0, 8)) : '—';
+        $('repoSubtitle').textContent = `Репозиторий: ${st.repo} (ветка: ${st.branch})`;
+
+        const sigBadge = $('sigBadge');
+        if (st.signatureVerified) {
+            sigBadge.className = 'security-badge verified';
+            sigBadge.innerHTML = '<span>🔒 Ed25519 ПОДПИСЬ ПОДТВЕРЖДЕНА</span>';
+        } else if (st.status === 'error') {
+            sigBadge.className = 'security-badge unverified';
+            sigBadge.innerHTML = '<span>⚠️ ПОДПИСЬ НЕ ПОДТВЕРЖДЕНА</span>';
+        } else {
+            sigBadge.className = 'security-badge';
+            sigBadge.innerHTML = '<span>🛡️ Проверка...</span>';
+        }
+
+        $('changelogBox').textContent = st.remoteNotes || 'Нет описания изменений.';
+        $('statusText').textContent = st.statusText || '';
+        $('percentText').textContent = (st.progressPercent || 0) + '%';
+        $('progressBar').style.width = (st.progressPercent || 0) + '%';
+
+        const errBox = $('errorAlert');
+        if (st.lastError) {
+            errBox.style.display = 'block';
+            errBox.textContent = st.lastError;
+        } else {
+            errBox.style.display = 'none';
+        }
+
+        // Отрисовка списка файлов для дельта-скачивания
+        const changes = st.pendingChanges || [];
+        $('deltaCountBadge').textContent = `${changes.length} файлов`;
+        const listEl = $('deltaList');
+        listEl.innerHTML = '';
+
+        if (changes.length === 0) {
+            listEl.innerHTML = '<li class="delta-item" style="color:#34d399;">✅ Все игровые файлы соответствуют эталонным хэшам SHA-256</li>';
+        } else {
+            const labels = {
+                outdated: 'ОБНОВИТЬ',
+                missing: 'СКАЧАТЬ',
+                tampered: 'ИЗМЕНЁН (ВОССТАНОВИТЬ)'
+            };
+            changes.forEach(item => {
+                const li = document.createElement('li');
+                li.className = 'delta-item';
+                li.innerHTML = `
+                    <span style="font-family: monospace; overflow:hidden; text-overflow:ellipsis;">${item.path}</span>
+                    <span class="delta-tag ${item.reason}">${labels[item.reason] || item.reason}</span>
+                `;
+                listEl.appendChild(li);
+            });
+        }
+
+        const isBusy = st.status === 'checking' || st.status === 'updating';
+        $('btnCheck').disabled = isBusy;
+        $('btnUpdate').disabled = isBusy;
+
+        if (st.status === 'update_available' || changes.length > 0) {
+            $('btnUpdate').style.display = 'inline-flex';
+            $('btnUpdate').textContent = changes.some(c => c.reason === 'tampered')
+                ? `🛡️ Восстановить файлы (${changes.length})`
+                : `⬇️ Обновить (${changes.length} ф.)`;
+        } else {
+            $('btnUpdate').style.display = 'none';
+        }
+
+        $('btnPlay').disabled = isBusy || changes.length > 0;
+        $('btnPlay').textContent = st.gameServerRunning
+            ? '🟢 СЕРВЕР ЗАПУЩЕН — ОТКРЫТЬ ИГРУ'
+            : '▶ ИГРАТЬ В DEBIX';
+    }
+
+    async function fetchStatus() {
+        try {
+            const res = await fetch('/api/launcher/status');
+            const st = await res.json();
+            renderState(st);
+        } catch (e) {}
+    }
+
+    $('btnCheck').addEventListener('click', async () => {
+        $('btnCheck').disabled = true;
+        await fetch('/api/launcher/check', { method: 'POST' });
+        await fetchStatus();
+    });
+
+    $('btnUpdate').addEventListener('click', async () => {
+        $('btnUpdate').disabled = true;
+        await fetch('/api/launcher/update', { method: 'POST' });
+        await fetchStatus();
+    });
+
+    $('btnPlay').addEventListener('click', async () => {
+        const res = await fetch('/api/launcher/play', { method: 'POST' });
+        const data = await res.json();
+        if (!data.ok && data.error) {
+            alert(data.error);
+        }
+        await fetchStatus();
+    });
+
+    fetchStatus();
+    pollTimer = setInterval(fetchStatus, 800);
+</script>
+</body>
+</html>

@@ -1,7 +1,11 @@
 // src/core/TextureFactory.js
 import { S, TAU } from './State.js';
 
-export function drawStudPatternOnCtx(g, bgHex, lineHex, style = 'round') {
+export function drawStudPatternOnCtx(g, bgHex, lineHex, style = 'square') {
+  const w = g.canvas ? g.canvas.width : 128;
+  const h = g.canvas ? g.canvas.height : 128;
+  g.save();
+  g.scale(w / 128, h / 128);
   g.clearRect(0, 0, 128, 128);
   g.fillStyle = bgHex;
   g.fillRect(0, 0, 128, 128);
@@ -33,9 +37,10 @@ export function drawStudPatternOnCtx(g, bgHex, lineHex, style = 'round') {
       g.fill();
     }
   }
+  g.restore();
 }
 
-export function makeStudTex(bgHex, lineHex, style = 'round') {
+export function makeStudTex(bgHex, lineHex, style = 'square') {
   const c = document.createElement('canvas');
   c.width = c.height = 128;
   const g = c.getContext('2d');
@@ -46,10 +51,77 @@ export function makeStudTex(bgHex, lineHex, style = 'round') {
   return t;
 }
 
+// Синхронизирует тайлинг текстуры на всех 6 сторонах куба (верх/низ: W×D, лево/право: D×H, перед/зад: W×H)
+export function syncBoxMaterialTiling(mesh, w = 4, h = 4, d = 4) {
+  if (!mesh || !mesh.material) return;
+  const rx = Math.max(0.5, (Number(w) || 1) / 2);
+  const ry = Math.max(0.5, (Number(h) || 1) / 2);
+  const rz = Math.max(0.5, (Number(d) || 1) / 2);
+
+  if (Array.isArray(mesh.material) && mesh.material.length === 6) {
+    // 0: +X (d, h), 1: -X (d, h), 2: +Y (w, d), 3: -Y (w, d), 4: +Z (w, h), 5: -Z (w, h)
+    const pairs = [[rz, ry], [rz, ry], [rx, rz], [rx, rz], [rx, ry], [rx, ry]];
+    for (let i = 0; i < 6; i++) {
+      const m = mesh.material[i];
+      if (m && m.map) {
+        m.map.repeat.set(pairs[i][0], pairs[i][1]);
+      }
+    }
+    return;
+  }
+
+  // Если на кубе одиночный материал с текстурой и это форма куба — создаём 3 пары материалов (X, Y, Z) для ровного тайлинга боков
+  const singleMat = mesh.material;
+  if (singleMat && singleMat.map && mesh.geometry && mesh.geometry.type === 'BoxGeometry') {
+    const mX = singleMat.clone();
+    mX.map = singleMat.map.clone();
+    mX.map.needsUpdate = true;
+    mX.map.repeat.set(rz, ry);
+
+    const mY = singleMat;
+    mY.map.repeat.set(rx, rz);
+
+    const mZ = singleMat.clone();
+    mZ.map = singleMat.map.clone();
+    mZ.map.needsUpdate = true;
+    mZ.map.repeat.set(rx, ry);
+
+    const multi = [mX, mX, mY, mY, mZ, mZ];
+    // Проксируем свойства цвета/прозрачности/эмиссива на массив, чтобы старый код box.m.material.color.set(...) работал прозрачно!
+    multi.color = {
+      set: v => multi.forEach(m => m.color.set(v)),
+      setHex: v => multi.forEach(m => m.color.setHex(v))
+    };
+    multi.emissive = {
+      set: v => multi.forEach(m => m.emissive && m.emissive.set(v)),
+      setHex: v => multi.forEach(m => m.emissive && m.emissive.setHex(v))
+    };
+    Object.defineProperty(multi, 'opacity', {
+      get: () => mY.opacity,
+      set: v => multi.forEach(m => { m.opacity = v; })
+    });
+    Object.defineProperty(multi, 'transparent', {
+      get: () => mY.transparent,
+      set: v => multi.forEach(m => { m.transparent = v; })
+    });
+    Object.defineProperty(multi, 'emissiveIntensity', {
+      get: () => mY.emissiveIntensity,
+      set: v => multi.forEach(m => { m.emissiveIntensity = v; })
+    });
+    Object.defineProperty(multi, 'map', {
+      get: () => mY.map
+    });
+    multi.userData = singleMat.userData || {};
+    mesh.material = multi;
+  } else if (singleMat && singleMat.map) {
+    singleMat.map.repeat.set(rx, rz);
+  }
+}
+
 export function makeTexFromDataURL(dataURL, repeat = true, pixelArt = false) {
-  const size = pixelArt ? 16 : 128;
+  const defaultSize = pixelArt ? 16 : 128;
   const c = document.createElement('canvas');
-  c.width = c.height = size;
+  c.width = c.height = defaultSize;
   const g = c.getContext('2d');
   const t = new THREE.CanvasTexture(c);
   if (repeat) {
@@ -62,9 +134,15 @@ export function makeTexFromDataURL(dataURL, repeat = true, pixelArt = false) {
   t.userData = { dataURL };
   const img = new Image();
   img.onload = () => {
-    g.clearRect(0, 0, size, size);
+    const w = img.width || defaultSize;
+    const h = img.height || defaultSize;
+    if (c.width !== w || c.height !== h) {
+      c.width = w;
+      c.height = h;
+    }
+    g.clearRect(0, 0, w, h);
     g.imageSmoothingEnabled = !pixelArt;
-    g.drawImage(img, 0, 0, size, size);
+    g.drawImage(img, 0, 0, w, h);
     t.needsUpdate = true;
   };
   img.src = dataURL;
@@ -349,3 +427,98 @@ export function makeParticleTex(customDataURL = null, preset = 'spark') {
   particleTexCache.set(key, t);
   return t;
 }
+
+/* ---------- Оптическая система Гало (Световые ореолы / Light Halo Corona) ---------- */
+let sharedHaloTexture = null;
+
+export function getSharedHaloTexture() {
+  if (sharedHaloTexture) return sharedHaloTexture;
+  const size = 256;
+  const cv = document.createElement('canvas');
+  cv.width = size;
+  cv.height = size;
+  const ctx = cv.getContext('2d');
+  const cx = size / 2;
+  const cy = size / 2;
+  const radius = size / 2;
+
+  // Радиальный градиент: сверкающее ядро -> мягкая рассеянная корона -> гладкий сход в прозрачность
+  const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+  grad.addColorStop(0.00, 'rgba(255, 255, 255, 1.0)');
+  grad.addColorStop(0.08, 'rgba(255, 255, 255, 0.94)');
+  grad.addColorStop(0.22, 'rgba(255, 255, 255, 0.68)');
+  grad.addColorStop(0.42, 'rgba(255, 255, 255, 0.32)');
+  grad.addColorStop(0.66, 'rgba(255, 255, 255, 0.11)');
+  grad.addColorStop(0.86, 'rgba(255, 255, 255, 0.025)');
+  grad.addColorStop(1.00, 'rgba(255, 255, 255, 0.0)');
+
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+
+  // Мягкий концентрированный центр для эффекта интенсивного источника света
+  const centerGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius * 0.38);
+  centerGrad.addColorStop(0.0, 'rgba(255, 255, 255, 0.6)');
+  centerGrad.addColorStop(0.35, 'rgba(255, 255, 255, 0.22)');
+  centerGrad.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+  ctx.fillStyle = centerGrad;
+  ctx.fillRect(0, 0, size, size);
+
+  sharedHaloTexture = new THREE.CanvasTexture(cv);
+  sharedHaloTexture.generateMipmaps = true;
+  sharedHaloTexture.minFilter = THREE.LinearMipmapLinearFilter;
+  sharedHaloTexture.magFilter = THREE.LinearFilter;
+  return sharedHaloTexture;
+}
+
+export function createHaloSprite(colorHex = '#ffffff', size = 3.0, opacity = 0.75) {
+  const tex = getSharedHaloTexture();
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    color: new THREE.Color(colorHex || '#ffffff'),
+    blending: THREE.AdditiveBlending,
+    transparent: true,
+    opacity: Math.max(0.05, Math.min(1.0, opacity)),
+    depthWrite: false,
+    depthTest: true
+  });
+  const spr = new THREE.Sprite(mat);
+  spr.scale.set(size, size, 1);
+  spr.userData.isHaloSprite = true;
+  spr.userData.noCollider = true;
+  spr.raycast = () => {}; // Полное исключение из рэйкастинга мыши и оружия
+  return spr;
+}
+
+// Утилита горизонтального отзеркаливания канваса (для принтов конечностей R6)
+export function flipCanvasHorizontally(sourceCanvas) {
+  if (!sourceCanvas) return null;
+  const c = document.createElement('canvas');
+  c.width = sourceCanvas.width;
+  c.height = sourceCanvas.height;
+  const ctx = c.getContext('2d');
+  ctx.translate(c.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(sourceCanvas, 0, 0);
+  return c.toDataURL();
+}
+
+// Асинхронное отзеркаливание DataURL изображения
+export function flipImageURLHorizontally(dataURL) {
+  return new Promise((resolve) => {
+    if (!dataURL) return resolve(null);
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.width || 128;
+      c.height = img.height || 128;
+      const ctx = c.getContext('2d');
+      ctx.translate(c.width, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(img, 0, 0);
+      resolve(c.toDataURL());
+    };
+    img.onerror = () => resolve(dataURL);
+    img.src = dataURL;
+  });
+}
+

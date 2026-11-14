@@ -64,28 +64,90 @@ export const S = {
     skyBot: '#dff4ff',
     fogColor: '#88ccff',
     fogDensity: 0.0038,
+    sunSettings: {
+      enabled: true,
+      color: '#fff6dd',
+      intensity: 1.25,
+      hemiIntensity: 0.9,
+      x: 45,
+      y: 85,
+      z: 35,
+      shellShape: 'sphere', // 'none' | 'sphere' | 'box' | 'octahedron'
+      shellSize: 14,
+      shellColor: '#ffea79',
+      shellGlow: true
+    },
+    celestialBodies: [], // Небесные тела на скайбоксе: планеты, звёзды, луны
     gravity: 22,
     respawnMode: 'timer', // 'instant' | 'timer' | 'spectator'
-    respawnDelay: 3.5     // Секунд до респавна в режиме 'timer'
+    respawnDelay: 3.5,    // Секунд до респавна в режиме 'timer'
+    dropItemsOnDeath: 'both', // 'both' | 'npc_only' | 'player_only' | 'none'
+    allowSprint: true,          // Глобальное правило: разрешён ли бег (Shift) игрокам и NPC
+    staminaDrainOnSprint: true, // Глобальное правило: тратится ли стамина при беге
+    sprintSpeedMultiplier: 1.48,
+    staminaDrainRate: 18,
+    staminaRegenRate: 15,
+    factions: [],               // Пользовательские фракции и матрица дипломатии (создаются игроком)
+    musicPreset: 'heaven_choir',
+    ambiencePreset: 'heaven_wind',
+    sfxVolume: 0.85,
+    musicVolume: 0.42,
+    ambienceVolume: 0.45
   },
 
   customDefaultStudDataURL: null,
   savedCosmeticsLibrary: [],
   savedItemsLibrary: [],
+  customPrefabsLibrary: [], // Пользовательские префабы блоков/предметов/NPC
+  customAudioLibrary: [],   // Пользовательские загруженные звуки и музыка (.mp3/.wav/.ogg в DataURL)
+  prefabFolders: [
+    { id: 'u_fav', name: 'Избранное ⭐', items: ['item_sword', 'item_blaster', 'solid', 'door'] }
+  ],
+  activePrefabFolderId: 'all',
+  prefabCardSize: 96,
+  bottomDockCollapsed: false,
+
+  // Папки в иерархии сцены (как в Godot / Unity)
+  sceneFolders: [
+    { id: 'sf_level', name: 'Архитектура уровня', collapsed: false },
+    { id: 'sf_logic', name: 'Механики и Триггеры', collapsed: false }
+  ],
 
   queueCoords: [],
   allBlocks: [],
   customNPCs: [],
   spawnedCoins: [],
-  worldItems: [],        // Предметы и контейнеры, лежащие/стоящие в мире
-  activeProjectiles: [], // Активные летящие снаряды в мире
+  worldItems: [],         // Предметы и контейнеры, лежащие/стоящие в мире
+  emptyObjects: [],       // Пустые объекты-пивоты (Empty GameObjects как в Unity)
+  activeProjectiles: [],  // Активные летящие снаряды в мире
+  physicsConstraints: [], // Физические связи блоков: 'rope' (верёвки/пружины) и 'weld' (сварка)
+  gmodTool: {
+    active: false,
+    mode: 'rope',          // 'rope' | 'weld'
+    ropeLength: 4.5,       // Длина верёвки (0 = авто по текущему расстоянию)
+    springiness: 0.25,     // Пружинность (0 = жёсткий трос, 0.1..1.0 = упругая пружина)
+    ropeThickness: 0.08,   // Косметическая толщина верёвки (м)
+    ropeColor: '#ffce3a',  // Косметический цвет верёвки
+    firstHit: null         // Первая выбранная точка { box, localPoint }
+  },
   colliderHelpers: [],
   showColliders: false,
   blockIdCounter: 1,
   itemIdCounter: 1,
+  emptyIdCounter: 1,
 
   queueLine: [],
   player: null,
+  playerName: 'Игрок',
+  remotePlayers: {},
+  mpState: {
+    peerId: 'p_' + Math.random().toString(36).slice(2, 10),
+    roomCode: 'RADMIN-1',
+    wsUrl: 'ws://26.0.0.1:8765',
+    isHost: false,
+    connected: false,
+    statusText: ''
+  },
   archangelEnt: null,
   judgeTimer: 6.5,
   eyeTimer: 4.5,

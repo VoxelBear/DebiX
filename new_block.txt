@@ -1,0 +1,919 @@
+function areBlocksLinkedByConstraint(bA, bB) {
+  const list = S.physicsConstraints;
+  if (!Array.isArray(list) || list.length === 0) return false;
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    if (!c) continue;
+    if (
+      (c.blockAId === bA.id && c.blockBId === bB.id) ||
+      (c.blockAId === bB.id && c.blockBId === bA.id)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function transformWeldedCluster(cluster, dx, dy, dz, rotQuat, pivotPt) {
+  if (!cluster || cluster.isStaticAnchored) return;
+  const members = cluster.members;
+  const hasRot = rotQuat && (Math.abs(rotQuat.x) > 0.00001 || Math.abs(rotQuat.y) > 0.00001 || Math.abs(rotQuat.z) > 0.00001);
+
+  for (let i = 0; i < members.length; i++) {
+    const mb = members[i];
+    if (!mb || !mb.m) continue;
+
+    if (hasRot && pivotPt) {
+      _vTmp1.subVectors(mb.m.position, pivotPt).applyQuaternion(rotQuat);
+      mb.m.position.copy(pivotPt).add(_vTmp1);
+      mb.m.quaternion.premultiply(rotQuat).normalize();
+      mb.m.rotation.setFromQuaternion(mb.m.quaternion);
+    }
+    mb.m.position.x += dx;
+    mb.m.position.y += dy;
+    mb.m.position.z += dz;
+
+    mb.m.updateMatrixWorld();
+    updateBlockOBB(mb);
+    if (mb.cpVisualGroup) {
+      mb.cpVisualGroup.position.copy(mb.m.position);
+      mb.cpVisualGroup.rotation.copy(mb.m.rotation);
+    }
+    if (mb.haloSprite) mb.haloSprite.position.copy(mb.m.position);
+  }
+
+  cluster.com.x += dx;
+  cluster.com.y += dy;
+  cluster.com.z += dz;
+}
+
+const _ropeUnitCylGeo = new THREE.CylinderGeometry(1, 1, 1, 8);
+_ropeUnitCylGeo.rotateX(Math.PI / 2);
+const _vSegStart = new THREE.Vector3();
+const _vSegEnd = new THREE.Vector3();
+
+export function renderPhysicsConstraintsVisuals() {
+  if (!_ropeVisualGroup) {
+    _ropeVisualGroup = new THREE.Group();
+    _ropeVisualGroup.name = 'PhysicsConstraintsVisuals';
+    scene.add(_ropeVisualGroup);
+  }
+  while (_ropeVisualGroup.children.length > 0) {
+    const ch = _ropeVisualGroup.children.pop();
+    if (ch.geometry && ch.geometry !== _ropeUnitCylGeo) ch.geometry.dispose();
+    if (ch.material) ch.material.dispose();
+  }
+
+  const list = S.physicsConstraints || [];
+  if (list.length === 0 && !S.gmodTool?.firstHit) return;
+
+  const byId = new Map();
+  for (let i = 0; i < S.allBlocks.length; i++) {
+    byId.set(S.allBlocks[i].id, S.allBlocks[i]);
+  }
+
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    if (!c) continue;
+    const bA = byId.get(c.blockAId);
+    const bB = byId.get(c.blockBId);
+    if (!bA || !bB || bA._depletedDisabled || bB._depletedDisabled) continue;
+
+    const pA = new THREE.Vector3(c.localAnchorA?.x || 0, c.localAnchorA?.y || 0, c.localAnchorA?.z || 0);
+    bA.m.localToWorld(pA);
+    const pB = new THREE.Vector3(c.localAnchorB?.x || 0, c.localAnchorB?.y || 0, c.localAnchorB?.z || 0);
+    bB.m.localToWorld(pB);
+
+    if (c.type === 'rope') {
+      const dist = pA.distanceTo(pB);
+      const maxL = Math.max(0.2, Number(c.maxLength) || 4.0);
+      const sag = Math.max(0, (maxL - dist) * 0.32);
+      const mid = pA.clone().lerp(pB, 0.5);
+      mid.y -= sag;
+
+      const curve = new THREE.QuadraticBezierCurve3(pA, mid, pB);
+      const segs = 8;
+      const radius = clamp(Number(c.thickness) || 0.08, 0.015, 0.6) * 0.5;
+      const ropeHex = c.color || '#ffce3a';
+      const mat = new THREE.MeshBasicMaterial({ color: ropeHex });
+
+      for (let s = 0; s < segs; s++) {
+        curve.getPoint(s / segs, _vSegStart);
+        curve.getPoint((s + 1) / segs, _vSegEnd);
+        const segLen = _vSegStart.distanceTo(_vSegEnd);
+        if (segLen < 0.005) continue;
+        const segMesh = new THREE.Mesh(_ropeUnitCylGeo, mat);
+        segMesh.position.lerpVectors(_vSegStart, _vSegEnd, 0.5);
+        segMesh.lookAt(_vSegEnd);
+        segMesh.scale.set(radius, radius, segLen * 1.04);
+        segMesh.userData.noCollider = true;
+        _ropeVisualGroup.add(segMesh);
+      }
+    } else if (c.type === 'weld' && S.state === 'edit') {
+      const geo = new THREE.BufferGeometry().setFromPoints([pA, pB]);
+      const mat = new THREE.LineBasicMaterial({ color: 0x00e676, depthTest: false });
+      const line = new THREE.Line(geo, mat);
+      line.renderOrder = 995;
+      line.userData.noCollider = true;
+      _ropeVisualGroup.add(line);
+    }
+  }
+}
+
+export function updateDynamicBlocksPhysics(dt, player) {
+  const worldGrav = S.worldSettings.gravity ?? 22;
+  const all = S.allBlocks;
+
+  // 1. Переноска физического блока в руках игрока
+  if (player && player.carriedPhysicsBlock) {
+    const cb = player.carriedPhysicsBlock;
+    if (S.playerDead || !cb.isDynamicPhysics || cb._depletedDisabled) {
+      cb._isCarriedByPlayer = false;
+      player.carriedPhysicsBlock = null;
+    } else {
+      const fx = -Math.sin(S.yaw);
+      const fz = -Math.cos(S.yaw);
+      const holdDist = Math.min(3.2, 1.15 + Math.max(cb.hx, cb.hz));
+      const targetX = player.x + fx * holdDist;
+      const targetY = player.y + 1.25 + Math.min(1.2, cb.hy * 0.45);
+      const targetZ = player.z + fz * holdDist;
+
+      const dx = targetX - cb.m.position.x;
+      const dy = targetY - cb.m.position.y;
+      const dz = targetZ - cb.m.position.z;
+
+      if (cb._physCluster && !cb._physCluster.isStaticAnchored) {
+        transformWeldedCluster(cb._physCluster, dx, dy, dz, null, null);
+      } else {
+        cb.m.position.set(targetX, targetY, targetZ);
+        cb.m.rotation.set(0, S.yaw + Math.PI, 0);
+        cb.m.quaternion.setFromEuler(cb.m.rotation);
+        cb.m.updateMatrixWorld();
+        updateBlockOBB(cb);
+      }
+    }
+  }
+
+  // 2. Сборка сваренных кластеров
+  const clusters = buildWeldedPhysicsClusters();
+  if (clusters.length === 0) {
+    renderPhysicsConstraintsVisuals();
+    return;
+  }
+
+  const byId = new Map();
+  for (let i = 0; i < all.length; i++) {
+    const b = all[i];
+    if (!b) continue;
+    byId.set(b.id, b);
+    b._externalLoadWeight = 0;
+    b._riderOffsetX = 0;
+    b._riderOffsetZ = 0;
+    b._riderIsPlayer = false;
+    b._frameStartX = b.m.position.x;
+    b._frameStartY = b.m.position.y;
+    b._frameStartZ = b.m.position.z;
+  }
+
+  // 3. Определение веса стоящего сверху игрока / NPC
+  const registerRiderOnBlock = (ent, entWeight, isPlayerRider) => {
+    if (isPlayerRider && ((ent._jumpGraceTimer || 0) > 0 || S.keys.Space || S.btnJump)) return;
+    if (isPlayerRider && !ent.grounded && (ent._groundedAnimTimer || 0) <= 0) return;
+    const entX = ent.x;
+    const entY = ent.y;
+    const entZ = ent.z;
+    const entR = ent.colliderRadius || 0.42;
+
+    let bestBlk = null;
+    let bestArea = -1;
+
+    if (
+      isPlayerRider &&
+      ent._supportBlock &&
+      !ent._supportBlock._depletedDisabled &&
+      entX + entR >= ent._supportBlock.x0 - 0.15 &&
+      entX - entR <= ent._supportBlock.x1 + 0.15 &&
+      entZ + entR >= ent._supportBlock.z0 - 0.15 &&
+      entZ - entR <= ent._supportBlock.z1 + 0.15
+    ) {
+      bestBlk = ent._supportBlock;
+    } else {
+      for (let i = 0; i < all.length; i++) {
+        const b = all[i];
+        if (!b || b._depletedDisabled || b.matterState !== 'solid' || b._isCarriedByPlayer) continue;
+        if (
+          entX + entR >= b.x0 && entX - entR <= b.x1 &&
+          entZ + entR >= b.z0 && entZ - entR <= b.z1 &&
+          entY >= b.y1 - 0.22 && entY <= b.y1 + 0.18
+        ) {
+          const area = b.w * b.d;
+          if (!bestBlk || area > bestArea) {
+            bestBlk = b;
+            bestArea = area;
+          }
+        }
+      }
+    }
+
+    if (bestBlk) {
+      bestBlk._externalLoadWeight += entWeight;
+      if (isPlayerRider) bestBlk._riderIsPlayer = true;
+      const com = bestBlk._physCluster ? bestBlk._physCluster.com : bestBlk.m.position;
+      bestBlk._riderOffsetX += (entX - com.x) * entWeight;
+      bestBlk._riderOffsetZ += (entZ - com.z) * entWeight;
+    }
+  };
+
+  if (player && !S.playerDead && !player.isFlying) {
+    registerRiderOnBlock(player, getEntityWeight(player), true);
+  }
+  for (let ni = 0; ni < S.customNPCs.length; ni++) {
+    const npc = S.customNPCs[ni];
+    if (npc && !(npc._deadCooldown > 0)) {
+      registerRiderOnBlock(npc, getEntityWeight(npc), false);
+    }
+  }
+
+  for (let i = 0; i < all.length; i++) {
+    const topB = all[i];
+    if (!topB || topB._depletedDisabled || !topB.isDynamicPhysics || topB.matterState !== 'solid') continue;
+    const topW = Number(topB.weight) || 15;
+    if (topW <= 0) continue;
+    for (let j = 0; j < all.length; j++) {
+      const botB = all[j];
+      if (botB === topB || botB._depletedDisabled || botB.matterState !== 'solid') continue;
+      if (topB._physCluster && topB._physCluster === botB._physCluster) continue;
+      if (
+        topB.x1 > botB.x0 && topB.x0 < botB.x1 &&
+        topB.z1 > botB.z0 && topB.z0 < botB.z1 &&
+        Math.abs(topB.y0 - botB.y1) <= 0.25
+      ) {
+        botB._externalLoadWeight += topW;
+        const com = botB._physCluster ? botB._physCluster.com : botB.m.position;
+        botB._riderOffsetX += (topB.m.position.x - com.x) * topW;
+        botB._riderOffsetZ += (topB.m.position.z - com.z) * topW;
+        break;
+      }
+    }
+  }
+
+  // 3.5. Сборка графа верёвок
+  const activeRopes = [];
+  const linkedGraph = new Map();
+  const addGraphLink = (c1, c2) => {
+    if (!c1 || !c2 || c1 === c2) return;
+    if (!linkedGraph.has(c1)) linkedGraph.set(c1, new Set());
+    if (!linkedGraph.has(c2)) linkedGraph.set(c2, new Set());
+    linkedGraph.get(c1).add(c2);
+    linkedGraph.get(c2).add(c1);
+  };
+
+  for (let ci = 0; ci < clusters.length; ci++) {
+    clusters[ci]._hasRopeLink = false;
+  }
+
+  if (Array.isArray(S.physicsConstraints)) {
+    for (let ri = 0; ri < S.physicsConstraints.length; ri++) {
+      const c = S.physicsConstraints[ri];
+      if (!c || c.type !== 'rope') continue;
+      const bA = byId.get(c.blockAId);
+      const bB = byId.get(c.blockBId);
+      if (!bA || !bB || bA._depletedDisabled || bB._depletedDisabled) continue;
+      const clA = bA._physCluster;
+      const clB = bB._physCluster;
+      if (!clA && !clB) continue;
+      if (clA && clA === clB) continue;
+      if (clA) clA._hasRopeLink = true;
+      if (clB) clB._hasRopeLink = true;
+      activeRopes.push({ c, bA, bB, clA, clB });
+      if (clA && clB) addGraphLink(clA, clB);
+    }
+  }
+
+  for (let i = 0; i < clusters.length; i++) {
+    const cA = clusters[i];
+    for (let j = i + 1; j < clusters.length; j++) {
+      const cB = clusters[j];
+      let touching = false;
+      for (let ma = 0; ma < cA.members.length && !touching; ma++) {
+        const ba = cA.members[ma];
+        for (let mb = 0; mb < cB.members.length; mb++) {
+          const bb = cB.members[mb];
+          if (
+            ba.x1 + 0.35 >= bb.x0 && ba.x0 - 0.35 <= bb.x1 &&
+            ba.y1 + 0.35 >= bb.y0 && ba.y0 - 0.35 <= bb.y1 &&
+            ba.z1 + 0.35 >= bb.z0 && ba.z0 - 0.35 <= bb.z1
+          ) {
+            touching = true;
+            break;
+          }
+        }
+      }
+      if (touching) addGraphLink(cA, cB);
+    }
+  }
+
+  for (let ci = 0; ci < clusters.length; ci++) {
+    const cl = clusters[ci];
+    cl.anyInLiquid = false;
+    cl._suppressAntiGravOnLand = false;
+    for (let mi = 0; mi < cl.members.length; mi++) {
+      const mb = cl.members[mi];
+      for (let li = 0; li < all.length; li++) {
+        const liq = all[li];
+        if (liq === mb || liq._depletedDisabled || liq.matterState !== 'liquid') continue;
+        if (liq.components && !liq.components.physics?.enabled) continue;
+        if (liq.liquidPhysicsEnabled === false) continue;
+        if (mb.x1 > liq.x0 && mb.x0 < liq.x1 && mb.z1 > liq.z0 && mb.z0 < liq.z1 && mb.y1 > liq.y0 && mb.y0 < liq.y1) {
+          cl.anyInLiquid = true;
+          break;
+        }
+      }
+    }
+  }
+
+  const visitedPre = new Set();
+  for (let ci = 0; ci < clusters.length; ci++) {
+    const startCl = clusters[ci];
+    if (visitedPre.has(startCl)) continue;
+    const comp = [];
+    const q = [startCl];
+    visitedPre.add(startCl);
+    while (q.length > 0) {
+      const cur = q.shift();
+      comp.push(cur);
+      const nbSet = linkedGraph.get(cur);
+      if (nbSet) {
+        for (const nb of nbSet) {
+          if (!visitedPre.has(nb)) {
+            visitedPre.add(nb);
+            q.push(nb);
+          }
+        }
+      }
+    }
+    let totalGroupNetWeight = 0;
+    let groupInWater = false;
+    for (const g of comp) {
+      totalGroupNetWeight += g.totalNetWeight;
+      for (const m of g.members) totalGroupNetWeight += (m._externalLoadWeight || 0);
+      if (g.anyInLiquid) groupInWater = true;
+    }
+    if (!groupInWater && totalGroupNetWeight > 0) {
+      for (const g of comp) {
+        g._suppressAntiGravOnLand = true;
+      }
+    }
+  }
+
+  // 4. Интеграция сил
+  const _angleBox = { angle: 0 };
+
+  for (let ci = 0; ci < clusters.length; ci++) {
+    const cl = clusters[ci];
+    if (cl.isStaticAnchored || cl.members.some(m => m._isCarriedByPlayer)) {
+      cl.vx = 0; cl.vy = 0; cl.vz = 0;
+      cl.wx = 0; cl.wy = 0; cl.wz = 0;
+      continue;
+    }
+
+    let forceX = 0;
+    let forceY = 0;
+    let forceZ = 0;
+    let maxLiqDrag = 0;
+    let anyInLiquid = false;
+    let totalRiderMomentX = 0;
+    let totalRiderMomentZ = 0;
+    let totalBuoyancyMomentX = 0;
+    let totalBuoyancyMomentZ = 0;
+    let maxSpanXZ = 1.0;
+
+    const totalRiderMass = cl.members.reduce((acc, m) => acc + (m._externalLoadWeight || 0), 0);
+    const clusterNetWeightWithLoad = cl.totalNetWeight + totalRiderMass;
+    const suppressNegLift = cl._suppressAntiGravOnLand || (!cl.anyInLiquid && clusterNetWeightWithLoad > 0);
+
+    for (let mi = 0; mi < cl.members.length; mi++) {
+      const mb = cl.members[mi];
+      if (!mb.components?.physics?.enabled || !mb.isDynamicPhysics || mb.matterState === 'liquid') continue;
+
+      const w = Number.isNaN(Number(mb.weight)) ? 15 : Number(mb.weight);
+      const externalLoad = mb._externalLoadWeight || 0;
+      const rx = mb.m.position.x - cl.com.x;
+      const rz = mb.m.position.z - cl.com.z;
+      maxSpanXZ = Math.max(maxSpanXZ, Math.hypot(rx, rz) + Math.max(mb.w, mb.d) * 0.5);
+
+      totalRiderMomentX += mb._riderOffsetX || 0;
+      totalRiderMomentZ += mb._riderOffsetZ || 0;
+
+      let memberVertForce = 0;
+      if (w < 0) {
+        if (suppressNegLift) {
+          memberVertForce -= (Math.abs(w) * 0.5 + externalLoad) * worldGrav;
+        } else {
+          const antiGravLift = Math.abs(w) * worldGrav;
+          const heavyWorldSuppression = Math.max(0, worldGrav - 28) * 0.65 * Math.abs(w);
+          memberVertForce += (antiGravLift - heavyWorldSuppression) - externalLoad * worldGrav;
+        }
+      } else {
+        const lowGravFloat = worldGrav < 9 ? (9 - worldGrav) * 1.4 : 0;
+        const effectiveW = Math.max(-2.5, w - lowGravFloat) + externalLoad;
+        memberVertForce -= effectiveW * worldGrav;
+      }
+
+      let inLiq = false;
+      for (let li = 0; li < all.length; li++) {
+        const liq = all[li];
+        if (liq === mb || liq._depletedDisabled || liq.matterState !== 'liquid') continue;
+        if (liq.components && !liq.components.physics?.enabled) continue;
+        if (liq.liquidPhysicsEnabled === false) continue;
+
+        if (
+          mb.x1 > liq.x0 && mb.x0 < liq.x1 &&
+          mb.z1 > liq.z0 && mb.z0 < liq.z1 &&
+          mb.y1 > liq.y0 && mb.y0 < liq.y1
+        ) {
+          inLiq = true;
+          anyInLiquid = true;
+          maxLiqDrag = Math.max(maxLiqDrag, clamp(Number(liq.liquidDrag) || 4.2, 1.5, 25));
+
+          const subH = clamp(liq.y1 - mb.y0, 0, mb.h);
+          const subRatio = clamp(subH / Math.max(0.15, mb.h), 0, 1.0);
+          const maxBuoyancyKg = clamp(Number(liq.liquidBuoyancy) || 85, 1, 5000);
+
+          const archimedesForce = subRatio * maxBuoyancyKg * worldGrav;
+          memberVertForce += archimedesForce;
+
+          if (liq.conveyorVx || liq.conveyorVz) {
+            forceX += (liq.axisX.x * (liq.conveyorVx || 0) + liq.axisZ.x * (liq.conveyorVx || 0)) * 32 * subRatio;
+            forceZ += (liq.axisX.z * (liq.conveyorVx || 0) + liq.axisZ.z * (liq.conveyorVz || 0)) * 32 * subRatio;
+          }
+          break;
+        }
+      }
+      mb.physInLiquid = inLiq;
+      forceY += memberVertForce;
+
+      totalBuoyancyMomentX += rx * (memberVertForce / Math.max(1, worldGrav));
+      totalBuoyancyMomentZ += rz * (memberVertForce / Math.max(1, worldGrav));
+    }
+
+    cl.anyInLiquid = anyInLiquid;
+    cl.netForceY = forceY;
+    const invM = 1 / Math.max(0.5, cl.totalInertialMass + totalRiderMass);
+    cl.vx = clamp(cl.vx + forceX * invM * dt, -28, 28);
+    cl.vy = clamp(cl.vy + forceY * invM * dt, -35, 14);
+    cl.vz = clamp(cl.vz + forceZ * invM * dt, -28, 28);
+
+    if (anyInLiquid) {
+      const linDamp = Math.exp(-maxLiqDrag * dt);
+      cl.vx *= linDamp;
+      cl.vy *= Math.exp(-maxLiqDrag * 1.35 * dt);
+      cl.vz *= linDamp;
+
+      const effectiveStiffness = Math.max(40, cl.totalInertialMass * 0.75) * Math.max(1.1, maxSpanXZ * 0.5);
+      const netTiltX = (totalRiderMomentX - totalBuoyancyMomentX * 0.35) / effectiveStiffness;
+      const netTiltZ = (totalRiderMomentZ - totalBuoyancyMomentZ * 0.35) / effectiveStiffness;
+
+      const waveX = Math.sin(S.time * 2.2 + cl.com.x * 0.4) * 0.02;
+      const waveZ = Math.cos(S.time * 1.9 + cl.com.z * 0.4) * 0.02;
+
+      cl.waterTiltX = clamp(netTiltX * 0.72 + waveX, -0.44, 0.44);
+      cl.waterTiltZ = clamp(netTiltZ * 0.72 + waveZ, -0.44, 0.44);
+
+      _vTargetUp.set(cl.waterTiltX, 1.0, cl.waterTiltZ).normalize();
+      computeAlignmentToTargetUp(cl.root, _vTargetUp, _vTiltAxis, _angleBox);
+
+      const springK = 18.0;
+      const dampK = 5.5;
+      cl.wx += (_vTiltAxis.x * _angleBox.angle * springK - cl.wx * dampK) * dt;
+      cl.wy += (_vTiltAxis.y * _angleBox.angle * springK - cl.wy * dampK) * dt;
+      cl.wz += (_vTiltAxis.z * _angleBox.angle * springK - cl.wz * dampK) * dt;
+    } else {
+      if (cl.vy > 0) {
+        const airDragUp = 0.16 * cl.vy * cl.vy;
+        cl.vy = Math.max(0, cl.vy - airDragUp * dt);
+      }
+      cl.vy = clamp(cl.vy, -35, 11.0);
+      const airDamp = Math.pow(cl._hasRopeLink ? 0.25 : 0.82, dt);
+      cl.vx *= airDamp;
+      cl.vz *= airDamp;
+
+      computeAlignmentToTargetUp(cl.root, _vWorldUp, _vTiltAxis, _angleBox);
+      if (_angleBox.angle > 0.003) {
+        const airRestore = 10.5;
+        cl.wx += (_vTiltAxis.x * _angleBox.angle * airRestore - cl.wx * 6.0) * dt;
+        cl.wy += (_vTiltAxis.y * _angleBox.angle * airRestore - cl.wy * 6.0) * dt;
+        cl.wz += (_vTiltAxis.z * _angleBox.angle * airRestore - cl.wz * 6.0) * dt;
+      } else {
+        cl.wx *= Math.pow(0.08, dt);
+        cl.wy *= Math.pow(0.08, dt);
+        cl.wz *= Math.pow(0.08, dt);
+      }
+    }
+  }
+
+  // 5. ПЕРЕДАЧА ИМПУЛЬСА ПО ВЕРЁВКАМ
+  if (activeRopes.length > 0) {
+    const visitedRopeComp = new Set();
+    for (let ci = 0; ci < clusters.length; ci++) {
+      const startCl = clusters[ci];
+      if (visitedRopeComp.has(startCl) || !linkedGraph.has(startCl)) continue;
+
+      const group = [];
+      const q = [startCl];
+      visitedRopeComp.add(startCl);
+      while (q.length > 0) {
+        const cur = q.shift();
+        group.push(cur);
+        const nbSet = linkedGraph.get(cur);
+        if (nbSet) {
+          for (const nb of nbSet) {
+            if (!visitedRopeComp.has(nb)) {
+              visitedRopeComp.add(nb);
+              q.push(nb);
+            }
+          }
+        }
+      }
+
+      if (group.length > 1 && !group.some(g => g.isStaticAnchored)) {
+        let sumNetForceY = 0;
+        let sumInertialMass = 0;
+        for (const g of group) {
+          sumNetForceY += g.netForceY || 0;
+          sumInertialMass += g.totalInertialMass;
+        }
+        if (sumNetForceY > 0) {
+          const sharedVyAccel = (sumNetForceY / Math.max(1, sumInertialMass)) * dt;
+          let avgVy = 0;
+          for (const g of group) avgVy += g.vy * g.totalInertialMass;
+          avgVy = clamp(avgVy / Math.max(1, sumInertialMass) + sharedVyAccel * 0.5, -30, 10.5);
+          for (const g of group) {
+            g.vy = g.vy * 0.25 + avgVy * 0.75;
+          }
+        }
+      }
+    }
+
+    for (let iter = 0; iter < 8; iter++) {
+      for (let ri = 0; ri < activeRopes.length; ri++) {
+        const { c, bA, bB, clA, clB } = activeRopes[ri];
+        const aMovable = Boolean(clA && !clA.isStaticAnchored && !clA.members.some(m => m._isCarriedByPlayer));
+        const bMovable = Boolean(clB && !clB.isStaticAnchored && !clB.members.some(m => m._isCarriedByPlayer));
+        if (!aMovable && !bMovable) continue;
+
+        const pA = new THREE.Vector3(c.localAnchorA?.x || 0, c.localAnchorA?.y || 0, c.localAnchorA?.z || 0);
+        bA.m.localToWorld(pA);
+        const pB = new THREE.Vector3(c.localAnchorB?.x || 0, c.localAnchorB?.y || 0, c.localAnchorB?.z || 0);
+        bB.m.localToWorld(pB);
+
+        const dx = pB.x - pA.x;
+        const dy = pB.y - pA.y;
+        const dz = pB.z - pA.z;
+        const dist = Math.hypot(dx, dy, dz);
+        const maxL = Math.max(0.15, Number(c.maxLength) || 4.0);
+        const maxAllowed = maxL * (1.0 + (Number(c.springiness) || 0) * 0.35);
+
+        if (dist >= maxAllowed * 0.98 && dist > 0.0001) {
+          const nx = dx / dist;
+          const ny = dy / dist;
+          const nz = dz / dist;
+
+          const wA = aMovable ? (1 / Math.max(1, clA.totalInertialMass)) : 0;
+          const wB = bMovable ? (1 / Math.max(1, clB.totalInertialMass)) : 0;
+          const wSum = wA + wB;
+          if (wSum <= 0) continue;
+
+          const shareA = wA / wSum;
+          const shareB = wB / wSum;
+
+          const rvx = (bMovable ? clB.vx : 0) - (aMovable ? clA.vx : 0);
+          const rvy = (bMovable ? clB.vy : 0) - (aMovable ? clA.vy : 0);
+          const rvz = (bMovable ? clB.vz : 0) - (aMovable ? clA.vz : 0);
+          const sepVel = rvx * nx + rvy * ny + rvz * nz;
+
+          if (sepVel > 0) {
+            if (aMovable) {
+              clA.vx += nx * sepVel * shareA;
+              clA.vy += ny * sepVel * shareA;
+              clA.vz += nz * sepVel * shareA;
+            }
+            if (bMovable) {
+              clB.vx -= nx * sepVel * shareB;
+              clB.vy -= ny * sepVel * shareB;
+              clB.vz -= nz * sepVel * shareB;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 6. Применение скоростей и разрешение коллизий с миром
+  for (let ci = 0; ci < clusters.length; ci++) {
+    const cl = clusters[ci];
+    if (cl.isStaticAnchored || cl.members.some(m => m._isCarriedByPlayer)) continue;
+
+    cl.wx = clamp(cl.wx, -5.5, 5.5);
+    cl.wy = clamp(cl.wy, -5.5, 5.5);
+    cl.wz = clamp(cl.wz, -5.5, 5.5);
+
+    const angLen = Math.hypot(cl.wx, cl.wy, cl.wz);
+    let rotQ = null;
+    if (angLen > 0.001) {
+      _vTmp2.set(cl.wx / angLen, cl.wy / angLen, cl.wz / angLen);
+      _qStep.setFromAxisAngle(_vTmp2, angLen * dt);
+      rotQ = _qStep;
+    }
+
+    transformWeldedCluster(cl, cl.vx * dt, cl.vy * dt, cl.vz * dt, rotQ, cl.com);
+
+    let anyGrounded = false;
+
+    for (let mi = 0; mi < cl.members.length; mi++) {
+      const b = cl.members[mi];
+      if (!b.components?.physics?.enabled || b.matterState !== 'solid') continue;
+      b.physGrounded = false;
+
+      for (let j = 0; j < all.length; j++) {
+        const other = all[j];
+        if (other === b || other._depletedDisabled || other._isCarriedByPlayer) continue;
+        if (cl.members.includes(other)) continue;
+        if (areBlocksLinkedByConstraint(b, other)) continue;
+        if (other.components && !other.components.physics?.enabled) continue;
+        if (other.matterState !== 'solid') continue;
+        if (other.logicRuntime && other.logicRuntime.ghostOpen) continue;
+
+        let colHit = null;
+        const bShape = (!b.colliderShape || b.colliderShape === 'auto') ? (b.shape || 'box') : b.colliderShape;
+        const oShape = (!other.colliderShape || other.colliderShape === 'auto') ? (other.shape || 'box') : other.colliderShape;
+
+        if (bShape === 'torus') {
+          colHit = resolveTorusVsBlockCollision(b, other);
+        } else if (oShape === 'torus') {
+          const rev = resolveTorusVsBlockCollision(other, b);
+          if (rev) colHit = { pen: rev.pen, nx: -rev.nx, ny: -rev.ny, nz: -rev.nz };
+        } else {
+          const overlapX = Math.min(b.x1, other.x1) - Math.max(b.x0, other.x0);
+          if (overlapX <= 0) continue;
+          const overlapY = Math.min(b.y1, other.y1) - Math.max(b.y0, other.y0);
+          if (overlapY <= 0) continue;
+          const overlapZ = Math.min(b.z1, other.z1) - Math.max(b.z0, other.z0);
+          if (overlapZ <= 0) continue;
+
+          const dx = b.m.position.x - other.m.position.x;
+          const dy = b.m.position.y - other.m.position.y;
+          const dz = b.m.position.z - other.m.position.z;
+
+          if (overlapY <= overlapX && overlapY <= overlapZ) {
+            colHit = { pen: overlapY, nx: 0, ny: dy >= 0 ? 1 : -1, nz: 0 };
+          } else if (overlapX <= overlapZ) {
+            colHit = { pen: overlapX, nx: dx >= 0 ? 1 : -1, ny: 0, nz: 0 };
+          } else {
+            colHit = { pen: overlapZ, nx: 0, ny: 0, nz: dz >= 0 ? 1 : -1 };
+          }
+        }
+
+        if (!colHit || colHit.pen <= 0) continue;
+
+        const otherCl = other._physCluster;
+        const otherMovable = Boolean(other.isDynamicPhysics && (!otherCl || !otherCl.isStaticAnchored));
+
+        if (Math.abs(colHit.ny) > 0.5) {
+          if (colHit.ny > 0) {
+            if (otherMovable && otherCl) {
+              const m1 = cl.totalInertialMass;
+              const m2 = otherCl.totalInertialMass;
+              const tot = m1 + m2;
+              transformWeldedCluster(cl, 0, colHit.pen * (m2 / tot), 0, null, null);
+              transformWeldedCluster(otherCl, 0, -colHit.pen * (m1 / tot), 0, null, null);
+              if (cl.vy < otherCl.vy) {
+                const avgVy = (cl.vy * m1 + otherCl.vy * m2) / tot;
+                cl.vy = avgVy;
+                otherCl.vy = avgVy;
+              }
+            } else {
+              transformWeldedCluster(cl, 0, colHit.pen, 0, null, null);
+              if (cl.vy < 0) {
+                const bounce = Math.max(b.bounciness || 0, other.bounciness || 0);
+                cl.vy = bounce > 0 ? Math.min(14, Math.max(bounce * 0.7, -cl.vy * 0.5)) : 0;
+              }
+            }
+            b.physGrounded = true;
+            anyGrounded = true;
+
+            cl.vx *= Math.pow(0.015, dt);
+            cl.vz *= Math.pow(0.015, dt);
+          } else {
+            transformWeldedCluster(cl, 0, -colHit.pen, 0, null, null);
+            if (cl.vy > 0) cl.vy = 0;
+          }
+        } else {
+          if (otherMovable && otherCl) {
+            const m1 = cl.totalInertialMass;
+            const m2 = otherCl.totalInertialMass;
+            const tot = m1 + m2;
+            const s1 = m2 / tot;
+            const s2 = m1 / tot;
+            transformWeldedCluster(cl, colHit.nx * colHit.pen * s1, 0, colHit.nz * colHit.pen * s1, null, null);
+            transformWeldedCluster(otherCl, -colHit.nx * colHit.pen * s2, 0, -colHit.nz * colHit.pen * s2, null, null);
+
+            const relVx = cl.vx - otherCl.vx;
+            const relVz = cl.vz - otherCl.vz;
+            const closingSpd = -(relVx * colHit.nx + relVz * colHit.nz);
+
+            if (closingSpd > 0) {
+              const restitution = clamp(Math.max(b.bounciness || 0, other.bounciness || 0) * 0.05 + 0.28, 0.2, 0.75);
+              const jImpulse = ((1 + restitution) * closingSpd) / (1 / m1 + 1 / m2);
+              const ix = colHit.nx * jImpulse;
+              const iz = colHit.nz * jImpulse;
+
+              cl.vx = clamp(cl.vx + ix / m1, -26, 26);
+              cl.vz = clamp(cl.vz + iz / m1, -26, 26);
+              otherCl.vx = clamp(otherCl.vx - ix / m2, -26, 26);
+              otherCl.vz = clamp(otherCl.vz - iz / m2, -26, 26);
+            }
+          } else {
+            transformWeldedCluster(cl, colHit.nx * colHit.pen, 0, colHit.nz * colHit.pen, null, null);
+            cl.vx *= -0.2;
+            cl.vz *= -0.2;
+          }
+        }
+      }
+
+      const horizSpd = Math.hypot(cl.vx, cl.vz);
+      if (horizSpd > 7.5 && (b._hitEntCd || 0) <= 0) {
+        const mBlk = cl.totalInertialMass;
+        const targets = [...S.customNPCs];
+        if (player && !S.playerDead && !b._riderIsPlayer && player._supportBlock !== b) {
+          targets.push(player);
+        }
+
+        for (let ti = 0; ti < targets.length; ti++) {
+          const ent = targets[ti];
+          if (!ent || ent._deadCooldown > 0) continue;
+          if (ent.y >= b.y1 - 0.35) continue;
+          const er = ent.colliderRadius || 0.42;
+          const eh = ent.colliderHeight || 2.5;
+          if (!testPlayerOBB(ent.x, ent.y, ent.z, er + 0.08, eh, b)) continue;
+
+          const mEnt = getEntityWeight(ent);
+          const massRatio = mBlk / (mBlk + mEnt * 0.85);
+          const impactMomentum = horizSpd * massRatio;
+
+          if (impactMomentum > 4.5) {
+            b._hitEntCd = 0.5;
+            const nxI = cl.vx / horizSpd;
+            const nzI = cl.vz / horizSpd;
+            const kbForce = clamp(impactMomentum * 1.15, 4, 18);
+
+            ent.vxKnock = (ent.vxKnock || 0) + nxI * kbForce;
+            ent.vzKnock = (ent.vzKnock || 0) + nzI * kbForce;
+            ent.vy = clamp((ent.vy || 0) + 3.0, -10, 7.5);
+            ent.grounded = false;
+
+            const slowFactor = clamp(1 - (mEnt / (mBlk + mEnt)) * 0.65, 0.25, 0.9);
+            cl.vx *= slowFactor;
+            cl.vz *= slowFactor;
+
+            if (impactMomentum > 7.5 && ent.hpEnabled) {
+              const dmg = Math.round(clamp((impactMomentum - 6.0) * 3.0, 5, 100));
+              dealDamage(ent, dmg, null, 0);
+            } else {
+              sfx.hit?.();
+            }
+            break;
+          }
+        }
+      }
+      if (b._hitEntCd > 0) b._hitEntCd = Math.max(0, b._hitEntCd - dt);
+    }
+
+    if (anyGrounded && !cl.anyInLiquid) {
+      computeAlignmentToTargetUp(cl.root, _vWorldUp, _vTiltAxis, _angleBox);
+      if (_angleBox.angle > 0.004) {
+        const pullTorque = worldGrav * 0.55 * Math.sin(_angleBox.angle * 1.8);
+        cl.wx = (cl.wx + _vTiltAxis.x * pullTorque * dt) * Math.pow(0.02, dt);
+        cl.wy = (cl.wy + _vTiltAxis.y * pullTorque * dt) * Math.pow(0.02, dt);
+        cl.wz = (cl.wz + _vTiltAxis.z * pullTorque * dt) * Math.pow(0.02, dt);
+      } else {
+        cl.wx = 0; cl.wy = 0; cl.wz = 0;
+      }
+    }
+
+    cl.anyGrounded = anyGrounded;
+
+    for (let mi = 0; mi < cl.members.length; mi++) {
+      const mb = cl.members[mi];
+      mb.physVx = cl.vx;
+      mb.physVy = cl.vy;
+      mb.physVz = cl.vz;
+      mb.physWx = cl.wx;
+      mb.physWy = cl.wy;
+      mb.physWz = cl.wz;
+      if (cl.anyGrounded) mb.physGrounded = true;
+    }
+  }
+
+  // 7. Финальная позиционная коррекция верёвок С ГАШЕНИЕМ СКОРОСТИ РАСТЯЖЕНИЯ (убирает вибрацию мостов!)
+  for (let iter = 0; iter < 8; iter++) {
+    for (let ri = 0; ri < activeRopes.length; ri++) {
+      const { c, bA, bB, clA, clB } = activeRopes[ri];
+      const aMovable = Boolean(clA && !clA.isStaticAnchored && !clA.members.some(m => m._isCarriedByPlayer));
+      const bMovable = Boolean(clB && !clB.isStaticAnchored && !clB.members.some(m => m._isCarriedByPlayer));
+      if (!aMovable && !bMovable) continue;
+
+      const pA = new THREE.Vector3(c.localAnchorA?.x || 0, c.localAnchorA?.y || 0, c.localAnchorA?.z || 0);
+      bA.m.localToWorld(pA);
+      const pB = new THREE.Vector3(c.localAnchorB?.x || 0, c.localAnchorB?.y || 0, c.localAnchorB?.z || 0);
+      bB.m.localToWorld(pB);
+
+      const dx = pB.x - pA.x;
+      let dy = pB.y - pA.y;
+      const dz = pB.z - pA.z;
+      const dist = Math.hypot(dx, dy, dz);
+      const maxL = Math.max(0.15, Number(c.maxLength) || 4.0);
+      const maxAllowed = maxL * (1.0 + (Number(c.springiness) || 0) * 0.35);
+
+      if (dist > maxAllowed && dist > 0.001) {
+        const excess = dist - maxAllowed;
+        let wA = aMovable ? (1 / Math.max(1, clA.totalInertialMass)) : 0;
+        let wB = bMovable ? (1 / Math.max(1, clB.totalInertialMass)) : 0;
+
+        if ((clA && clA._suppressAntiGravOnLand && clA.anyGrounded) || (clB && clB._suppressAntiGravOnLand && clB.anyGrounded)) {
+          dy = 0;
+        }
+
+        const wSum = wA + wB;
+        if (wSum <= 0) continue;
+
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const nz = dz / dist;
+        const sA = wA / wSum;
+        const sB = wB / wSum;
+
+        if (aMovable && wA > 0) {
+          transformWeldedCluster(clA, nx * excess * sA, ny * excess * sA, nz * excess * sA, null, null);
+        }
+        if (bMovable && wB > 0) {
+          transformWeldedCluster(clB, -nx * excess * sB, -ny * excess * sB, -nz * excess * sB, null, null);
+        }
+
+        // Гасим скорость, направленную на растяжение троса, чтобы доска моста не падала и не дёргалась каждый кадр
+        const rvx = (bMovable ? clB.vx : 0) - (aMovable ? clA.vx : 0);
+        const rvy = (bMovable ? clB.vy : 0) - (aMovable ? clA.vy : 0);
+        const rvz = (bMovable ? clB.vz : 0) - (aMovable ? clA.vz : 0);
+        const sepVel = rvx * nx + rvy * ny + rvz * nz;
+        if (sepVel > 0) {
+          if (aMovable && wA > 0) {
+            clA.vx = (clA.vx + nx * sepVel * sA) * 0.92;
+            clA.vy = (clA.vy + ny * sepVel * sA) * 0.92;
+            clA.vz = (clA.vz + nz * sepVel * sA) * 0.92;
+          }
+          if (bMovable && wB > 0) {
+            clB.vx = (clB.vx - nx * sepVel * sB) * 0.92;
+            clB.vy = (clB.vy - ny * sepVel * sB) * 0.92;
+            clB.vz = (clB.vz - nz * sepVel * sB) * 0.92;
+          }
+        }
+      }
+    }
+  }
+
+  for (let ci = 0; ci < clusters.length; ci++) {
+    const cl = clusters[ci];
+    for (let mi = 0; mi < cl.members.length; mi++) {
+      const mb = cl.members[mi];
+      mb.physVx = cl.vx;
+      mb.physVy = cl.vy;
+      mb.physVz = cl.vz;
+      mb.physWx = cl.wx;
+      mb.physWy = cl.wy;
+      mb.physWz = cl.wz;
+      if (cl.anyGrounded) mb.physGrounded = true;
+    }
+  }
+
+  // 8. Единовременный перенос игрока на итоговую дельту смещения опорного блока за кадр (без масштабно-искажённого localToWorld!)
+  if (
+    player &&
+    !S.playerDead &&
+    !player.isFlying &&
+    (player.grounded || (player._groundedAnimTimer || 0) > 0) &&
+    (player._jumpGraceTimer || 0) <= 0 &&
+    !(S.keys.Space || S.btnJump)
+  ) {
+    const sup = player._supportBlock;
+    if (sup && !sup._depletedDisabled && sup.isDynamicPhysics && sup._frameStartX !== undefined) {
+      player.x += sup.m.position.x - sup._frameStartX;
+      player.y += sup.m.position.y - sup._frameStartY;
+      player.z += sup.m.position.z - sup._frameStartZ;
+      player.grounded = true;
+      player._groundedAnimTimer = 0.18;
+    }
+  }
+
+  renderPhysicsConstraintsVisuals();
+} 
+

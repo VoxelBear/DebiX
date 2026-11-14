@@ -8,7 +8,8 @@ import {
   updateTag,
   normalizeItemData,
   normalizeCharacterGripPoints,
-  buildItemGroup
+  buildItemGroup,
+  updateGroupRootHitbox
 } from './CharacterRig.js';
 
 export function attachRigToEntity(ent) {
@@ -37,11 +38,22 @@ export function clearWorldItems() {
   S.activeProjectiles.length = 0;
 }
 
-export function spawnWorldItem(itemData, x = 0, y = 2, z = 0, vx = 0, vy = 0, vz = 0) {
+export function spawnWorldItem(itemData, x = 0, y = 2, z = 0, vx = 0, vy = 0, vz = 0, opts = {}) {
   const data = normalizeItemData(JSON.parse(JSON.stringify(itemData)));
-  const wid = 'witem_' + S.itemIdCounter++;
+  const wid = opts.id || ('witem_' + S.itemIdCounter++);
   const group = buildItemGroup(data, { isProjectile: false, showMarkers: false, applyGripOffset: false });
+
+  const rotX = Number(opts.rotX) || 0;
+  const rotY = Number(opts.rotY) || 0;
+  const rotZ = Number(opts.rotZ) || 0;
+  const scaleX = Math.max(0.1, Number(opts.scaleX) || 1);
+  const scaleY = Math.max(0.1, Number(opts.scaleY) || 1);
+  const scaleZ = Math.max(0.1, Number(opts.scaleZ) || 1);
+
   group.position.set(x, y, z);
+  group.rotation.set(rotX, rotY, rotZ);
+  group.scale.set(scaleX, scaleY, scaleZ);
+  updateGroupRootHitbox(group);
   scene.add(group);
 
   const tag = makeTagSprite(280, 90, 2.8, 0.95);
@@ -50,7 +62,7 @@ export function spawnWorldItem(itemData, x = 0, y = 2, z = 0, vx = 0, vy = 0, vz
     ? `Прочность: ${Math.ceil(data.durability)}/${data.maxDurability}`
     : (data.useType === 'ranged' ? `Боезапас: ${data.ammo}/${data.magSize}` : data.useType);
   updateTag(tag, modeTxt, data.name, subTxt);
-  tag.position.set(x, y + 1.65, z);
+  tag.position.set(x, y + 1.65 * Math.max(1, scaleY), z);
   scene.add(tag);
 
   const worldEntry = {
@@ -64,7 +76,12 @@ export function spawnWorldItem(itemData, x = 0, y = 2, z = 0, vx = 0, vy = 0, vz
     vx,
     vy,
     vz,
-    rotY: 0,
+    rotX,
+    rotY,
+    rotZ,
+    scaleX,
+    scaleY,
+    scaleZ,
     grounded: false,
     pickupCooldown: 0.35
   };
@@ -89,13 +106,27 @@ export function rebuildWorldItemVisual(
     showMarkers,
     applyGripOffset: false
   });
+
   if (S.itemStudioOpen && S.selectedRef?.worldEntry === worldEntry) {
     group.position.set(ITEM_STUDIO_ORIGIN.x, ITEM_STUDIO_ORIGIN.y + 1.25, ITEM_STUDIO_ORIGIN.z);
     group.rotation.set(0, 0, 0);
+    group.scale.set(1, 1, 1);
   } else {
     group.position.set(worldEntry.x, worldEntry.y, worldEntry.z);
-    group.rotation.y = worldEntry.rotY || 0;
+    group.rotation.set(
+      worldEntry.rotX || 0,
+      worldEntry.rotY || 0,
+      worldEntry.rotZ || 0
+    );
+    group.scale.set(
+      Math.max(0.1, worldEntry.scaleX || 1),
+      Math.max(0.1, worldEntry.scaleY || 1),
+      Math.max(0.1, worldEntry.scaleZ || 1)
+    );
   }
+
+  updateGroupRootHitbox(group);
+
   group.traverse(o => {
     o.userData.editorRef = { kind: 'world_item', worldEntry };
   });
@@ -109,16 +140,21 @@ export function rebuildWorldItemVisual(
       ? `Прочность: ${Math.ceil(data.durability)}/${data.maxDurability}`
       : (data.useType === 'ranged' ? `Боезапас: ${data.ammo}/${data.magSize}` : data.useType);
     updateTag(worldEntry.tag, modeTxt, data.name, subTxt);
-    worldEntry.tag.position.set(worldEntry.x, worldEntry.y + 1.65, worldEntry.z);
+    const sy = Math.max(1, worldEntry.scaleY || 1);
+    worldEntry.tag.position.set(worldEntry.x, worldEntry.y + 1.65 * sy, worldEntry.z);
   }
 }
 
 export function getActiveHeldItem(ent = S.player) {
   if (!ent) return null;
-  if (ent.carriedItem) return null; // Когда в 2 руках контейнер, одноручный предмет убран
-  if (!ent.isP) return ent.equippedItem || null;
+  if (ent.carriedItem) return null;
+  if (!ent.isP) {
+    if (ent.isCustomNPC && ent.aiModules?.worldPhysics?.canHoldItems === false) {
+      return null;
+    }
+    return ent.equippedItem || null;
+  }
   if (!Array.isArray(ent.inventory)) return null;
-  // Слот 0 — кулак, слоты 1..3 в режиме очереди зарезервированы под спид/грав/спавн, если там нет кастомного предмета
   return ent.inventory[S.activeSlot] || null;
 }
 
@@ -179,37 +215,43 @@ export function pickupWorldItem(ent, worldEntry) {
   const idx = S.worldItems.indexOf(worldEntry);
   if (idx < 0) return false;
 
+  const pickedWorldId = worldEntry.id;
   const item = normalizeItemData(worldEntry.item);
 
-  // Если это 2-ручный переносимый контейнер (carried)
+  const removeWorldEntryAndSync = () => {
+    scene.remove(worldEntry.group);
+    scene.remove(worldEntry.tag);
+    S.worldItems.splice(idx, 1);
+    if (window.__debixSyncWorldItemDelete && !S.isApplyingRemoteSync) {
+      window.__debixSyncWorldItemDelete(pickedWorldId);
+    }
+  };
+
   if (item.holdMode === 'carried') {
     if (ent.carriedItem) {
       dropHeldOrCarriedItem(ent, 2.5);
     }
     ent.carriedItem = item;
-    scene.remove(worldEntry.group);
-    scene.remove(worldEntry.tag);
-    S.worldItems.splice(idx, 1);
+    removeWorldEntryAndSync();
     syncEntityHeldItemMesh(ent);
     renderHotbarUI();
+    if (ent.isP && window.__debixSendImmediateFullState) {
+      window.__debixSendImmediateFullState();
+    }
     sfx.jump();
     showBanner(`📦 Ты взял в руки «${item.name}»! [ЛКМ] — бросить, [G/E] — поставить.`, '#ffce3a');
     return true;
   }
 
-  // Одноручный предмет (held)
   if (!Array.isArray(ent.inventory)) {
     ent.inventory = [null, null, null, null, null, null];
   }
 
-  // Если у игрока уже есть такой же метательный предмет — суммируем стак снарядов!
   if (item.useType === 'throwable') {
     const existingIdx = ent.inventory.findIndex(it => it && it.name === item.name && it.useType === 'throwable');
     if (existingIdx >= 0) {
       ent.inventory[existingIdx].stackCount = (ent.inventory[existingIdx].stackCount || 1) + (item.stackCount || 1);
-      scene.remove(worldEntry.group);
-      scene.remove(worldEntry.tag);
-      S.worldItems.splice(idx, 1);
+      removeWorldEntryAndSync();
       selectSlot(existingIdx);
       renderHotbarUI();
       sfx.cash();
@@ -218,14 +260,11 @@ export function pickupWorldItem(ent, worldEntry) {
     }
   }
 
-  // Если у игрока уже есть такое же стрелковое оружие — пополняем патроны в запасе!
   if (item.useType === 'ranged') {
     const existingIdx = ent.inventory.findIndex(it => it && it.name === item.name && it.useType === 'ranged');
     if (existingIdx >= 0) {
       ent.inventory[existingIdx].reserveAmmo = (ent.inventory[existingIdx].reserveAmmo || 0) + (item.ammo || item.magSize || 12);
-      scene.remove(worldEntry.group);
-      scene.remove(worldEntry.tag);
-      S.worldItems.splice(idx, 1);
+      removeWorldEntryAndSync();
       selectSlot(existingIdx);
       renderHotbarUI();
       sfx.cash();
@@ -234,7 +273,6 @@ export function pickupWorldItem(ent, worldEntry) {
     }
   }
 
-  // Ищем свободный слот в хотбаре (слоты 1..5, а слот 0 оставляем под Кулак)
   let targetSlot = -1;
   for (let s = 1; s < 6; s++) {
     if (!ent.inventory[s]) {
@@ -243,19 +281,19 @@ export function pickupWorldItem(ent, worldEntry) {
     }
   }
   if (targetSlot === -1) {
-    // Если все слоты заняты — заменяем текущий активный слот (или слот 4)
     targetSlot = S.activeSlot > 0 ? S.activeSlot : 4;
     if (ent.inventory[targetSlot]) {
       const old = ent.inventory[targetSlot];
       ent.inventory[targetSlot] = null;
-      spawnWorldItem(old, ent.x + Math.sin(ent.rot) * 1.2, ent.y + 1.2, ent.z + Math.cos(ent.rot) * 1.2, 0, 2, 0);
+      const droppedOld = spawnWorldItem(old, ent.x + Math.sin(ent.rot) * 1.2, ent.y + 1.2, ent.z + Math.cos(ent.rot) * 1.2, 0, 2, 0);
+      if (droppedOld && window.__debixSyncWorldItemUpsert && !S.isApplyingRemoteSync) {
+        window.__debixSyncWorldItemUpsert(droppedOld, false);
+      }
     }
   }
 
   ent.inventory[targetSlot] = item;
-  scene.remove(worldEntry.group);
-  scene.remove(worldEntry.tag);
-  S.worldItems.splice(idx, 1);
+  removeWorldEntryAndSync();
 
   selectSlot(targetSlot);
   renderHotbarUI();
@@ -282,7 +320,7 @@ export function dropHeldOrCarriedItem(ent = S.player, throwSpeed = 3.5, reasonMs
     ent.carriedItem = null;
     syncEntityHeldItemMesh(ent);
     renderHotbarUI();
-    spawnWorldItem(
+    const wi = spawnWorldItem(
       item,
       ent.x + fx * 1.35,
       ent.y + 1.35,
@@ -291,6 +329,12 @@ export function dropHeldOrCarriedItem(ent = S.player, throwSpeed = 3.5, reasonMs
       Math.max(1.5, throwSpeed * 0.45),
       fz * throwSpeed
     );
+    if (wi && window.__debixSyncWorldItemUpsert && !S.isApplyingRemoteSync) {
+      window.__debixSyncWorldItemUpsert(wi, false);
+    }
+    if (ent.isP && window.__debixSendImmediateFullState) {
+      window.__debixSendImmediateFullState();
+    }
     sfx.slap();
     if (reasonMsg) showBanner(reasonMsg, '#ff3e3e');
     else showBanner(`📦 Предмет «${item.name}» опущен на землю.`, '#ffce3a');
@@ -303,7 +347,7 @@ export function dropHeldOrCarriedItem(ent = S.player, throwSpeed = 3.5, reasonMs
     syncEntityHeldItemMesh(ent);
     renderHotbarUI();
     updateShopUI();
-    spawnWorldItem(
+    const wi = spawnWorldItem(
       held,
       ent.x + fx * 1.2,
       ent.y + 1.35,
@@ -312,6 +356,12 @@ export function dropHeldOrCarriedItem(ent = S.player, throwSpeed = 3.5, reasonMs
       Math.max(2.0, throwSpeed * 0.45),
       fz * throwSpeed
     );
+    if (wi && window.__debixSyncWorldItemUpsert && !S.isApplyingRemoteSync) {
+      window.__debixSyncWorldItemUpsert(wi, false);
+    }
+    if (window.__debixSendImmediateFullState) {
+      window.__debixSendImmediateFullState();
+    }
     sfx.slap();
     if (reasonMsg) showBanner(reasonMsg, '#ff3e3e');
     else showBanner(`📤 Выброшен предмет «${held.name}» [G]`, '#8fa0bd');
@@ -434,7 +484,7 @@ export function spawnPlayer(opts = {}) {
     id: 'player',
     isP: true,
     isCustomNPC: false,
-    name: opts.name || 'ТЫ (Игрок)',
+    name: S.playerName || opts.name || 'Игрок',
     qIdx: opts.qIdx ?? 0,
     x,
     y,
@@ -449,6 +499,10 @@ export function spawnPlayer(opts = {}) {
     maxHp: 100,
     baseMaxHp: 100,
     hpBarTimer: 0,
+    stamina: 100,
+    maxStamina: 100,
+    staminaExhausted: false,
+    isSprinting: false,
     meleeDamage: 25,
     aggressive: false,
     attackCooldown: 0,
@@ -457,6 +511,8 @@ export function spawnPlayer(opts = {}) {
     colliderHeight: 2.5,
     walkSpeed: 7.6,
     jumpPower: 10.2,
+    gait: opts.gait || 'normal',
+    isFlying: false,
     rig,
     tag,
     chat: '',
@@ -484,6 +540,120 @@ export function spawnPlayer(opts = {}) {
   refreshEntityTagWithHP(player);
   tag.position.set(x, y + 3.35, z);
   return player;
+}
+
+export function createDefaultNpcModules(opts = {}) {
+  const hasLegacyWander = opts.wander !== undefined ? !!opts.wander : true;
+  const hasLegacyAggr = !!opts.aggressive;
+
+  return {
+    worldPhysics: {
+      enabled: opts.worldPhysicsEnabled !== undefined ? !!opts.worldPhysicsEnabled : true,
+      collapsed: false,
+      gravityScale: 1.0,
+      fallDamage: true,
+      fallDamageThreshold: 16.5,
+      hazardDamage: true,
+      canSwim: true,
+      canHoldItems: true,
+      canPickupItems: true,
+      canInteractBlocks: true
+    },
+    navigation: {
+      enabled: true,
+      collapsed: false,
+      mode: hasLegacyWander ? 'wander' : 'stand',
+      gait: opts.gait || 'normal',
+      intelligence: (opts.intelligence === 'dumb' || opts.intelligence === 'low') ? 'dumb' : 'smart', // 'dumb' | 'smart'
+      walkSpeed: opts.walkSpeed ?? 5.4,
+      canSprint: true,
+      sprintMultiplier: 1.48,
+      jumpPower: opts.jumpPower ?? 10.2,
+      wanderRadius: 10.0,
+      followDist: 3.2,
+      canJump: true,
+      jumpGaps: true,
+      usePathfinding: true,
+      patrolLoop: 'loop',
+      waypoints: []
+    },
+    humanError: {
+      enabled: false,
+      collapsed: false,
+      mistakeLevel: 0.25,
+      jumpMistakeChance: 0.22,
+      pathNoise: 0.3,
+      hesitationChance: 0.15,
+      aimError: 0.2
+    },
+    combat: {
+      enabled: hasLegacyAggr,
+      collapsed: false,
+      stance: hasLegacyAggr ? 'hostile' : 'guard',
+      faction: opts.faction || '', // ID пользовательской фракции из S.worldSettings.factions (или '' = без фракции)
+      attackOtherFactions: true,
+      callForHelp: true,
+      aggroRadius: 14.0,
+      loseAggroRadius: 24.0,
+      attackRange: 2.3,
+      attackCooldown: 1.1,
+      accuracy: 0.75,
+      respectAmmoReload: true,
+      useEquippedWeapon: true,
+      fleeLowHp: false,
+      fleeHpPct: 20
+    },
+    dialogue: {
+      enabled: false,
+      collapsed: false,
+      interactKeyE: true,
+      lines: [
+        opts.chat || 'Привет! Я модульный NPC!',
+        'Осторожнее возле пропастей и лавы!',
+        'Удачи в приключениях!'
+      ],
+      aggroChat: 'Эй! Сейчас ты получишь! 😡',
+      oopsChat: 'Ой-ой, кажется я не рассчитал прыжок! 😱',
+      dropCoins: 15,
+      dropEquippedItem: true,
+      respawnTime: 3.5,
+      permanentDeath: !!opts.permanentDeath
+    }
+  };
+}
+
+export function ensureNpcModules(npc) {
+  if (!npc) return null;
+  const defs = createDefaultNpcModules(npc);
+  if (!npc.aiModules || typeof npc.aiModules !== 'object') {
+    npc.aiModules = defs;
+  } else {
+    for (const key of Object.keys(defs)) {
+      if (!npc.aiModules[key] || typeof npc.aiModules[key] !== 'object') {
+        npc.aiModules[key] = defs[key];
+      } else {
+        npc.aiModules[key] = Object.assign({}, defs[key], npc.aiModules[key]);
+      }
+    }
+    if (!Array.isArray(npc.aiModules.navigation.waypoints)) {
+      npc.aiModules.navigation.waypoints = [];
+    }
+    if (!Array.isArray(npc.aiModules.dialogue.lines) || npc.aiModules.dialogue.lines.length === 0) {
+      npc.aiModules.dialogue.lines = [npc.chat || 'Привет!'];
+    }
+  }
+  if (npc.aiModules.worldPhysics.canHoldItems === false) {
+    npc.aiModules.worldPhysics.canPickupItems = false;
+  }
+  const rawInt = npc.aiModules.navigation.intelligence;
+  npc.aiModules.navigation.intelligence = (rawInt === 'dumb' || rawInt === 'low') ? 'dumb' : 'smart';
+  if (npc.maxStamina === undefined) npc.maxStamina = 100;
+  if (npc.stamina === undefined) npc.stamina = npc.maxStamina;
+  npc.wander = Boolean(npc.aiModules.navigation?.enabled && npc.aiModules.navigation.mode !== 'stand');
+  npc.aggressive = Boolean(npc.aiModules.combat?.enabled && npc.aiModules.combat.stance === 'hostile');
+  npc.walkSpeed = Number(npc.aiModules.navigation?.walkSpeed) || 5.4;
+  npc.jumpPower = Number(npc.aiModules.navigation?.jumpPower) || 10.2;
+  return npc.aiModules;
 }
 
 export function spawnCustomNPC(opts = {}) {
@@ -521,31 +691,40 @@ export function spawnCustomNPC(opts = {}) {
   scene.add(rig.g, tag);
 
   const npc = {
-    id: 'cnpc_' + (Date.now() + Math.floor(Math.random() * 9999)),
+    id: opts.id || ('cnpc_' + (Date.now() + Math.floor(Math.random() * 9999))),
     isP: false,
     isCustomNPC: true,
     name: opts.name || ('NPC_' + (S.customNPCs.length + 1)),
-    chat: opts.chat !== undefined ? opts.chat : 'Привет! Я бот из 3D Студии!',
+    chat: opts.chat !== undefined ? opts.chat : '',
     wander: opts.wander !== undefined ? opts.wander : true,
     aggressive: !!opts.aggressive,
     hpEnabled: opts.hpEnabled !== undefined ? opts.hpEnabled : true,
-    hp: opts.hp || 100,
-    maxHp: opts.maxHp || 100,
+    hp: opts.hp ?? 100,
+    maxHp: opts.maxHp ?? 100,
     hpBarTimer: 0,
-    meleeDamage: opts.meleeDamage || 15,
+    meleeDamage: opts.meleeDamage ?? 15,
     attackCooldown: 0,
+    colliderRadius: opts.colliderRadius || 0.42,
+    colliderHeight: opts.colliderHeight || 2.5,
+    walkSpeed: opts.walkSpeed || 5.4,
+    jumpPower: opts.jumpPower || 10.2,
     equippedItem: opts.equippedItem ? normalizeItemData(opts.equippedItem) : null,
     carriedItem: null,
-    homeX: x,
-    homeZ: z,
+    aiModules: opts.aiModules ? JSON.parse(JSON.stringify(opts.aiModules)) : null,
+    homeX: opts.homeX !== undefined ? opts.homeX : x,
+    homeY: opts.homeY !== undefined ? opts.homeY : y,
+    homeZ: opts.homeZ !== undefined ? opts.homeZ : z,
     x,
     y,
     z,
+    vy: 0,
+    grounded: true,
+    inLiquid: false,
     vxKnock: 0,
     vzKnock: 0,
     rot: opts.rot || 0,
     step: 0,
-    wTimer: rnd(1, 4),
+    wTimer: rnd(0.5, 2.5),
     tx: x,
     tz: z,
     rig,
@@ -553,34 +732,74 @@ export function spawnCustomNPC(opts = {}) {
     preset
   };
 
+  ensureNpcModules(npc);
   attachRigToEntity(npc);
   syncEntityHeldItemMesh(npc);
-  updateTag(npc.tag, '🤖 NPC', npc.name, npc.chat, false, { show: false, hp: npc.hp, maxHp: npc.maxHp });
+  refreshEntityTagWithHP(npc);
   tag.position.set(x, y + 3.35, z);
   S.customNPCs.push(npc);
+  if (window.__debixSyncNpcUpsert && !S.isApplyingRemoteSync) {
+    window.__debixSyncNpcUpsert(npc, false);
+  }
   return npc;
 }
 
 export function refreshEntityTagWithHP(e) {
+  if (!e || !e.tag) return;
   const hpInfo = { show: e.hpEnabled && e.hpBarTimer > 0, hp: e.hp, maxHp: e.maxHp };
   if (e.isArchangel) {
-    updateTag(e.tag, '👑 СУДЬЯ', e.name, e.chat, false, hpInfo);
-  } else if (e.isCustomNPC) {
-    updateTag(e.tag, '🤖 NPC', e.name, e.chat, false, hpInfo);
-  } else if (S.queueLine.length > 0 && e.qIdx !== undefined) {
-    updateTag(e.tag, `#${e.qIdx + 1}`, e.name, e.chat, e.isP, hpInfo);
+    updateTag(e.tag, '', e.name, e.chat, false, hpInfo, e);
+  } else if (e.isRemotePlayer || e.isCustomNPC) {
+    updateTag(e.tag, '', e.name, e.chat, false, hpInfo, e);
+  } else if (S.gameMode?.id === 'heaven_queue' && S.queueLine.length > 0 && e.qIdx !== undefined) {
+    updateTag(e.tag, `#${e.qIdx + 1}`, e.name, e.chat, e.isP, hpInfo, e);
   } else {
-    updateTag(e.tag, '🎮', e.name, e.chat, e.isP, hpInfo);
+    updateTag(e.tag, '', e.name, e.chat, e.isP, hpInfo, e);
   }
 }
 
 export function updateShopUI() {
   const player = S.player;
   if (!player) return;
-  if ($('cashTxt')) $('cashTxt').textContent = `${player.cash} R$`;
+
+  const cashEl = $('cashTxt');
+  if (cashEl) {
+    const cashPill = cashEl.parentElement;
+    if (cashPill && cashPill.firstChild && cashPill.firstChild.nodeType === 3) {
+      if (cashPill.firstChild.textContent.includes('КАРМА')) {
+        cashPill.firstChild.textContent = '💰 БАЛАНС:';
+      }
+    }
+    cashEl.textContent = `${player.cash} R$`;
+  }
+
   if ($('hpPill')) $('hpPill').hidden = !player.hpEnabled;
   if ($('hpTxt')) $('hpTxt').textContent = `${Math.ceil(player.hp)} / ${player.maxHp}`;
-  if ($('rebTxt')) $('rebTxt').textContent = player.rebirths || 0;
+
+  const stamPill = $('staminaPill');
+  const stamTxt = $('staminaTxt');
+  if (stamPill && stamTxt) {
+    const allowSpr = S.worldSettings.allowSprint !== false;
+    stamPill.hidden = !allowSpr;
+    if (allowSpr) {
+      const curStam = Math.ceil(player.stamina ?? 100);
+      const maxStam = player.maxStamina || 100;
+      stamTxt.textContent = S.worldSettings.staminaDrainOnSprint === false
+        ? '∞ (БЕЗ ТРАТЫ)'
+        : `${curStam} / ${maxStam}`;
+      stamTxt.style.color = player.staminaExhausted ? '#ff3e3e' : (curStam < 30 ? '#ffce3a' : '#56f0ff');
+    }
+  }
+
+  const rebEl = $('rebTxt');
+  if (rebEl) {
+    rebEl.textContent = player.rebirths || 0;
+    const rebPill = rebEl.closest('.pill');
+    if (rebPill) {
+      const isHeavenQueue = S.gameMode && S.gameMode.id === 'heaven_queue';
+      rebPill.hidden = !isHeavenQueue;
+    }
+  }
 
   renderHotbarUI();
 
@@ -600,7 +819,6 @@ export function selectSlot(idx) {
   if (!player) return;
   player.reloadTimer = 0;
 
-  // Если в слоте нет кастомного предмета, проверяем стандартное поведение режима
   const slotItem = Array.isArray(player.inventory) ? player.inventory[idx] : null;
   if (!slotItem && S.gameMode && S.gameMode.onSelectSlot) {
     const handled = S.gameMode.onSelectSlot(idx);
@@ -619,4 +837,7 @@ export function selectSlot(idx) {
 
   syncEntityHeldItemMesh(player);
   renderHotbarUI();
+  if (window.__debixSendImmediateFullState && !S.isApplyingRemoteSync) {
+    window.__debixSendImmediateFullState();
+  }
 }

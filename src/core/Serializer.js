@@ -8,16 +8,20 @@ import {
   showBanner
 } from './State.js';
 import { scene, updateSkybox } from './SceneManager.js';
-import { initAudio, sfx } from './AudioEngine.js';
+import { initAudio, sfx, syncAudioWithWorldSettings } from './AudioEngine.js';
 import { createRobloxRig, normalizeItemData, normalizeCharacterGripPoints } from './CharacterRig.js';
 import {
   addSceneBlock,
   rebuildPhysicsArrays,
   syncBlockSpecialVisuals,
-  resetAllLogicRuntime
+  syncBlockComponentsState,
+  resetAllLogicRuntime,
+  removeBlockHalo
 } from './WorldRegistry.js';
 import {
   spawnCustomNPC,
+  createDefaultNpcModules,
+  ensureNpcModules,
   attachRigToEntity,
   refreshEntityTagWithHP,
   updateShopUI,
@@ -29,6 +33,7 @@ import {
 import { HeavenQueueGame } from '../games/HeavenQueueGame.js';
 import { SandboxGame } from '../games/SandboxGame.js';
 import { toggleStudioMode, selectEditorObject } from '../studio/StudioController.js';
+import { spawnEmptyObject, clearEmptyObjects } from '../studio/HierarchyAndSpawn.js';
 
 export const GAME_MODES = {
   heaven_queue: HeavenQueueGame,
@@ -178,6 +183,20 @@ export function serializeSceneState() {
     customDefaultStudDataURL: S.customDefaultStudDataURL,
     savedCosmeticsLibrary: JSON.parse(JSON.stringify(S.savedCosmeticsLibrary || [])),
     savedItemsLibrary: JSON.parse(JSON.stringify(S.savedItemsLibrary || [])),
+    customPrefabsLibrary: JSON.parse(JSON.stringify(S.customPrefabsLibrary || [])),
+    customAudioLibrary: JSON.parse(JSON.stringify(S.customAudioLibrary || [])),
+    prefabFolders: JSON.parse(JSON.stringify(S.prefabFolders || [])),
+    sceneFolders: JSON.parse(JSON.stringify(S.sceneFolders || [])),
+    physicsConstraints: JSON.parse(JSON.stringify((S.physicsConstraints || []).filter(c => !c._createdInPlay))),
+    emptyObjects: (S.emptyObjects || []).map(emp => ({
+      id: emp.id,
+      name: emp.name,
+      x: emp.x, y: emp.y, z: emp.z,
+      rx: emp.rx || 0, ry: emp.ry || 0, rz: emp.rz || 0,
+      sx: emp.sx || 1, sy: emp.sy || 1, sz: emp.sz || 1,
+      parentKey: emp.parentKey || null,
+      hierOrder: emp.hierOrder || 0
+    })),
     playerData: player
       ? {
           name: player.name,
@@ -198,6 +217,7 @@ export function serializeSceneState() {
           colliderHeight: player.colliderHeight,
           walkSpeed: player.walkSpeed,
           jumpPower: player.jumpPower,
+          weight: player.weight ?? 70,
           inventory: JSON.parse(JSON.stringify(player.inventory || [null, null, null, null, null, null])),
           carriedItem: player.carriedItem ? JSON.parse(JSON.stringify(player.carriedItem)) : null,
           handGripPoint: player.preset?.handGripPoint ? Object.assign({}, player.preset.handGripPoint) : null,
@@ -207,34 +227,53 @@ export function serializeSceneState() {
       : null,
     worldItems: S.worldItems.map(wi => ({
       id: wi.id,
+      parentKey: wi.parentKey || null,
+      hierOrder: wi.hierOrder || 0,
       x: wi.x,
       y: wi.y,
       z: wi.z,
+      rotX: wi.rotX || 0,
       rotY: wi.rotY || 0,
+      rotZ: wi.rotZ || 0,
+      scaleX: wi.scaleX || 1,
+      scaleY: wi.scaleY || 1,
+      scaleZ: wi.scaleZ || 1,
       item: JSON.parse(JSON.stringify(wi.item))
     })),
     blocks: S.allBlocks.map(b => {
       const basePos = (b.logicRuntime && b.logicRuntime.basePos) ? b.logicRuntime.basePos : b.m.position;
+      const baseScale = (b.logicRuntime && b.logicRuntime.baseScale) ? b.logicRuntime.baseScale : b.m.scale;
+      const baseEuler = (b.logicRuntime && b.logicRuntime.baseQuat)
+        ? new THREE.Euler().setFromQuaternion(b.logicRuntime.baseQuat)
+        : b.m.rotation;
       return {
         id: b.id,
         label: b.label,
         shape: b.shape,
+        surfaceType: b.surfaceType || 'studs',
+        colliderShape: b.colliderShape || 'auto',
         cx: basePos.x,
         cy: basePos.y,
         cz: basePos.z,
         x: basePos.x,
-        y: basePos.y + b.m.scale.y / 2,
+        y: basePos.y + baseScale.y / 2,
         z: basePos.z,
-        w: b.m.scale.x,
-        h: b.m.scale.y,
-        d: b.m.scale.z,
-        rx: b.m.rotation.x,
-        ry: b.m.rotation.y,
-        rz: b.m.rotation.z,
+        w: baseScale.x,
+        h: baseScale.y,
+        d: baseScale.z,
+        rx: baseEuler.x,
+        ry: baseEuler.y,
+        rz: baseEuler.z,
         colorHex: b.colorHex,
         gold: b.gold,
         customTexDataURL: b.customTexDataURL,
         matterState: b.matterState,
+        isDynamicPhysics: !!b.isDynamicPhysics,
+        weight: b.weight ?? 15,
+        weldToParent: b.weldToParent !== false,
+        liquidPhysicsEnabled: b.liquidPhysicsEnabled !== false,
+        liquidBuoyancy: b.liquidBuoyancy ?? 45,
+        liquidDrag: b.liquidDrag ?? 3.5,
         bounciness: b.bounciness,
         conveyorVz: b.conveyorVz,
         conveyorVx: b.conveyorVx,
@@ -242,17 +281,26 @@ export function serializeSceneState() {
         teleportToCheckpoint: b.teleportToCheckpoint,
         spinSpeed: b.spinSpeed,
         colliderScale: b.colliderScale ? Object.assign({}, b.colliderScale) : { x: 1, y: 1, z: 1 },
+        components: b.components ? JSON.parse(JSON.stringify(b.components)) : null,
+        interactionData: b.interactionData ? JSON.parse(JSON.stringify(b.interactionData)) : null,
+        motionData: b.motionData ? JSON.parse(JSON.stringify(b.motionData)) : null,
+        signalData: b.signalData ? JSON.parse(JSON.stringify(b.signalData)) : null,
+        costData: b.costData ? Object.assign({}, JSON.parse(JSON.stringify(b.costData)), { unlocked: false }) : null,
+        soundData: b.soundData ? JSON.parse(JSON.stringify(b.soundData)) : null,
         checkpointData: b.checkpointData ? JSON.parse(JSON.stringify(b.checkpointData)) : null,
         spawnerData: b.spawnerData ? JSON.parse(JSON.stringify(b.spawnerData)) : null,
         particleData: b.particleData ? JSON.parse(JSON.stringify(b.particleData)) : null,
         lightData: b.lightData ? JSON.parse(JSON.stringify(b.lightData)) : null,
         logicData: b.logicData ? Object.assign({}, JSON.parse(JSON.stringify(b.logicData)), { unlocked: false }) : null,
+        parentKey: b.parentKey || null,
+        hierOrder: b.hierOrder || 0,
         isCustom: b.isCustom
       };
     }),
     customNPCs: S.customNPCs.map(n => {
       if (n.preset) normalizeCharacterGripPoints(n.preset);
       return {
+        id: n.id,
         name: n.name,
         chat: n.chat,
         wander: n.wander,
@@ -261,12 +309,21 @@ export function serializeSceneState() {
         hp: n.hp,
         maxHp: n.maxHp,
         meleeDamage: n.meleeDamage,
+        walkSpeed: n.walkSpeed || 5.4,
+        jumpPower: n.jumpPower || 10.2,
+        weight: n.weight ?? 70,
         equippedItem: n.equippedItem ? JSON.parse(JSON.stringify(n.equippedItem)) : null,
+        aiModules: n.aiModules ? JSON.parse(JSON.stringify(n.aiModules)) : null,
+        homeX: n.homeX ?? n.x,
+        homeY: n.homeY ?? n.y,
+        homeZ: n.homeZ ?? n.z,
         x: n.x,
         y: n.y,
         z: n.z,
         rot: n.rot,
         scale: n.rig.g.scale.x,
+        parentKey: n.parentKey || null,
+        hierOrder: n.hierOrder || 0,
         handGripPoint: n.preset?.handGripPoint ? Object.assign({}, n.preset.handGripPoint) : null,
         carryGripPoint: n.preset?.carryGripPoint ? Object.assign({}, n.preset.carryGripPoint) : null,
         preset: JSON.parse(JSON.stringify(n.preset))
@@ -303,9 +360,32 @@ export function loadSceneState(data, opts = {}) {
   if (Array.isArray(data.savedItemsLibrary)) {
     S.savedItemsLibrary = JSON.parse(JSON.stringify(data.savedItemsLibrary));
   }
+  if (Array.isArray(data.customPrefabsLibrary)) {
+    S.customPrefabsLibrary = JSON.parse(JSON.stringify(data.customPrefabsLibrary));
+  }
+  if (Array.isArray(data.customAudioLibrary)) {
+    S.customAudioLibrary = JSON.parse(JSON.stringify(data.customAudioLibrary));
+  }
+  if (Array.isArray(data.prefabFolders)) {
+    S.prefabFolders = JSON.parse(JSON.stringify(data.prefabFolders));
+  }
+  if (Array.isArray(data.sceneFolders)) {
+    S.sceneFolders = JSON.parse(JSON.stringify(data.sceneFolders));
+  }
+  S.physicsConstraints = Array.isArray(data.physicsConstraints)
+    ? JSON.parse(JSON.stringify(data.physicsConstraints))
+    : [];
+
+  clearEmptyObjects();
+  if (Array.isArray(data.emptyObjects)) {
+    for (const se of data.emptyObjects) {
+      spawnEmptyObject(se);
+    }
+  }
 
   if (Array.isArray(data.blocks)) {
     for (const b of S.allBlocks) {
+      removeBlockHalo(b);
       scene.remove(b.m);
       if (b.cpVisualGroup) scene.remove(b.cpVisualGroup);
     }
@@ -314,6 +394,18 @@ export function loadSceneState(data, opts = {}) {
     for (const sb of data.blocks) {
       const box = addSceneBlock(sb);
       if (sb.id) box.id = sb.id;
+      if (sb.parentKey) box.parentKey = sb.parentKey;
+      if (sb.weldToParent !== undefined) box.weldToParent = sb.weldToParent;
+      if (sb.hierOrder !== undefined) box.hierOrder = sb.hierOrder;
+      if (sb.colliderShape) box.colliderShape = sb.colliderShape;
+      if (sb.surfaceType) box.surfaceType = sb.surfaceType;
+      if (sb.components) box.components = JSON.parse(JSON.stringify(sb.components));
+      if (sb.interactionData) box.interactionData = JSON.parse(JSON.stringify(sb.interactionData));
+      if (sb.motionData) box.motionData = JSON.parse(JSON.stringify(sb.motionData));
+      if (sb.signalData) box.signalData = JSON.parse(JSON.stringify(sb.signalData));
+      if (sb.costData) box.costData = JSON.parse(JSON.stringify(sb.costData));
+      if (sb.soundData) box.soundData = JSON.parse(JSON.stringify(sb.soundData));
+
       box.m.scale.set(sb.w || 1, sb.h || 1, sb.d || 1);
       if (sb.cy !== undefined) {
         box.m.position.set(sb.cx ?? sb.x ?? 0, sb.cy, sb.cz ?? sb.z ?? 0);
@@ -325,20 +417,46 @@ export function loadSceneState(data, opts = {}) {
       if (sb.colliderScale) box.colliderScale = Object.assign({}, sb.colliderScale);
       if (box.logicRuntime) {
         box.logicRuntime.basePos = box.m.position.clone();
+        box.logicRuntime.baseQuat = box.m.quaternion.clone();
+        box.logicRuntime.baseScale = box.m.scale.clone();
       }
-      syncBlockSpecialVisuals(box);
+      syncBlockComponentsState(box);
     }
+    const usedIds = new Set();
+    let maxBlkNum = 0;
+    for (const b of S.allBlocks) {
+      if (typeof b.id === 'string' && b.id.startsWith('blk_')) {
+        const n = parseInt(b.id.slice(4), 10);
+        if (!Number.isNaN(n) && n > maxBlkNum) maxBlkNum = n;
+      }
+    }
+    for (const b of S.allBlocks) {
+      if (!b.id || usedIds.has(b.id)) {
+        maxBlkNum++;
+        b.id = 'blk_' + maxBlkNum;
+      }
+      usedIds.add(b.id);
+    }
+    S.blockIdCounter = Math.max(S.blockIdCounter, maxBlkNum + 1);
     rebuildPhysicsArrays();
   }
 
-  // Восстановление предметов и переносимых контейнеров в мире
+  // Восстановление предметов и переносимых контейнеров в мире со всеми углами и масштабом
   clearWorldItems();
   if (Array.isArray(data.worldItems)) {
     for (const sw of data.worldItems) {
       if (!sw || !sw.item) continue;
-      const wi = spawnWorldItem(sw.item, sw.x ?? 0, sw.y ?? 1.5, sw.z ?? 0);
-      if (sw.id) wi.id = sw.id;
-      wi.rotY = sw.rotY || 0;
+      const wi = spawnWorldItem(sw.item, sw.x ?? 0, sw.y ?? 1.5, sw.z ?? 0, 0, 0, 0, {
+        id: sw.id,
+        rotX: sw.rotX || 0,
+        rotY: sw.rotY || 0,
+        rotZ: sw.rotZ || 0,
+        scaleX: sw.scaleX || 1,
+        scaleY: sw.scaleY || 1,
+        scaleZ: sw.scaleZ || 1
+      });
+      if (sw.parentKey) wi.parentKey = sw.parentKey;
+      if (sw.hierOrder !== undefined) wi.hierOrder = sw.hierOrder;
     }
   }
 
@@ -350,6 +468,8 @@ export function loadSceneState(data, opts = {}) {
     S.customNPCs.length = 0;
     for (const sn of data.customNPCs) {
       const npc = spawnCustomNPC(Object.assign({}, sn.preset, sn));
+      if (sn.parentKey) npc.parentKey = sn.parentKey;
+      if (sn.hierOrder !== undefined) npc.hierOrder = sn.hierOrder;
       if (sn.rot !== undefined) {
         npc.rot = sn.rot;
         npc.rig.g.rotation.y = sn.rot;
@@ -373,6 +493,7 @@ export function loadSceneState(data, opts = {}) {
       colliderHeight: pd.colliderHeight || 2.5,
       walkSpeed: pd.walkSpeed || 7.6,
       jumpPower: pd.jumpPower || 10.2,
+      weight: pd.weight ?? 70,
       inventory: Array.isArray(pd.inventory)
         ? pd.inventory.map(it => (it ? normalizeItemData(it) : null))
         : [null, null, null, null, null, null],
@@ -414,6 +535,7 @@ export function loadSceneState(data, opts = {}) {
 
 export function startPlaySession() {
   initAudio();
+  syncAudioWithWorldSettings();
   resetAllLogicRuntime(true);
   S.state = 'play';
   $('menu').hidden = true;
@@ -704,6 +826,7 @@ export async function exportPlayOnlyBuild() {
       rigJs,
       worldJs,
       entityJs,
+      tacticalAiJs,
       physJs,
       modeJs
     ] = await Promise.all([
@@ -717,6 +840,7 @@ export async function exportPlayOnlyBuild() {
       fetchText('./src/core/CharacterRig.js'),
       fetchText('./src/core/WorldRegistry.js'),
       fetchText('./src/core/EntityManager.js'),
+      fetchText('./src/player/NpcTacticalAI.js'),
       fetchText('./src/player/PhysicsAndCombat.js'),
       fetchText(activeModeFile)
     ]);
@@ -737,6 +861,7 @@ export async function exportPlayOnlyBuild() {
       rigJs,
       worldJs,
       entityJs,
+      tacticalAiJs,
       physJs,
       modeJs
     ].map(stripESModules).join('\n\n');
@@ -757,7 +882,11 @@ export async function exportPlayOnlyBuild() {
           if (Array.isArray(data.savedCosmeticsLibrary)) S.savedCosmeticsLibrary = data.savedCosmeticsLibrary;
           if (Array.isArray(data.savedItemsLibrary)) S.savedItemsLibrary = data.savedItemsLibrary;
           if (Array.isArray(data.blocks) && data.blocks.length > 0) {
-            for (const b of S.allBlocks) { scene.remove(b.m); if (b.cpVisualGroup) scene.remove(b.cpVisualGroup); }
+            for (const b of S.allBlocks) {
+              scene.remove(b.m);
+              if (b.cpVisualGroup) scene.remove(b.cpVisualGroup);
+              if (b.haloSprite) scene.remove(b.haloSprite);
+            }
             S.allBlocks.length = 0; S.blockIdCounter = 1;
             for (const sb of data.blocks) {
               const box = addSceneBlock(sb);
@@ -773,7 +902,17 @@ export async function exportPlayOnlyBuild() {
           clearWorldItems();
           if (Array.isArray(data.worldItems)) {
             for (const sw of data.worldItems) {
-              if (sw && sw.item) spawnWorldItem(sw.item, sw.x ?? 0, sw.y ?? 1.5, sw.z ?? 0);
+              if (sw && sw.item) {
+                spawnWorldItem(sw.item, sw.x ?? 0, sw.y ?? 1.5, sw.z ?? 0, 0, 0, 0, {
+                  id: sw.id,
+                  rotX: sw.rotX || 0,
+                  rotY: sw.rotY || 0,
+                  rotZ: sw.rotZ || 0,
+                  scaleX: sw.scaleX || 1,
+                  scaleY: sw.scaleY || 1,
+                  scaleZ: sw.scaleZ || 1
+                });
+              }
             }
           }
           if (Array.isArray(data.customNPCs)) {
@@ -1006,7 +1145,7 @@ ${hudCss}
   <div class="top-left">
     <div class="pill pos">ОЧЕРЕДЬ:<b id="posTxt">#30 / 30</b></div>
     <div class="pill hp" id="hpPill">❤️ HP:<b id="hpTxt">100 / 100</b></div>
-    <div class="pill">КАРМА:<b id="cashTxt">25 R$</b></div>
+    <div class="pill">💰 БАЛАНС:<b id="cashTxt">25 R$</b></div>
     <div class="pill">РЕБИРТЫ:<b id="rebTxt">0</b></div>
     <div class="pill eye-safe" id="eyePill">👁️ АРХАНГЕЛ ОТВЕРНУЛСЯ</div>
     <button class="btn-top" id="muteBtn" type="button">ЗВУК: 🟢</button>

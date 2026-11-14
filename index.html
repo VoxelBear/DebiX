@@ -18,10 +18,16 @@
   <div class="top-left">
     <div class="pill pos">ОЧЕРЕДЬ:<b id="posTxt">#30 / 30</b></div>
     <div class="pill hp" id="hpPill">❤️ HP:<b id="hpTxt">100 / 100</b></div>
+    <div class="pill" id="staminaPill" style="border-color:#00e5ff;gap:6px" title="Выносливость для бега [Shift]">
+      ⚡ СТАМИНА:<b id="staminaTxt" style="color:#56f0ff">100 / 100</b>
+    </div>
     <div class="pill">КАРМА:<b id="cashTxt">25 R$</b></div>
     <div class="pill">РЕБИРТЫ:<b id="rebTxt">0</b></div>
     <div class="pill eye-safe" id="eyePill">👁️ АРХАНГЕЛ ОТВЕРНУЛСЯ (МОЖНО ТОЛКАТЬ!)</div>
     <button class="btn-top" id="muteBtn" type="button">ЗВУК: 🟢</button>
+    <button class="btn-top" id="cursorToggleBtn" type="button" title="Показать / скрыть курсор мыши (Клавиша TAB)">🖱️ КУРСОР [TAB]</button>
+    <button class="btn-top btn-emotes-toggle" id="emotesToggleBtn" type="button" title="Открыть панель жестов и эмоций (Клавиша B)">🎭 ЖЕСТЫ [B]</button>
+    <button class="btn-top" id="mpToggleBtn" type="button" title="Локальный мультиплеер и смена никнейма (Клавиша M)">🌐 СЕТЬ (1) [M]</button>
     <button class="btn-top btn-studio-toggle" id="openStudioBtn" type="button">🛠️ 3D РЕДАКТОР (F2)</button>
   </div>
   <div id="leader">
@@ -56,6 +62,16 @@
 <div id="banner" hidden>Добро пожаловать в Очередь в Рай!</div>
 <div id="hint" hidden></div>
 
+<!-- Панель жестов и эмоций игрока (открывается кнопкой 🎭 ЖЕСТЫ или клавишей B) -->
+<div id="emotesPanel" hidden>
+  <div class="emotes-head">
+    <span>🎭 ЖЕСТЫ И ЭМОЦИИ <small>[TAB — курсор · B — окно]</small></span>
+    <button class="emotes-close" id="closeEmotesBtn" type="button" title="Закрыть панель жестов">✕</button>
+  </div>
+  <div class="emotes-grid" id="emotesGrid"></div>
+  <button class="emotes-stop-btn" id="stopEmoteBtn" type="button" hidden>⏹️ Прекратить жест / Встать</button>
+</div>
+
 <div id="hotbar" hidden>
   <div class="slot active" data-slot="0"><span class="num">1</span><span class="ico">🥊</span>Кулак</div>
   <div class="slot" data-slot="1"><span class="num">2</span><span class="ico">🌀</span>Speed</div>
@@ -80,12 +96,12 @@
       <button class="ed-btn active" id="gizmoMove" type="button" title="Перемещение (W)">✥ Двигать (W)</button>
       <button class="ed-btn" id="gizmoRot" type="button" title="Вращение (E)">🔄 Вращать (E)</button>
       <button class="ed-btn" id="gizmoScale" type="button" title="Масштаб / Размер (R)">📐 Размер (R)</button>
-      <button class="ed-btn" id="btnCoordSpace" type="button" title="Переключить систему координат: Мировая / Локальная (X)">🌐 Мир (X)</button>
+      <button class="ed-btn" id="btnCoordSpace" type="button" title="Переключить систему координат: Мировая / Локальная (X)">📐 Локал (X)</button>
       <button class="ed-btn" id="btnSnapToggle" type="button" title="Привязка к сетке">🧲 Сетка: 🔴</button>
       <button class="ed-btn" id="btnColliderVis" type="button" title="Показать 3D коллайдеры">🔲 Коллайдеры: 🔴</button>
       <button class="ed-btn" id="openItemStudioBtn" type="button" title="Открыть изолированную 3D Студию предметов и аксессуаров">🛠️ 3D Студия</button>
       <button class="ed-btn" id="openFacePaintBtn" type="button" title="Открыть 2D Студию принтов и партиклов">🎨 2D Студия</button>
-      <button class="ed-btn icon-only" id="dupObjBtn" type="button" title="Дублировать (Ctrl+D)">📋</button>
+      <button class="ed-btn icon-only" id="dupObjBtn" type="button" title="Дублировать внутри объекта (Ctrl+D)">📋</button>
       <button class="ed-btn danger icon-only" id="delObjBtn" type="button" title="Удалить выбранный объект (Delete)">🗑️</button>
       <button class="ed-btn" id="undoObjBtn" type="button" title="Отменить последнее действие (Ctrl+Z)">↩️ Отмена</button>
     </div>
@@ -97,71 +113,94 @@
   </div>
 
   <div class="ed-body">
-    <!-- Left Sidebar: Spawner & Scene Hierarchy -->
-    <div class="ed-sidebar">
-      <div class="ed-sec-title"><span>➕ СПАВН БЛОКОВ, МЕХАНИК И ОРУЖИЯ</span></div>
-      <div class="spawn-grid">
-        <div class="spawn-card" data-spawn="solid"><span class="ico">🧱</span>Лего-Блок (Твёрдый)</div>
-        <div class="spawn-card" data-spawn="liquid"><span class="ico">💧</span>Вода / Лава (Жидкость)</div>
-        <div class="spawn-card" data-spawn="gas"><span class="ico">☁️</span>Облако / Пар (Газ)</div>
-        <div class="spawn-card" data-spawn="checkpoint"><span class="ico">⭐</span>Чекпоинт Обби</div>
-        <div class="spawn-card" data-spawn="door" style="border-color:#00e676"><span class="ico">🚪</span>Дверь / Лифт [E]</div>
-        <div class="spawn-card" data-spawn="button" style="border-color:#00e676"><span class="ico">🔘</span>Кнопка / Рычаг [E]</div>
-        <div class="spawn-card" data-spawn="plate" style="border-color:#00e676"><span class="ico">👟</span>Нажимная Плита</div>
-        <div class="spawn-card" data-spawn="teleport" style="border-color:#56f0ff"><span class="ico">🌀</span>Пара Телепортов</div>
-        <div class="spawn-card" data-spawn="vip_gate" style="border-color:#ffce3a"><span class="ico">🔓</span>VIP-Ворота за R$</div>
-        <div class="spawn-card" data-spawn="shop_pad" style="border-color:#ffce3a"><span class="ico">🛒</span>Магазин за R$</div>
-        <div class="spawn-card" data-spawn="item_sword" style="border-color:#ff6b6b"><span class="ico">🗡️</span>Меч (Ближний бой)</div>
-        <div class="spawn-card" data-spawn="item_blaster" style="border-color:#ff6b6b"><span class="ico">🔫</span>Бластер (Дальний)</div>
-        <div class="spawn-card" data-spawn="item_staff" style="border-color:#a29bfe"><span class="ico">🪄</span>Посох Фаерболов</div>
-        <div class="spawn-card" data-spawn="item_grenade" style="border-color:#ff9f43"><span class="ico">💣</span>Снаряд (Метание)</div>
-        <div class="spawn-card" data-spawn="item_medkit" style="border-color:#00e676"><span class="ico">🍗</span>Аптечка / Еда</div>
-        <div class="spawn-card" data-spawn="item_torch" style="border-color:#ffce3a"><span class="ico">🔦</span>Факел (Свет)</div>
-        <div class="spawn-card" data-spawn="item_shield" style="border-color:#56f0ff"><span class="ico">🛡️</span>Щит (+Броня)</div>
-        <div class="spawn-card" data-spawn="item_crate" style="border-color:#e67e22"><span class="ico">📦</span>Контейнер (2 руки)</div>
-        <div class="spawn-card" data-spawn="kill"><span class="ico">🚨</span>Урон-Лазер (Kill)</div>
-        <div class="spawn-card" data-spawn="trampoline"><span class="ico">🟢</span>Батут (Прыгучий)</div>
-        <div class="spawn-card" data-spawn="spawner"><span class="ico">⚙️</span>Спавнер Ботов/Монет</div>
-        <div class="spawn-card" data-spawn="npc"><span class="ico">🤖</span>Спавн NPC-Бота</div>
-      </div>
+    <!-- Left Sidebar (Full Height): Godot / Unity Scene Hierarchy Tree -->
+    <div class="ed-sidebar left">
       <div class="ed-sec-title">
-        <span>📂 ВСЕ ОБЪЕКТЫ СЦЕНЫ</span>
-        <select id="hierFilter" class="ed-inp" style="width:126px;padding:2px 4px;font-size:10px">
+        <span>📂 ИЕРАРХИЯ СЦЕНЫ</span>
+        <button class="ed-btn" id="btnAddHierFolder" type="button" style="padding:2px 7px;font-size:10px" title="Создать папку в иерархии сцены">📁+ Папка</button>
+      </div>
+      <div class="hier-toolbar">
+        <input class="ed-inp" id="hierSearchInp" placeholder="🔍 Поиск в сцене..." style="flex:1;padding:4px 7px;font-size:10.5px">
+        <select id="hierFilter" class="ed-inp" style="width:112px;padding:3px 4px;font-size:10px">
           <option value="all">Все объекты</option>
-          <option value="items">🗡️ Предметы / Оружие</option>
-          <option value="logic">⚡ Двери / Триггеры</option>
-          <option value="chars">Игрок и Боты</option>
-          <option value="checkpoints">Чекпоинты</option>
-          <option value="clouds">Облака / Газ</option>
-          <option value="blocks">Блоки / Платформы</option>
+          <option value="items">🗡️ Предметы</option>
+          <option value="logic">⚡ Логика</option>
+          <option value="chars">🤖 Персонажи</option>
+          <option value="checkpoints">⭐ Чекпоинты</option>
+          <option value="clouds">☁️ Облака</option>
+          <option value="blocks">🧱 Блоки</option>
         </select>
+      </div>
+      <div class="hier-hint-bar">
+        <span>Перетащи объект на папку · <b>👁️</b> скрыть · <b>🔒</b> блок</span>
       </div>
       <div class="ed-scroll" id="hierContainer"></div>
     </div>
 
-    <!-- Center Viewport Help Bar -->
-    <div class="ed-helpbar">
-      <b>ЛКМ</b> — выбрать · <b>СКМ (Зажать)</b> — панорама · <b>ПКМ + WASD/QE</b> — полёт · <b>W/E/R</b> — Гизмо · <b>Ctrl+Z</b> — Отмена
-    </div>
-
-    <!-- Isolated 3D Item & Accessory Studio Viewport Frame (like 2D Studio) -->
-    <div id="itemStudioOverlay" hidden>
-      <div class="item-studio-header">
-        <div class="item-studio-title">
-          <span class="badge-3d">3D STUDIO</span>
-          <b id="itemStudioSubjectTitle">🗡️ Редактор Предмета</b>
+    <!-- Center Workspace: Viewport + 3D Studio Overlay + Bottom Unity Project / Prefab Dock -->
+    <div class="ed-center-area">
+      <!-- Isolated 3D Item & Accessory Studio Viewport Frame -->
+      <div id="itemStudioOverlay" hidden>
+        <div class="item-studio-header">
+          <div class="item-studio-title">
+            <span class="badge-3d">3D STUDIO</span>
+            <b id="itemStudioSubjectTitle">🗡️ Редактор Предмета</b>
+          </div>
+          <div class="item-studio-actions">
+            <button class="ed-btn" id="btnISCamFront" type="button" title="Вид спереди">👁️ Спереди</button>
+            <button class="ed-btn" id="btnISCamSide" type="button" title="Вид сбоку">👁️ Сбоку</button>
+            <button class="ed-btn" id="btnISCamIso" type="button" title="Изометрический вид 3/4">🎥 Вид 3/4</button>
+            <button class="ed-btn active" id="btnISMannequin" type="button" title="Показать/скрыть манекен для примерки">🧍 Манекен: 🟢</button>
+            <button class="ed-btn" id="btnISPlaceInWorld" type="button" title="Перейти к перемещению предмета на карте мира">📍 На карте</button>
+            <button class="ed-btn apply-oneclick" id="btnCloseItemStudio" type="button">✅ Готово (В Мир)</button>
+          </div>
         </div>
-        <div class="item-studio-actions">
-          <button class="ed-btn" id="btnISCamFront" type="button" title="Вид спереди">👁️ Спереди</button>
-          <button class="ed-btn" id="btnISCamSide" type="button" title="Вид сбоку">👁️ Сбоку</button>
-          <button class="ed-btn" id="btnISCamIso" type="button" title="Изометрический вид 3/4">🎥 Вид 3/4</button>
-          <button class="ed-btn active" id="btnISMannequin" type="button" title="Показать/скрыть манекен для примерки в руке или на теле">🧍 Манекен: 🟢</button>
-          <button class="ed-btn" id="btnISPlaceInWorld" type="button" title="Перейти к перемещению предмета на карте мира">📍 На карте</button>
-          <button class="ed-btn apply-oneclick" id="btnCloseItemStudio" type="button">✅ Готово (В Мир)</button>
+        <div class="item-studio-subbar">
+          <div class="prim-palette-bar" id="studioPrimPalette">
+            <span class="prim-bar-label">🧩 Примитивы (Клик — в центр подиума · Тяни — в точку сцены):</span>
+            <div class="prim-cards-row">
+              <button class="prim-card" data-prim="box" type="button" title="Клик — в центр подиума, Перетащить — в любую точку">🧊 Куб</button>
+              <button class="prim-card" data-prim="sphere" type="button" title="Клик — в центр подиума, Перетащить — в любую точку">⚪ Сфера</button>
+              <button class="prim-card" data-prim="cylinder" type="button" title="Клик — в центр подиума, Перетащить — в любую точку">🛢️ Цилиндр</button>
+              <button class="prim-card" data-prim="cone" type="button" title="Клик — в центр подиума, Перетащить — в любую точку">🔺 Конус</button>
+              <button class="prim-card" data-prim="torus" type="button" title="Клик — в центр подиума, Перетащить — в любую точку">🍩 Кольцо</button>
+              <button class="prim-card" data-prim="plane" type="button" title="Клик — в центр подиума, Перетащить — в любую точку">▭ Плоскость</button>
+            </div>
+          </div>
         </div>
       </div>
-      <div class="item-studio-subbar">
-        <span>💡 Изолированное 3D-пространство: моделируй до 16 примитивов, настраивай <b>Настоящий/Псевдо-свет</b>, <b>Частицы</b> и <b>Точки хвата</b> без помех сцены!</span>
+
+      <!-- Center Viewport Help Bar -->
+      <div class="ed-helpbar">
+        <b>ЛКМ</b> — выбрать · <b>СКМ</b> — панорама · <b>ПКМ + WASD/QE</b> — полёт · <b>W/E/R</b> — Гизмо · <b>Тяни карточку</b> — спавн в мир · <b>Клик по карточке</b> — редакт.
+      </div>
+
+      <!-- Bottom Dock: Unity / Godot Project & Prefabs Browser -->
+      <div class="ed-bottom-dock" id="studioBottomDock">
+        <div class="dock-header">
+          <div class="dock-title-group">
+            <span class="dock-badge">PROJECT / PREFABS</span>
+            <b id="activeFolderBreadcrumb">📁 Все префабы</b>
+          </div>
+          <div class="dock-actions">
+            <button class="ed-btn" id="btnNewPrefabFolder" type="button" title="Создать новую папку для префабов">➕ Папка</button>
+            <button class="ed-btn apply-oneclick" id="btnSaveSelectedAsPrefab" type="button" style="padding:4px 9px;font-size:10.5px" title="Сохранить текущий выбранный на сцене объект как префаб в открытую папку">💾 В префаб</button>
+            <input class="ed-inp" id="prefabSearchInp" placeholder="🔍 Поиск префаба..." style="width:155px;padding:3px 8px;font-size:10.5px">
+            <div class="dock-scale-ctrl" title="Размер 3D-карточек префабов">
+              <span>🔎</span>
+              <input type="range" id="prefabScaleSlider" min="78" max="136" step="4" value="96">
+            </div>
+            <button class="ed-btn icon-only" id="btnToggleBottomDock" type="button" title="Свернуть / Развернуть панель префабов">▼</button>
+          </div>
+        </div>
+        <div class="dock-body" id="studioDockBody">
+          <!-- Left Folder Tree -->
+          <div class="dock-folders" id="prefabFolderTree"></div>
+          <!-- Right 3D Portrait Cards Grid -->
+          <div class="dock-cards-scroll">
+            <div class="spawn-grid" id="prefabGridContainer"></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -191,7 +230,11 @@
         <div class="checkerboard">
           <canvas id="paintCv" width="128" height="128"></canvas>
         </div>
-        <div style="font-size:10.5px;color:#94a3b8">Холст 128×128 / 16×16 (Ctrl+Z отменяет только рисунок)</div>
+        <div style="font-size:10.5px;color:#94a3b8" id="paintCanvasResTxt">Холст 128×128 (Ctrl+Z отменяет только рисунок)</div>
+        <div style="display:flex;gap:4px;margin-top:2px;width:100%" id="paintResGroup">
+          <button class="ed-btn active" id="btnRes128" type="button" style="flex:1;font-size:10px;padding:3px 4px" title="Стандартное разрешение">128×128</button>
+          <button class="ed-btn" id="btnRes256" type="button" style="flex:1;font-size:10px;padding:3px 4px" title="HD разрешение для ультра-гладких Flash линий">256×256 (HD)</button>
+        </div>
       </div>
       <div class="paint-controls">
         <div class="prop-group">
@@ -204,7 +247,8 @@
           </div>
           <div class="prop-row">
             <label>Размер кисти</label>
-            <input type="range" id="paintSize" min="1" max="28" value="6" style="flex:1">
+            <input type="range" id="paintSize" min="1" max="36" value="6" style="flex:1">
+            <span id="paintSizeTxt" style="font-size:10px;width:34px;text-align:right">6px</span>
           </div>
           <div class="swatch-row" id="paintSwatches"></div>
           <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px">
@@ -214,6 +258,37 @@
             <button class="ed-btn" id="toolEraser" type="button">🧽 Ластик (Прозр.)</button>
             <button class="ed-btn" id="toolSym" type="button">🦋 Симметрия</button>
             <button class="ed-btn" id="toolClearAlpha" type="button">🗑️ Очистить в 0%</button>
+            <button class="ed-btn" id="toolSmoothCanvas" type="button" title="Мягко сгладить края нарисованного рисунка">🌊 Сгладить края</button>
+          </div>
+        </div>
+
+        <!-- ================= ADOBE FLASH СГЛАЖИВАНИЕ ЛИНИЙ ================= -->
+        <div class="prop-group" style="background:linear-gradient(135deg,rgba(0,162,255,0.09),rgba(86,240,255,0.04));border:1px solid rgba(0,162,255,0.35);border-radius:10px;padding:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <h5 style="margin:0;color:#56f0ff;display:flex;align-items:center;gap:6px;font-size:12px;font-weight:800">
+              ⚡ ADOBE FLASH СГЛАЖИВАНИЕ
+            </h5>
+            <button class="ed-btn active" id="toolFlashSmooth" type="button" style="font-size:10px;padding:2px 8px" title="Включить / Выключить сглаживание как в Adobe Flash">⚡ Flash: ВКЛ</button>
+          </div>
+          <div class="prop-row">
+            <label title="Сила устранения кривизны и дрожания руки">Плавность</label>
+            <input type="range" id="flashSmoothStrength" min="0" max="100" value="70" style="flex:1">
+            <span id="flashSmoothTxt" style="font-size:11px;width:34px;text-align:right;color:#56f0ff;font-weight:700">70%</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:4px;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:4px;font-size:10.5px;cursor:pointer;color:#cbd5e1" title="Красивые заострённые концы мазков как у художественной кисти во Flash">
+              <input type="checkbox" id="flashTaperCheck" checked style="accent-color:#00a2ff">
+              Заострение концов (Taper)
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;font-size:10.5px;cursor:pointer;color:#cbd5e1;margin-left:auto" title="Автоматическое спрямление прямых линий как во Flash">
+              <input type="checkbox" id="flashStraightenCheck" checked style="accent-color:#00a2ff">
+              Спрямлять линии
+            </label>
+          </div>
+          <div style="display:flex;gap:4px;margin-top:6px">
+            <button class="ed-btn" id="flashPresetSoft" type="button" style="flex:1;font-size:10px;padding:3px 2px" title="Мягкое сглаживание (40%)">Мягкое (40%)</button>
+            <button class="ed-btn active" id="flashPresetClassic" type="button" style="flex:1;font-size:10px;padding:3px 2px" title="Классический Flash (70%)">⚡ Flash (70%)</button>
+            <button class="ed-btn" id="flashPresetMax" type="button" style="flex:1;font-size:10px;padding:3px 2px" title="Максимальное векторное выравнивание (95%)">Вектор (95%)</button>
           </div>
         </div>
 
@@ -274,6 +349,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script id="bakedSceneDataScript">
 window.__BAKED_SCENE_STATE__ = null;
 </script>

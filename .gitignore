@@ -2,3 +2,9 @@ node_modules/
 .DS_Store
 Thumbs.db
 *.log
+
+# Ключи шифрования (не коммитить!)
+*.pem
+.tools/*.pem
+tools/.private_key.pem
+tools/.public_key.pem

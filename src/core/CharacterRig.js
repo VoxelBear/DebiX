@@ -3,7 +3,8 @@ import { S, TAU, clamp } from './State.js';
 import {
   makePartMat,
   defaultFaceURL,
-  setMeshFrontSprite
+  setMeshFrontSprite,
+  createHaloSprite
 } from './TextureFactory.js';
 
 export const MAX_COSMETIC_PARTS = 16;
@@ -97,59 +98,70 @@ export function createXRayGripMarkerMesh(colorHex = '#00e676', scale = 1.0) {
   const group = new THREE.Group();
   group.renderOrder = 999;
 
-  const mkMat = (col, op = 0.95) =>
+  const mkMat = (col, op = 0.96) =>
     new THREE.MeshBasicMaterial({
       color: col,
       depthTest: false,
       depthWrite: false,
       transparent: true,
-      opacity: op
+      opacity: op,
+      side: THREE.DoubleSide
     });
 
-  const coreMat = mkMat(colorHex, 0.96);
-  const ringMat = mkMat('#ffffff', 0.82);
-  const fwdMat = mkMat('#00e5ff', 0.96);
-  const upMat = mkMat('#ffce3a', 0.92);
-  const sideMat = mkMat('#ff5252', 0.88);
+  const coreMat = mkMat(colorHex, 0.98);
+  const ringMat = mkMat('#ffffff', 0.9);
+  const xMat = mkMat('#ff4757', 0.96);   // Красный (+X)
+  const yMat = mkMat('#00e676', 0.96);   // Зелёный (+Y)
+  const zMat = mkMat('#00d2ff', 0.96);   // Синий (+Z / -Z ствол)
+  const goldMat = mkMat('#ffce3a', 0.95);
   const hitMat = mkMat('#ffffff', 0.0);
 
-  // Невидимая сфера клика для лёгкого выделения мышью в 3D-вьюпорте
-  const hitSphere = new THREE.Mesh(new THREE.SphereGeometry(0.14 * scale, 8, 8), hitMat);
+  // Увеличенная сфера клика для лёгкого попадания мышью
+  const hitSphere = new THREE.Mesh(new THREE.SphereGeometry(0.18 * scale, 10, 10), hitMat);
   group.add(hitSphere);
 
-  // Компактный центральный кристалл-пивот (Octahedron)
-  const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.052 * scale, 0), coreMat);
+  // Объёмный мультяшный кристалл в центре пивота
+  const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.075 * scale, 0), coreMat);
   group.add(core);
 
-  // Тонкое гладкое кольцо вокруг пивота
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.105 * scale, 0.0075 * scale, 10, 32), ringMat);
+  // Пухлое белое кольцо вокруг кристалла
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.13 * scale, 0.016 * scale, 12, 32), ringMat);
   group.add(ring);
 
-  // Ось «Вперёд (-Z)» — тонкая голубая игла со стрелкой (направление ствола / клинка)
-  const fwdShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.0085 * scale, 0.0085 * scale, 0.26 * scale, 10), fwdMat);
+  // Направление ствола / клинка (-Z) — толстая голубая стрела с золотым кольцом
+  const fwdShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.022 * scale, 0.022 * scale, 0.26 * scale, 12), zMat);
   fwdShaft.rotation.x = Math.PI / 2;
-  fwdShaft.position.set(0, 0, -0.14 * scale);
+  fwdShaft.position.set(0, 0, -0.15 * scale);
   group.add(fwdShaft);
 
-  const fwdTip = new THREE.Mesh(new THREE.ConeGeometry(0.026 * scale, 0.075 * scale, 12), fwdMat);
+  const fwdCollar = new THREE.Mesh(new THREE.TorusGeometry(0.042 * scale, 0.01 * scale, 8, 16), goldMat);
+  fwdCollar.position.set(0, 0, -0.27 * scale);
+  group.add(fwdCollar);
+
+  const fwdTip = new THREE.Mesh(new THREE.ConeGeometry(0.058 * scale, 0.13 * scale, 14), zMat);
   fwdTip.rotation.x = -Math.PI / 2;
-  fwdTip.position.set(0, 0, -0.29 * scale);
+  fwdTip.position.set(0, 0, -0.32 * scale);
   group.add(fwdTip);
 
-  // Ось «Вверх (+Y)» — короткая золотистая игла (верх рукояти)
-  const upShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.0075 * scale, 0.0075 * scale, 0.15 * scale, 8), upMat);
-  upShaft.position.set(0, 0.08 * scale, 0);
+  // Ось «Вверх (+Y)» — пухлая зелёная стрелка
+  const upShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.018 * scale, 0.018 * scale, 0.16 * scale, 10), yMat);
+  upShaft.position.set(0, 0.09 * scale, 0);
   group.add(upShaft);
 
-  const upTip = new THREE.Mesh(new THREE.ConeGeometry(0.02 * scale, 0.055 * scale, 10), upMat);
-  upTip.position.set(0, 0.17 * scale, 0);
+  const upTip = new THREE.Mesh(new THREE.ConeGeometry(0.045 * scale, 0.1 * scale, 12), yMat);
+  upTip.position.set(0, 0.2 * scale, 0);
   group.add(upTip);
 
-  // Ось «Вправо (+X)» — короткий боковой штрих
-  const sideShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.0065 * scale, 0.0065 * scale, 0.11 * scale, 8), sideMat);
+  // Ось «Вправо (+X)» — пухлая красная стрелка
+  const sideShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.018 * scale, 0.018 * scale, 0.14 * scale, 10), xMat);
   sideShaft.rotation.z = -Math.PI / 2;
-  sideShaft.position.set(0.06 * scale, 0, 0);
+  sideShaft.position.set(0.08 * scale, 0, 0);
   group.add(sideShaft);
+
+  const sideTip = new THREE.Mesh(new THREE.ConeGeometry(0.042 * scale, 0.095 * scale, 12), xMat);
+  sideTip.rotation.z = -Math.PI / 2;
+  sideTip.position.set(0.18 * scale, 0, 0);
+  group.add(sideTip);
 
   group.traverse(o => {
     o.renderOrder = 999;
@@ -158,64 +170,63 @@ export function createXRayGripMarkerMesh(colorHex = '#00e676', scale = 1.0) {
   return group;
 }
 
-export function createXRayMuzzleMarkerMesh(colorHex = '#ff3e3e', scale = 1.0) {
+export function createXRayMuzzleMarkerMesh(colorHex = '#ff4757', scale = 1.0) {
   const group = new THREE.Group();
   group.renderOrder = 999;
 
-  const mkMat = (col, op = 0.95) =>
+  const mkMat = (col, op = 0.96) =>
     new THREE.MeshBasicMaterial({
       color: col,
       depthTest: false,
       depthWrite: false,
       transparent: true,
-      opacity: op
+      opacity: op,
+      side: THREE.DoubleSide
     });
 
-  const muzMat = mkMat(colorHex, 0.96);
-  const goldMat = mkMat('#ffce3a', 0.92);
+  const muzMat = mkMat(colorHex, 0.98);
+  const goldMat = mkMat('#ffce3a', 0.95);
   const whiteMat = mkMat('#ffffff', 0.98);
   const hitMat = mkMat('#ffffff', 0.0);
 
-  // Невидимая сфера для удобного клика мышью
-  const hitSphere = new THREE.Mesh(new THREE.SphereGeometry(0.14 * scale, 8, 8), hitMat);
+  const hitSphere = new THREE.Mesh(new THREE.SphereGeometry(0.18 * scale, 10, 10), hitMat);
   group.add(hitSphere);
 
-  // Тонкое внешнее и внутреннее кольцо снайперского перекрестия дула
-  const outerRing = new THREE.Mesh(new THREE.TorusGeometry(0.1 * scale, 0.0075 * scale, 10, 32), muzMat);
+  // Толстое мультяшное кольцо прицела
+  const outerRing = new THREE.Mesh(new THREE.TorusGeometry(0.12 * scale, 0.016 * scale, 12, 32), muzMat);
   group.add(outerRing);
 
-  const innerRing = new THREE.Mesh(new THREE.TorusGeometry(0.042 * scale, 0.0055 * scale, 8, 24), goldMat);
+  const innerRing = new THREE.Mesh(new THREE.TorusGeometry(0.055 * scale, 0.012 * scale, 10, 24), goldMat);
   group.add(innerRing);
 
-  // 4 тонких деления перекрестия (верх, низ, лево, право)
-  const tickGeoV = new THREE.BoxGeometry(0.008 * scale, 0.042 * scale, 0.008 * scale);
-  const tickGeoH = new THREE.BoxGeometry(0.042 * scale, 0.008 * scale, 0.008 * scale);
+  // 4 объёмных деления прицела
+  const tickGeoV = new THREE.BoxGeometry(0.022 * scale, 0.065 * scale, 0.022 * scale);
+  const tickGeoH = new THREE.BoxGeometry(0.065 * scale, 0.022 * scale, 0.022 * scale);
   const tTop = new THREE.Mesh(tickGeoV, goldMat);
-  tTop.position.set(0, 0.095 * scale, 0);
+  tTop.position.set(0, 0.12 * scale, 0);
   const tBot = new THREE.Mesh(tickGeoV, goldMat);
-  tBot.position.set(0, -0.095 * scale, 0);
+  tBot.position.set(0, -0.12 * scale, 0);
   const tLeft = new THREE.Mesh(tickGeoH, goldMat);
-  tLeft.position.set(-0.095 * scale, 0, 0);
+  tLeft.position.set(-0.12 * scale, 0, 0);
   const tRight = new THREE.Mesh(tickGeoH, goldMat);
-  tRight.position.set(0.095 * scale, 0, 0);
+  tRight.position.set(0.12 * scale, 0, 0);
   group.add(tTop, tBot, tLeft, tRight);
 
-  // Малая светящаяся точка в центре среза ствола
-  const centerDot = new THREE.Mesh(new THREE.SphereGeometry(0.018 * scale, 10, 10), whiteMat);
+  const centerDot = new THREE.Mesh(new THREE.OctahedronGeometry(0.038 * scale, 0), whiteMat);
   group.add(centerDot);
 
-  // Пунктирный лазерный луч направления выстрела (-Z) со стрелкой на конце
-  const dashGeo = new THREE.CylinderGeometry(0.0065 * scale, 0.0065 * scale, 0.06 * scale, 8);
+  // Объёмный пунктир направления выстрела (-Z) с крупным наконечником
+  const dashGeo = new THREE.CylinderGeometry(0.016 * scale, 0.016 * scale, 0.07 * scale, 10);
   dashGeo.rotateX(Math.PI / 2);
   for (let i = 0; i < 3; i++) {
     const dash = new THREE.Mesh(dashGeo, muzMat);
-    dash.position.set(0, 0, -(0.065 + i * 0.095) * scale);
+    dash.position.set(0, 0, -(0.08 + i * 0.105) * scale);
     group.add(dash);
   }
 
-  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.025 * scale, 0.075 * scale, 12), muzMat);
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.055 * scale, 0.13 * scale, 14), muzMat);
   tip.rotation.x = -Math.PI / 2;
-  tip.position.set(0, 0, -0.35 * scale);
+  tip.position.set(0, 0, -0.39 * scale);
   group.add(tip);
 
   group.traverse(o => {
@@ -242,22 +253,30 @@ export function getSharedPrimitiveGeo(shape = 'box') {
   return geo;
 }
 
-export function getSharedPrimitiveMat(colorHex = '#ffce3a', emissiveHex = null, emissiveInt = 1.2) {
+export function getSharedPrimitiveMat(
+  colorHex = '#ffce3a',
+  emissiveHex = null,
+  emissiveInt = 1.2,
+  isPseudo = false
+) {
   const normCol = (colorHex || '#ffce3a').toLowerCase();
   const normEm = emissiveHex ? emissiveHex.toLowerCase() : '';
-  const normInt = normEm ? Number(emissiveInt || 1.2).toFixed(2) : '0';
-  const key = `${normCol}|${normEm}|${normInt}`;
+  const effectiveInt = normEm
+    ? (isPseudo ? clamp(Number(emissiveInt || 1.4) * 2.5, 2.0, 7.5) : clamp(Number(emissiveInt || 1.4) * 1.5, 1.2, 5.0))
+    : 0;
+  const normInt = normEm ? effectiveInt.toFixed(2) : '0';
+  const key = `${normCol}|${normEm}|${normInt}|${isPseudo ? '1' : '0'}`;
   if (SHARED_MAT_CACHE[key]) return SHARED_MAT_CACHE[key];
 
   const mat = new THREE.MeshStandardMaterial({
     color: normCol,
-    roughness: 0.35,
-    metalness: 0.2,
+    roughness: normEm ? 0.15 : 0.35,
+    metalness: normEm ? 0.0 : 0.2,
     side: THREE.DoubleSide
   });
   if (normEm) {
     mat.emissive.set(normEm);
-    mat.emissiveIntensity = Number(emissiveInt) || 1.2;
+    mat.emissiveIntensity = effectiveInt;
   }
   SHARED_MAT_CACHE[key] = mat;
   return mat;
@@ -328,6 +347,7 @@ export function syncBuiltinCosmetics(rig, preset = {}, isAngel = false) {
   if (rig.backpack) rig.backpack.visible = !!preset.backpack;
   if (rig.sword) rig.sword.visible = !!preset.sword;
   if (rig.halo) rig.halo.visible = isAngel || !!preset.halo;
+  if (rig.haloAura) rig.haloAura.visible = isAngel || !!preset.halo;
   if (rig.coil) rig.coil.visible = !!preset.coil;
   if (rig.wings) rig.wings.visible = isAngel || !!preset.wings;
 }
@@ -383,15 +403,38 @@ export function countActiveItemsInSlot(ent, slotName, ignoreCustomItem = null, i
   return count;
 }
 
-// Приводит любой аксессуар/питомца к формату с массивом parts (от 1 до 16 примитивов)
+const _tmpBoxCorner = new THREE.Vector3();
+
+// ЗАМЕНИТЬ функцию updateGroupRootHitbox в src/core/CharacterRig.js:
+export function updateGroupRootHitbox(rootGroup) {
+  if (!rootGroup) return null;
+  if (rootGroup.userData && rootGroup.userData.rootHitbox) {
+    const oldHb = rootGroup.userData.rootHitbox;
+    if (oldHb.parent) oldHb.parent.remove(oldHb);
+    delete rootGroup.userData.rootHitbox;
+  }
+  return null;
+}
+
 export function normalizeCosmeticItem(item) {
   if (!item) return null;
   if (!item.parentSlot) item.parentSlot = 'head';
   if (item.enabled === undefined) item.enabled = true;
-  if (!item.petBehavior) item.petBehavior = 'orbit'; // 'orbit' | 'follow'
+  if (!item.petBehavior) item.petBehavior = 'orbit';
   if (item.petDistance === undefined) item.petDistance = 2.2;
   if (item.petHeight === undefined) item.petHeight = 1.5;
   if (item.petSpeed === undefined) item.petSpeed = 2.4;
+
+  // Корневая трансформация всего аксессуара целиком (Root Transform)
+  item.rootX = Number(item.rootX) || 0;
+  item.rootY = Number(item.rootY) || 0;
+  item.rootZ = Number(item.rootZ) || 0;
+  item.rootRX = Number(item.rootRX) || 0;
+  item.rootRY = Number(item.rootRY) || 0;
+  item.rootRZ = Number(item.rootRZ) || 0;
+  item.rootSX = Math.max(0.1, Number(item.rootSX) || 1);
+  item.rootSY = Math.max(0.1, Number(item.rootSY) || 1);
+  item.rootSZ = Math.max(0.1, Number(item.rootSZ) || 1);
 
   if (!Array.isArray(item.parts) || item.parts.length === 0) {
     item.parts = [
@@ -428,14 +471,20 @@ export function normalizeItemData(item) {
   if (!item.id) item.id = 'item_' + Date.now() + '_' + Math.floor(Math.random() * 999);
   if (!item.name) item.name = 'Предмет';
   if (!item.icon) item.icon = '🗡️';
-
-  // 'held' (1 рука, хотбар) | 'carried' (2 руки, крупный контейнер)
   if (!item.holdMode) item.holdMode = 'held';
-
-  // 'none' | 'melee' | 'ranged' | 'throwable' | 'consumable' | 'shield' | 'torch'
   if (!item.useType) item.useType = item.holdMode === 'carried' ? 'none' : 'melee';
 
-  // Точка держания (Grip Point) — смещение и поворот предмета относительно кисти руки
+  // Корневой масштаб и смещение всего предмета целиком (Root Transform)
+  item.rootX = Number(item.rootX) || 0;
+  item.rootY = Number(item.rootY) || 0;
+  item.rootZ = Number(item.rootZ) || 0;
+  item.rootRX = Number(item.rootRX) || 0;
+  item.rootRY = Number(item.rootRY) || 0;
+  item.rootRZ = Number(item.rootRZ) || 0;
+  item.rootSX = Math.max(0.1, Number(item.rootSX) || 1);
+  item.rootSY = Math.max(0.1, Number(item.rootSY) || 1);
+  item.rootSZ = Math.max(0.1, Number(item.rootSZ) || 1);
+
   if (!item.gripPoint) {
     item.gripPoint = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 };
   } else {
@@ -911,9 +960,18 @@ export function buildItemGroup(item, opts = {}) {
 
   const partsHolder = new THREE.Group();
   if (applyGripOffset && !isProjectile && item.gripPoint) {
-    // Поворот применяется к корню в точке хвата (0,0,0 сокета), а примитивы смещаются относительно рукояти
     root.rotation.set(item.gripPoint.rx || 0, item.gripPoint.ry || 0, item.gripPoint.rz || 0);
-    partsHolder.position.set(item.gripPoint.x || 0, item.gripPoint.y || 0, item.gripPoint.z || 0);
+    partsHolder.position.set(
+      (item.gripPoint.x || 0) + (item.rootX || 0),
+      (item.gripPoint.y || 0) + (item.rootY || 0),
+      (item.gripPoint.z || 0) + (item.rootZ || 0)
+    );
+    partsHolder.rotation.set(item.rootRX || 0, item.rootRY || 0, item.rootRZ || 0);
+    partsHolder.scale.set(item.rootSX || 1, item.rootSY || 1, item.rootSZ || 1);
+  } else if (!isProjectile) {
+    partsHolder.position.set(item.rootX || 0, item.rootY || 0, item.rootZ || 0);
+    partsHolder.rotation.set(item.rootRX || 0, item.rootRY || 0, item.rootRZ || 0);
+    partsHolder.scale.set(item.rootSX || 1, item.rootSY || 1, item.rootSZ || 1);
   }
   root.add(partsHolder);
   root.userData.partsHolder = partsHolder;
@@ -932,15 +990,19 @@ export function buildItemGroup(item, opts = {}) {
     const geo = getSharedPrimitiveGeo(pt.shape || 'box');
     const itemHasPseudo = !isProjectile && item.lightData && item.lightData.pseudoLight && i === count - 1;
     const isGlowing = !isTorchOff && (pt.pseudoLight || pt.realLight || itemHasPseudo);
+    const isPseudoSource = !isTorchOff && !!(pt.pseudoLight || itemHasPseudo);
     const glowHex = isGlowing ? (pt.lightColor || pt.color || item.lightData?.color || '#ffce3a') : null;
-    const glowInt = isGlowing ? (Number(pt.lightIntensity) || Number(item.lightData?.intensity) || 1.4) : 0;
+    const rawGlowInt = isGlowing ? (Number(pt.lightIntensity) || Number(item.lightData?.intensity) || 1.4) : 0;
+    const glowInt = isPseudoSource
+      ? clamp(rawGlowInt * 2.5, 2.0, 7.5)
+      : clamp(rawGlowInt * 1.5, 1.2, 5.0);
 
     let mat;
     if (pt.texDataURL) {
       mat = new THREE.MeshStandardMaterial({
         color: pt.color || '#ffce3a',
-        roughness: 0.35,
-        metalness: 0.2,
+        roughness: isPseudoSource ? 0.15 : 0.35,
+        metalness: isPseudoSource ? 0.0 : 0.2,
         side: THREE.DoubleSide
       });
       if (isGlowing && glowHex) {
@@ -948,7 +1010,7 @@ export function buildItemGroup(item, opts = {}) {
         mat.emissiveIntensity = glowInt;
       }
     } else {
-      mat = getSharedPrimitiveMat(pt.color || '#ffce3a', glowHex, glowInt);
+      mat = getSharedPrimitiveMat(pt.color || '#ffce3a', glowHex, glowInt, isPseudoSource);
     }
 
     const mesh = new THREE.Mesh(geo, mat);
@@ -970,12 +1032,32 @@ export function buildItemGroup(item, opts = {}) {
 
     partsHolder.add(mesh);
     root.userData.partMeshes.push(mesh);
+
+    if (isGlowing && glowHex) {
+      const partDim = Math.min(4.5, Math.max(pt.sx ?? 1, pt.sy ?? 1, pt.sz ?? 1));
+      const haloScale = clamp(
+        isPseudoSource
+          ? (partDim * 1.55 + rawGlowInt * 1.0)
+          : (partDim * 1.25 + rawGlowInt * 0.75),
+        0.6,
+        9.0
+      );
+      const haloOpacity = isPseudoSource
+        ? clamp(rawGlowInt * 0.46, 0.35, 0.95)
+        : clamp(rawGlowInt * 0.38, 0.25, 0.85);
+
+      const haloSpr = createHaloSprite(glowHex, haloScale, haloOpacity);
+      haloSpr.position.set(pt.x || 0, pt.y || 0, pt.z || 0);
+      partsHolder.add(haloSpr);
+      mesh.userData.haloSprite = haloSpr;
+    }
   }
 
-  // В режиме редактора Студии добавляем сквозные X-Ray маркеры Точки держания (Grip) и Точки вылета (Muzzle)
+  // Создаём единый корневой коллайдер предмета (Root Hitbox)
+  updateGroupRootHitbox(root);
+
   if (showMarkers && !isProjectile) {
     const gripMarker = createXRayGripMarkerMesh('#00e676', 1.0);
-    // Инвертированное смещение показывает точку, где находится кисть руки относительно примитивов
     gripMarker.position.set(
       -(item.gripPoint.x || 0),
       -(item.gripPoint.y || 0),
@@ -1074,13 +1156,18 @@ export function buildPrimitiveMesh(part, item, partIdx, group) {
   normalizePartEffects(part, false, false);
   const geo = getSharedPrimitiveGeo(part.shape || 'box');
   const isGlowing = !!(part.pseudoLight || part.realLight);
+  const isPseudoSource = !!part.pseudoLight;
   const glowHex = isGlowing ? (part.lightColor || part.color || '#ffce3a') : null;
-  const glowInt = isGlowing ? (Number(part.lightIntensity) || 1.5) : 0;
+  const rawGlowInt = isGlowing ? (Number(part.lightIntensity) || 1.5) : 0;
+  // Псевдо-источники света горят заметно ярче и сочнее (boosted emissive)
+  const glowInt = isPseudoSource
+    ? clamp(rawGlowInt * 2.5, 2.0, 7.5)
+    : clamp(rawGlowInt * 1.5, 1.2, 5.0);
 
   const mat = new THREE.MeshStandardMaterial({
     color: part.color || '#ffce3a',
-    roughness: 0.35,
-    metalness: 0.2,
+    roughness: isPseudoSource ? 0.15 : 0.35,
+    metalness: isPseudoSource ? 0.0 : 0.2,
     side: THREE.DoubleSide
   });
   if (isGlowing && glowHex) {
@@ -1107,6 +1194,27 @@ export function buildPrimitiveMesh(part, item, partIdx, group) {
   if (part.texDataURL) {
     setMeshFrontSprite(mesh, part.texDataURL);
   }
+
+  // Оптический ореол («гало») вокруг светящегося элемента аксессуара/питомца
+  if (isGlowing && glowHex && group) {
+    const partDim = Math.min(4.5, Math.max(part.sx ?? 1, part.sy ?? 1, part.sz ?? 1));
+    const haloScale = clamp(
+      isPseudoSource
+        ? (partDim * 1.55 + rawGlowInt * 1.0)
+        : (partDim * 1.25 + rawGlowInt * 0.75),
+      0.6,
+      9.0
+    );
+    const haloOpacity = isPseudoSource
+      ? clamp(rawGlowInt * 0.46, 0.35, 0.95)
+      : clamp(rawGlowInt * 0.38, 0.25, 0.85);
+
+    const haloSpr = createHaloSprite(glowHex, haloScale, haloOpacity);
+    haloSpr.position.set(part.x || 0, part.y || 0, part.z || 0);
+    group.add(haloSpr);
+    mesh.userData.haloSprite = haloSpr;
+  }
+
   return mesh;
 }
 
@@ -1118,13 +1226,25 @@ export function buildCustomCosmeticGroup(item) {
   group.userData.cosmeticItem = item;
   group.userData.partMeshes = [];
 
+  const partsHolder = new THREE.Group();
+  partsHolder.position.set(item.rootX || 0, item.rootY || 0, item.rootZ || 0);
+  partsHolder.rotation.set(item.rootRX || 0, item.rootRY || 0, item.rootRZ || 0);
+  partsHolder.scale.set(item.rootSX || 1, item.rootSY || 1, item.rootSZ || 1);
+  group.add(partsHolder);
+  group.userData.partsHolder = partsHolder;
+
   const count = Math.min(MAX_COSMETIC_PARTS, item.parts.length);
   for (let i = 0; i < count; i++) {
     const part = item.parts[i];
-    const pMesh = buildPrimitiveMesh(part, item, i, group);
-    group.add(pMesh);
+    const pMesh = buildPrimitiveMesh(part, item, i, partsHolder);
+    pMesh.userData.cosmeticGroup = group;
+    partsHolder.add(pMesh);
     group.userData.partMeshes.push(pMesh);
   }
+
+  // Создаём единый корневой коллайдер аксессуара/питомца (Root Hitbox)
+  updateGroupRootHitbox(group);
+
   return group;
 }
 
@@ -1154,11 +1274,13 @@ export function createRobloxRig(preset, scale = 1, isAngel = false) {
   const pickBoxMat = new THREE.MeshBasicMaterial({
     transparent: true,
     opacity: 0,
-    depthWrite: false
+    depthWrite: false,
+    colorWrite: false
   });
   const charPickMesh = new THREE.Mesh(pickBoxGeo, pickBoxMat);
   charPickMesh.position.set(0, 1.225, 0);
   charPickMesh.userData.isCharPickMesh = true;
+  charPickMesh.userData.isTransparentDefault = true;
   charPickMesh.userData.noCollider = true;
   g.add(charPickMesh);
 
@@ -1330,6 +1452,12 @@ export function createRobloxRig(preset, scale = 1, isAngel = false) {
   halo.userData.noCollider = true;
   head.add(halo);
 
+  const haloAura = createHaloSprite('#ffe64c', 2.35, 0.75);
+  haloAura.position.set(0, hOff + 0.6, 0);
+  haloAura.visible = halo.visible;
+  haloAura.userData.noCollider = true;
+  head.add(haloAura);
+
   const coil = new THREE.Mesh(
     new THREE.TorusGeometry(0.28, 0.06, 8, 16),
     new THREE.MeshBasicMaterial({ color: 0xff3e3e })
@@ -1451,49 +1579,132 @@ export function createRobloxRig(preset, scale = 1, isAngel = false) {
     backpack,
     sword,
     halo,
+    haloAura,
     coil,
     wings,
     customCosMeshes,
     petEntries,
     syncCustomCosmetics,
-    syncBuiltinCosmetics: (p = preset) => syncBuiltinCosmetics({ hatGroup, hatMat, hair, hairMat, crown, glasses, backpack, sword, halo, coil, wings }, p, isAngel)
+    syncBuiltinCosmetics: (p = preset) => syncBuiltinCosmetics({ hatGroup, hatMat, hair, hairMat, crown, glasses, backpack, sword, halo, haloAura, coil, wings }, p, isAngel)
   };
 }
 
 // Запуск процедурной анимации удара/действия (вместо setTimeout)
+// Каталог жестов и эмоций игрока (R6 Emotes)
+export const EMOTES_CATALOG = [
+  { id: 'yes', icon: '👍', name: 'Согласие', chat: '👍 Да, согласен!', loop: false, duration: 2.3 },
+  { id: 'no', icon: '🙅', name: 'Отказ', chat: '🙅 Нет, не пойдёт!', loop: false, duration: 2.3 },
+  { id: 'wave', icon: '👋', name: 'Привет!', chat: '👋 Всем привет!', loop: false, duration: 2.4 },
+  { id: 'shrug', icon: '🤷', name: 'Не знаю / Что?', chat: '🤷 Без понятия...', loop: false, duration: 2.4 },
+  { id: 'sit', icon: '🪑', name: 'Сесть', chat: '🪑 Присел отдохнуть', loop: true, duration: 0 },
+  { id: 'lay', icon: '🛌', name: 'Лечь', chat: '🛌 Прилёг почиллить...', loop: true, duration: 0 },
+  { id: 'fake_die', icon: '💀', name: 'Умереть понарошку', chat: '💀 *Развалился на детальки*', loop: true, duration: 0 },
+  { id: 'dance1', icon: '🕺', name: 'Танец 1', chat: '🕺 /e dance', loop: true, duration: 0 },
+  { id: 'dance2', icon: '💃', name: 'Танец 2', chat: '💃 Оп-оп, Казачок!', loop: true, duration: 0 },
+  { id: 'dance3', icon: '🪩', name: 'Танец 3', chat: '🪩 Диско-волна!', loop: true, duration: 0 },
+  { id: 'clap', icon: '👏', name: 'Хлопать', chat: '👏 Браво! Красавчик!', loop: false, duration: 2.6 },
+  { id: 'laugh', icon: '😂', name: 'Смеяться', chat: '😂 АХАХАХ, умора!', loop: false, duration: 2.6 },
+  { id: 'dab', icon: '😎', name: 'Дэб', chat: '😎 Эпичный ДЭБ!', loop: false, duration: 1.9 },
+  { id: 'cry', icon: '😭', name: 'Плакать', chat: '😭 Ну почему так обидно... Хнык-хнык!', loop: true, duration: 0 },
+  { id: 'angry', icon: '😡', name: 'Злиться', chat: '😡 УХ, КАК Я ЗОЛ!! Держите меня!', loop: false, duration: 2.6 }
+];
+
+console.log('✅ [DebiX] CharacterRig: обновлённая система R6-жестов загружена');
+
+// Запуск или переключение жеста у персонажа
+export function triggerEntityEmote(ent, emoteId) {
+  if (!ent) return null;
+  const def = EMOTES_CATALOG.find(e => e.id === emoteId);
+  if (!def) return null;
+
+  // Повторное нажатие на бесконечный жест (сесть/лечь/танец/развалиться) выключает его
+  if (ent.activeEmote === emoteId && def.loop) {
+    stopEntityEmote(ent);
+    return null;
+  }
+
+  ent.activeEmote = def.id;
+  ent.emoteTimer = 0;
+  ent.emoteDuration = def.loop ? 0 : (def.duration || 2.4);
+  ent._emotePosBlendT = 0.45;
+  ent._lastClapStep = -1;
+
+  // Случайный разброс деталек для «Умереть понарошку»
+  // При rx = ±PI/2 и ry = 0 ось Z вращает деталь строго горизонтально на полу!
+  if (emoteId === 'fake_die') {
+    const s = () => (Math.random() * 2 - 1);
+    ent._ragdollParts = {
+      torso: { x: s() * 0.16, y: 0.24, z: -0.15 + s() * 0.15, rx: Math.PI / 2, ry: 0, rz: s() * 0.7 },
+      head:  { x: -0.45 + s() * 0.28, y: 0.34, z: 0.82 + s() * 0.2, rx: 0, ry: s() * 1.1, rz: s() * 0.2 },
+      armL:  { x: 0.92 + s() * 0.2, y: 0.22, z: 0.28 + s() * 0.22, rx: Math.PI / 2, ry: 0, rz: 0.55 + s() * 0.5 },
+      armR:  { x: -0.92 + s() * 0.2, y: 0.22, z: -0.22 + s() * 0.22, rx: -Math.PI / 2, ry: 0, rz: -0.55 + s() * 0.5 },
+      legL:  { x: 0.52 + s() * 0.18, y: 0.23, z: -0.88 + s() * 0.18, rx: Math.PI / 2, ry: 0, rz: -0.38 + s() * 0.45 },
+      legR:  { x: -0.52 + s() * 0.18, y: 0.23, z: -0.82 + s() * 0.18, rx: -Math.PI / 2, ry: 0, rz: 0.38 + s() * 0.45 }
+    };
+  }
+
+  return def;
+}
+
+export function stopEntityEmote(ent) {
+  if (!ent || !ent.activeEmote) return false;
+  ent.activeEmote = null;
+  ent.emoteTimer = 0;
+  ent.emoteDuration = 0;
+  ent._emotePosBlendT = 0.42;
+  return true;
+}
+
+// Запуск процедурной анимации удара/действия
 export function triggerEntityAttack(ent, style = 'punch') {
   if (!ent) return;
+  if (ent.activeEmote) stopEntityEmote(ent);
   ent.attackAnimDuration = 0.28;
   ent.attackAnimT = ent.attackAnimDuration;
   ent.attackStyle = style;
 }
 
-// Единый процедурный аниматор рига R6 с поддержкой удержания 1 рукой, переноски 2 руками и замаха
+// Единый процедурный аниматор рига R6 с поддержкой удержания 1 рукой, переноски 2 руками, замаха и 12 жестов
 export function updateEntityAnimation(ent, dt, opts = {}) {
   if (!ent || !ent.rig) return;
   const rig = ent.rig;
   const moving = !!opts.moving;
+  const sprinting = opts.sprinting !== undefined ? !!opts.sprinting : !!ent.sprinting;
   const grounded = opts.grounded !== undefined ? !!opts.grounded : (ent.grounded !== undefined ? !!ent.grounded : true);
   const inLiquid = !!opts.inLiquid;
   const vy = ent.vy || 0;
   const t = (S.time || 0) + (ent.qIdx || 0) * 0.37;
 
+  // Управление таймером и авто-отменой активного жеста
+  if (ent.activeEmote) {
+    ent.emoteTimer = (ent.emoteTimer || 0) + dt;
+    ent._emotePosBlendT = 0.42;
+    const isFullBodyEmote = ['sit', 'lay', 'fake_die', 'dance1', 'dance2', 'dance3'].includes(ent.activeEmote);
+
+    if (
+      inLiquid ||
+      !grounded ||
+      (ent.attackAnimT && ent.attackAnimT > 0) ||
+      (isFullBodyEmote && moving && ent.emoteTimer > 0.15)
+    ) {
+      stopEntityEmote(ent);
+    } else if (ent.emoteDuration > 0 && ent.emoteTimer >= ent.emoteDuration) {
+      stopEntityEmote(ent);
+    }
+  } else if (ent._emotePosBlendT > 0) {
+    ent._emotePosBlendT = Math.max(0, ent._emotePosBlendT - dt);
+  }
+
   const stepPhase = (ent.step || 0) * 1.85;
   const walkSwing = moving ? Math.sin(stepPhase) : 0;
-  const walkBounce = moving && grounded && !inLiquid ? Math.abs(Math.cos(stepPhase)) * 0.055 : 0;
+  let walkBounce = moving && grounded && !inLiquid ? Math.abs(Math.cos(stepPhase)) * 0.055 : 0;
   const idleBreath = Math.sin(t * 2.4) * 0.025;
 
-  let legLX = 0;
-  let legRX = 0;
-  let legLZ = 0;
-  let legRZ = 0;
+  let legLX = 0, legLY = 0, legLZ = 0;
+  let legRX = 0, legRY = 0, legRZ = 0;
 
-  let armLX = 0;
-  let armRX = 0;
-  let armLY = 0;
-  let armRY = 0;
-  let armLZ = 0.04 + Math.abs(idleBreath) * 0.8;
-  let armRZ = -0.04 - Math.abs(idleBreath) * 0.8;
+  let armLX = 0, armLY = 0, armLZ = 0.04 + Math.abs(idleBreath) * 0.8;
+  let armRX = 0, armRY = 0, armRZ = -0.04 - Math.abs(idleBreath) * 0.8;
 
   let torsoX = idleBreath * 0.35;
   let torsoY = 0;
@@ -1502,6 +1713,16 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
   let headX = -idleBreath * 0.3;
   let headY = 0;
   let headZ = 0;
+
+  // ВАЖНО: базовые суставные позиции объявляются ДО блока жестов, чтобы не вызывать ReferenceError и не затирать позы!
+  let posLegL = { x: 0.25, y: R6_PIVOTS.hipY + walkBounce * 0.4, z: 0 };
+  let posLegR = { x: -0.25, y: R6_PIVOTS.hipY + walkBounce * 0.4, z: 0 };
+  let posTorso = { x: 0, y: R6_PIVOTS.waistY + walkBounce, z: 0 };
+  let shoulderShiftX = 0;
+  let shoulderShiftY = 0;
+  let shoulderShiftZ = 0;
+  let customLimbPositions = false;
+  let explicitUpperPositions = null;
 
   if (inLiquid) {
     const swimPhase = t * 5.2;
@@ -1527,17 +1748,18 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
     torsoX = -airFactor * 0.22;
     headX = airFactor * 0.18;
   } else if (moving) {
-    legLX = walkSwing * 0.72;
-    legRX = -walkSwing * 0.72;
+    const sprintSwingMult = sprinting ? 1.28 : 1.0;
+    legLX = walkSwing * 0.72 * sprintSwingMult;
+    legRX = -walkSwing * 0.72 * sprintSwingMult;
 
-    armLX = -walkSwing * 0.68;
-    armRX = walkSwing * 0.68;
-    armLZ = 0.07;
-    armRZ = -0.07;
+    armLX = -walkSwing * 0.68 * sprintSwingMult;
+    armRX = walkSwing * 0.68 * sprintSwingMult;
+    armLZ = sprinting ? 0.11 : 0.07;
+    armRZ = sprinting ? -0.11 : -0.07;
 
-    torsoX = 0.07;
-    torsoY = -walkSwing * 0.08;
-    headX = -0.04;
+    torsoX = sprinting ? 0.19 : 0.07;
+    torsoY = -walkSwing * (sprinting ? 0.12 : 0.08);
+    headX = sprinting ? -0.12 : -0.04;
     headY = walkSwing * 0.05;
   } else {
     armLX = Math.sin(t * 1.7) * 0.035;
@@ -1545,7 +1767,79 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
     headY = Math.sin(t * 1.1) * 0.05;
   }
 
-  // Если в Студии редактируется точка хвата этого персонажа — ставим руки в наглядную позу удержания
+  // ТИПЫ ПОХОДКИ ПЕРСОНАЖА / NPC: 'normal' | 'monster' | 'levitate'
+  const gait = (S.state !== 'edit' && (ent.aiModules?.navigation?.gait || ent.gait)) || 'normal';
+  if (!ent.activeEmote && !inLiquid) {
+    if (gait === 'monster') {
+      if (ent._monsterSideSign === undefined) {
+        ent._monsterSideSign = Math.random() < 0.5 ? -1 : 1;
+      }
+      const sideSign = ent._monsterSideSign;
+      const mPhase = stepPhase * 0.78;
+      const mSway = moving ? Math.sin(mPhase) : Math.sin(t * 1.6) * 0.35;
+      const mBob = moving ? Math.abs(Math.cos(mPhase)) : 0;
+
+      // Тяжёлая шаркающая поступь и усталый наклон корпуса вперёд и набок
+      customLimbPositions = true;
+      const limpDip = moving ? (mSway > 0 ? -0.05 * mSway : -0.02) : 0;
+      posLegL = { x: 0.26, y: R6_PIVOTS.hipY + limpDip, z: 0 };
+      posLegR = { x: -0.26, y: R6_PIVOTS.hipY + limpDip, z: 0 };
+      posTorso = { x: mSway * 0.05, y: R6_PIVOTS.waistY + limpDip, z: 0 };
+
+      torsoX = 0.22 + mBob * 0.07;
+      torsoZ = sideSign * 0.15 + mSway * 0.08;
+      torsoY = -mSway * 0.1;
+
+      headX = -0.10 + Math.sin(t * 2.3) * 0.06;
+      headZ = sideSign * 0.18 + mSway * 0.06;
+      headY = mSway * 0.08;
+
+      // Руки вытянуты ВПЕРЁД перед грудью (отрицательный X в R6!) и плавно качаются вверх-вниз
+      shoulderShiftZ = 0.1;
+      armLX = -1.42 + (moving ? Math.sin(mPhase) * 0.18 : Math.sin(t * 2.0) * 0.07);
+      armRX = -1.48 + (moving ? -Math.sin(mPhase) * 0.18 : Math.cos(t * 2.0) * 0.07);
+      armLZ = -0.06 + mSway * 0.05;
+      armRZ = 0.06 + mSway * 0.05;
+
+      if (moving) {
+        legLX = Math.sin(mPhase) * 0.58;
+        legRX = -Math.sin(mPhase) * 0.52;
+        legLZ = 0.06;
+        legRZ = -0.06;
+      }
+    } else if (gait === 'levitate') {
+      // Плавное парение над землёй: руки слегка отведены назад и в стороны, ноги свободно покачиваются в воздухе
+      customLimbPositions = true;
+      const hoverWave = Math.sin(t * 2.6);
+      const hoverWaveCos = Math.cos(t * 2.6);
+      const hoverLift = 0.42 + hoverWave * 0.12;
+      const sideDrift = Math.sin(t * 1.4) * 0.06;
+
+      posLegL = { x: 0.25 + sideDrift, y: R6_PIVOTS.hipY + hoverLift, z: 0 };
+      posLegR = { x: -0.25 + sideDrift, y: R6_PIVOTS.hipY + hoverLift, z: 0 };
+      posTorso = { x: sideDrift, y: R6_PIVOTS.waistY + hoverLift, z: 0 };
+
+      torsoX = moving ? 0.24 + hoverWave * 0.04 : 0.06 + hoverWave * 0.03;
+      torsoZ = Math.cos(t * 1.4) * 0.05;
+      torsoY = Math.sin(t * 1.2) * 0.05;
+
+      headX = moving ? -0.16 : -0.04 + hoverWaveCos * 0.04;
+      headZ = -torsoZ * 0.6;
+
+      // В R6 положительный X отводит руки назад за спину, а armLZ > 0 / armRZ < 0 разводит их в стороны
+      armLX = (moving ? 0.52 : 0.32) + hoverWave * 0.12;
+      armRX = (moving ? 0.52 : 0.32) - hoverWave * 0.12;
+      armLZ = 0.34 + hoverWaveCos * 0.07;
+      armRZ = -0.34 - hoverWaveCos * 0.07;
+
+      // Ноги слегка отведены назад и плавно покачиваются в невесомости
+      legLX = (moving ? 0.38 : 0.22) + hoverWave * 0.12;
+      legRX = (moving ? 0.48 : 0.30) - hoverWave * 0.12;
+      legLZ = 0.06;
+      legRZ = -0.06;
+    }
+  }
+
   const isEditingCharGrip =
     S.state === 'edit' &&
     S.selectedRef &&
@@ -1553,48 +1847,413 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
     S.selectedRef.ent === ent &&
     S.selectedRef.editMode;
 
-  if (isEditingCharGrip === 'carry_grip' || ent.carriedItem) {
-    // Поза переноски крупного контейнера в 2 руках (carried)
-    armLX = -1.35 + (isEditingCharGrip ? 0 : Math.sin(t * 3.0) * 0.03);
-    armRX = -1.35 + (isEditingCharGrip ? 0 : Math.sin(t * 3.0) * 0.03);
-    armLY = -0.28;
-    armRY = 0.28;
-    armLZ = 0.08;
-    armRZ = -0.08;
-    torsoX = isEditingCharGrip ? 0 : -0.06;
-  } else if (isEditingCharGrip === 'hand_grip') {
-    // Наглядная поза вытянутой вперёд правой руки (-90°) для точной настройки 1-ручного хвата в Студии
-    armRX = -Math.PI / 2;
-    armRY = 0;
-    armRZ = 0;
-    torsoX = 0;
-    torsoY = 0;
-  } else if (ent.holdPose === 'throw_charge') {
-    // Замах правой рукой назад для метания снаряда
-    armRX = -2.35;
-    armRY = -0.22;
-    armRZ = -0.18;
-    torsoY = 0.25;
-  } else if (ent.holdPose === 'aim') {
-    // Прицеливание из стрелкового оружия / посоха (с поправкой на угол камеры по вертикали)
-    const pitchOffset = ent.isP ? clamp(-S.pitch, -0.7, 0.7) : 0;
-    armRX = -Math.PI / 2 + pitchOffset;
-    armRY = 0;
-    armRZ = 0;
-    headX += pitchOffset * 0.45;
-  } else if (ent.holdPose === 'shield') {
-    // Удержание силового щита перед корпусом в правой руке
-    armRX = -Math.PI / 2;
-    armRY = 0.25;
-    armRZ = 0;
-  } else if (ent.holdPose === 'tool' || ent.holdPose === 'weapon') {
-    // Удержание 1-ручного оружия/предмета в правой руке прямо вперёд
-    armRX = -1.52 + Math.sin(t * 2.5) * 0.03;
-    armRY = 0.03;
-    armRZ = -0.02;
+  // Вычисляем вертикальный угол взгляда (lookPitch): положительный = взгляд вверх, отрицательный = вниз.
+  // В локальном пространстве R6 отрицательный rotation.x поднимает голову и руки вверх!
+  const rawPitch = ent.isP ? (S.pitch || 0) : (ent.pitch || 0);
+  const lookPitch = S.state === 'edit' ? 0 : clamp(rawPitch, -1.05, 0.85);
+  const pitchRotX = -lookPitch;
+
+  if (!ent.activeEmote) {
+    // Голова плавно наклоняется по взгляду вверх/вниз у всех игроков и ботов
+    headX += pitchRotX * 0.65;
+
+    if (isEditingCharGrip === 'carry_grip' || ent.carriedItem) {
+      const carryPitch = isEditingCharGrip ? 0 : pitchRotX * 0.55;
+      armLX = -1.35 + carryPitch + (isEditingCharGrip ? 0 : Math.sin(t * 3.0) * 0.03);
+      armRX = -1.35 + carryPitch + (isEditingCharGrip ? 0 : Math.sin(t * 3.0) * 0.03);
+      armLZ = -0.22;
+      armRZ = 0.22;
+      torsoX = isEditingCharGrip ? 0 : (-0.06 + pitchRotX * 0.22);
+    } else if (isEditingCharGrip === 'hand_grip') {
+      armRX = -Math.PI / 2;
+      armRY = 0;
+      armRZ = 0;
+      torsoX = 0;
+      torsoY = 0;
+    } else if (ent.holdPose === 'throw_charge') {
+      armRX = -2.35 + pitchRotX * 0.65;
+      armRY = -0.22;
+      armRZ = -0.18;
+      torsoY = 0.25;
+      torsoX += pitchRotX * 0.25;
+    } else if (ent.holdPose === 'aim') {
+      armRX = -Math.PI / 2 + pitchRotX * 0.92;
+      armRY = 0;
+      armRZ = 0;
+      torsoX += pitchRotX * 0.28;
+    } else if (ent.holdPose === 'shield') {
+      armRX = -Math.PI / 2 + pitchRotX * 0.65;
+      armRY = 0.25;
+      armRZ = 0;
+      torsoX += pitchRotX * 0.18;
+    } else if (ent.holdPose === 'tool' || ent.holdPose === 'weapon') {
+      armRX = -1.52 + pitchRotX * 0.82 + Math.sin(t * 2.5) * 0.03;
+      armRY = 0.03;
+      armRZ = -0.02;
+      torsoX += pitchRotX * 0.22;
+    } else if (!moving) {
+      // Даже без предмета в руках лёгкий наклон корпуса передаёт направление взгляда игрока
+      torsoX += pitchRotX * 0.14;
+    }
+  } 
+
+  // ПРОЦЕДУРНАЯ КИНЕМАТИКА 12 ЖЕСТОВ ИГРОКА
+  if (ent.activeEmote) {
+    const et = ent.emoteTimer || 0;
+    const em = ent.activeEmote;
+    const dur = ent.emoteDuration || 0;
+    const envIn = clamp(et / 0.2, 0, 1);
+    const envOut = dur > 0 ? clamp((dur - et) / 0.25, 0, 1) : 1;
+    const env = Math.sin(envIn * envOut * (Math.PI / 2));
+
+    if (em === 'yes') {
+      // 👍 Согласие: чёткие кивки головой + одобрительный жест правой рукой
+      const nod = Math.sin(et * 6.5);
+      headX = (0.18 + nod * 0.28) * env;
+      headY = 0;
+      armRX = (-1.75 + nod * 0.14) * env;
+      armRY = 0;
+      armRZ = 0.16 * env;
+      armLX = -0.15 * env;
+      armLZ = 0.12 * env;
+      torsoX = (0.05 + nod * 0.05) * env;
+      shoulderShiftZ = 0.08 * env;
+    } else if (em === 'no') {
+      // 🙅 Отказ: мотание головой + отмашка руками перед грудью (строго через ось Z, без выкручивания по Y!)
+      const wave = Math.sin(et * 6.8);
+      headY = wave * 0.42 * env;
+      headX = 0.04 * env;
+
+      shoulderShiftX = -0.1 * env;
+      shoulderShiftZ = 0.22 * env;
+
+      armLX = -1.52 * env;
+      armRX = -1.34 * env;
+      armLY = 0;
+      armRY = 0;
+      armLZ = (-0.36 + wave * 0.36) * env;
+      armRZ = (0.36 + wave * 0.36) * env;
+      torsoY = -wave * 0.12 * env;
+    } else if (em === 'wave') {
+      // 👋 Привет!: высокий взмах правой рукой над головой
+      const swing = Math.sin(et * 7.0);
+      armRX = -2.82 * env;
+      armRY = 0;
+      armRZ = (-0.36 + swing * 0.36) * env;
+      armLX = 0.08 * env;
+      armLZ = 0.14 * env;
+      headZ = 0.14 * env;
+      headY = Math.sin(et * 3.5) * 0.1 * env;
+      torsoZ = 0.06 * env;
+    } else if (em === 'shrug') {
+      // 🤷 Не знаю / Что?: поднятые плечи и разведённые в стороны руки
+      const pulse = Math.sin(et * 4.2) * 0.05;
+      shoulderShiftY = 0.14 * env;
+      armLX = -0.68 * env;
+      armRX = -0.68 * env;
+      armLY = 0;
+      armRY = 0;
+      armLZ = (0.78 + pulse) * env;
+      armRZ = -(0.78 + pulse) * env;
+      headZ = 0.26 * env;
+      headX = -0.08 * env;
+      headY = Math.sin(et * 3.2) * 0.12 * env;
+      torsoX = -0.06 * env;
+    } else if (em === 'clap') {
+      // 👏 Хлопать: концы рук сходятся вплотную (X = ±0.21 при толщине 0.44) и соприкасаются перед грудью
+      const clapFreq = 7.8;
+      const rawSin = Math.abs(Math.sin(et * clapFreq));
+      const clapTouch = Math.pow(1 - rawSin, 1.3); // 1.0 — момент касания ладоней, 0.0 — размах
+
+      shoulderShiftX = -0.15 * env;
+      shoulderShiftZ = 0.24 * env;
+
+      armLX = (-1.45 + clapTouch * 0.05) * env;
+      armRX = (-1.45 + clapTouch * 0.05) * env;
+      armLY = 0;
+      armRY = 0;
+      armLZ = -(0.08 + clapTouch * 0.46) * env;
+      armRZ = (0.08 + clapTouch * 0.46) * env;
+
+      headX = (0.05 + clapTouch * 0.08) * env;
+      torsoX = (0.03 + clapTouch * 0.04) * env;
+    } else if (em === 'laugh') {
+      // 😂 Смеяться: живой ритмичный хохот «Ха-ха-ха!» с руками на животе и наклоном корпуса назад
+      customLimbPositions = true;
+      const ha = Math.pow(Math.abs(Math.sin(et * 5.0)), 1.3);
+      const sway = Math.sin(et * 2.5);
+      const dip = -ha * 0.05 * env;
+
+      posLegL = { x: 0.25, y: R6_PIVOTS.hipY + dip, z: 0 };
+      posLegR = { x: -0.25, y: R6_PIVOTS.hipY + dip, z: 0 };
+      posTorso = { x: 0, y: R6_PIVOTS.waistY + dip, z: 0 };
+
+      shoulderShiftY = ha * 0.08 * env;
+      shoulderShiftZ = 0.16 * env;
+
+      torsoX = (-0.20 - ha * 0.12) * env;
+      torsoZ = sway * 0.06 * env;
+      headX = (-0.26 - ha * 0.16) * env;
+      headZ = sway * 0.10 * env;
+
+      armLX = (-0.95 - ha * 0.10) * env;
+      armRX = (-0.95 - ha * 0.10) * env;
+      armLY = 0;
+      armRY = 0;
+      armLZ = -0.42 * env;
+      armRZ = 0.42 * env;
+      legLX = ha * 0.08 * env;
+      legRX = ha * 0.08 * env;
+    } else if (em === 'sit') {
+      // 🪑 Сесть: таз опущен точно на землю (y = 0.23), ноги вытянуты вперёд
+      customLimbPositions = true;
+      const dropY = -0.72;
+      posLegL = { x: 0.25, y: R6_PIVOTS.hipY + dropY, z: 0 };
+      posLegR = { x: -0.25, y: R6_PIVOTS.hipY + dropY, z: 0 };
+      posTorso = { x: 0, y: R6_PIVOTS.waistY + dropY, z: 0 };
+
+      legLX = -Math.PI / 2;
+      legRX = -Math.PI / 2;
+      legLZ = 0.12;
+      legRZ = -0.12;
+
+      armLX = -0.52 + Math.sin(t * 2.0) * 0.03;
+      armRX = -0.52 - Math.sin(t * 2.0) * 0.03;
+      armLZ = -0.10;
+      armRZ = 0.10;
+      torsoX = -0.06 + idleBreath * 0.3;
+      headX = 0.06 - idleBreath * 0.2;
+    } else if (em === 'lay') {
+      // 🛌 Лечь: риг ровно лежит на спине на полу, руки сложены на животе
+      customLimbPositions = true;
+      posTorso = { x: 0, y: 0.24, z: 0 };
+      posLegL = { x: 0.25, y: 0.24, z: 0 };
+      posLegR = { x: -0.25, y: 0.24, z: 0 };
+      explicitUpperPositions = {
+        armL: { x: 0.65, y: 0.32, z: -0.82 },
+        armR: { x: -0.65, y: 0.32, z: -0.82 },
+        head: { x: 0, y: 0.34, z: -1.02 }
+      };
+
+      torsoX = -Math.PI / 2;
+      legLX = -Math.PI / 2;
+      legRX = -Math.PI / 2;
+      legLZ = 0.08;
+      legRZ = -0.08;
+
+      headX = -Math.PI / 2 + 0.26 + Math.sin(t * 1.8) * 0.03;
+      armLX = -Math.PI / 2 - 0.18;
+      armRX = -Math.PI / 2 - 0.18;
+      armLZ = -0.34;
+      armRZ = 0.34;
+    } else if (em === 'fake_die') {
+      // 💀 Умереть понарошку: все 6 кубиков R6 рассыпаются по полу вокруг игрока
+      customLimbPositions = true;
+      const scatter = 1 - Math.pow(1 - clamp(et / 0.24, 0, 1), 3);
+      const rp = ent._ragdollParts || {
+        torso: { x: 0.05, y: 0.24, z: -0.15, rx: Math.PI / 2, ry: 0, rz: 0.35 },
+        head:  { x: -0.42, y: 0.34, z: 0.78, rx: 0, ry: -0.6, rz: 0.15 },
+        armL:  { x: 0.92, y: 0.22, z: 0.28, rx: Math.PI / 2, ry: 0, rz: 0.6 },
+        armR:  { x: -0.92, y: 0.22, z: -0.24, rx: -Math.PI / 2, ry: 0, rz: -0.55 },
+        legL:  { x: 0.52, y: 0.23, z: -0.85, rx: Math.PI / 2, ry: 0, rz: -0.35 },
+        legR:  { x: -0.52, y: 0.23, z: -0.80, rx: -Math.PI / 2, ry: 0, rz: 0.45 }
+      };
+
+      posTorso = {
+        x: rp.torso.x * scatter,
+        y: R6_PIVOTS.waistY + (rp.torso.y - R6_PIVOTS.waistY) * scatter,
+        z: rp.torso.z * scatter
+      };
+      posLegL = {
+        x: 0.25 + (rp.legL.x - 0.25) * scatter,
+        y: R6_PIVOTS.hipY + (rp.legL.y - R6_PIVOTS.hipY) * scatter,
+        z: rp.legL.z * scatter
+      };
+      posLegR = {
+        x: -0.25 + (rp.legR.x + 0.25) * scatter,
+        y: R6_PIVOTS.hipY + (rp.legR.y - R6_PIVOTS.hipY) * scatter,
+        z: rp.legR.z * scatter
+      };
+      explicitUpperPositions = {
+        armL: {
+          x: 0.73 + (rp.armL.x - 0.73) * scatter,
+          y: R6_PIVOTS.shoulderY + (rp.armL.y - R6_PIVOTS.shoulderY) * scatter,
+          z: rp.armL.z * scatter
+        },
+        armR: {
+          x: -0.73 + (rp.armR.x + 0.73) * scatter,
+          y: R6_PIVOTS.shoulderY + (rp.armR.y - R6_PIVOTS.shoulderY) * scatter,
+          z: rp.armR.z * scatter
+        },
+        head: {
+          x: rp.head.x * scatter,
+          y: R6_PIVOTS.neckY + (rp.head.y - R6_PIVOTS.neckY) * scatter,
+          z: rp.head.z * scatter
+        }
+      };
+
+      torsoX = rp.torso.rx * scatter; torsoY = rp.torso.ry * scatter; torsoZ = rp.torso.rz * scatter;
+      headX = rp.head.rx * scatter;   headY = rp.head.ry * scatter;   headZ = rp.head.rz * scatter;
+      armLX = rp.armL.rx * scatter;   armLY = rp.armL.ry * scatter;   armLZ = rp.armL.rz * scatter;
+      armRX = rp.armR.rx * scatter;   armRY = rp.armR.ry * scatter;   armRZ = rp.armR.rz * scatter;
+      legLX = rp.legL.rx * scatter;   legLY = rp.legL.ry * scatter;   legLZ = rp.legL.rz * scatter;
+      legRX = rp.legR.rx * scatter;   legRY = rp.legR.ry * scatter;   legRZ = rp.legR.rz * scatter;
+    } else if (em === 'dance1') {
+      // 🕺 Танец 1: классический ритмичный Roblox /e dance
+      customLimbPositions = true;
+      const beat = et * 5.6;
+      const s = Math.sin(beat);
+      const c = Math.cos(beat);
+      const bounce = -Math.abs(Math.cos(beat * 2)) * 0.08;
+      const swayX = s * 0.15;
+
+      posLegL = { x: 0.25 + swayX * 0.4, y: R6_PIVOTS.hipY + bounce, z: 0 };
+      posLegR = { x: -0.25 + swayX * 0.4, y: R6_PIVOTS.hipY + bounce, z: 0 };
+      posTorso = { x: swayX, y: R6_PIVOTS.waistY + bounce, z: 0 };
+
+      torsoZ = -s * 0.14;
+      torsoY = c * 0.28;
+      torsoX = Math.sin(beat * 2) * 0.06;
+      headZ = s * 0.12;
+      headY = -c * 0.2;
+
+      armLX = -1.35 + Math.sin(beat * 2) * 0.65;
+      armRX = -1.35 - Math.sin(beat * 2) * 0.65;
+      armLZ = 0.24 + Math.max(0, s) * 0.45;
+      armRZ = -0.24 - Math.max(0, -s) * 0.45;
+
+      legLX = Math.sin(beat * 2) * 0.36;
+      legRX = -Math.sin(beat * 2) * 0.36;
+      legLZ = Math.max(0, s) * 0.25;
+      legRZ = -Math.max(0, -s) * 0.25;
+    } else if (em === 'dance2') {
+      // 💃 Танец 2: присядка «Казачок» со сложенными на груди руками и выбросом ног вперёд
+      customLimbPositions = true;
+      const kBeat = et * 6.4;
+      const s = Math.sin(kBeat);
+      const squat = -0.36 + Math.abs(Math.cos(kBeat)) * 0.15;
+
+      posLegL = { x: 0.25, y: R6_PIVOTS.hipY + squat, z: 0 };
+      posLegR = { x: -0.25, y: R6_PIVOTS.hipY + squat, z: 0 };
+      posTorso = { x: s * 0.06, y: R6_PIVOTS.waistY + squat, z: 0 };
+
+      const kickL = Math.max(0, s);
+      const kickR = Math.max(0, -s);
+
+      legLX = -1.42 * kickL + 0.52 * kickR;
+      legRX = -1.42 * kickR + 0.52 * kickL;
+      legLZ = 0.16 * kickL;
+      legRZ = -0.16 * kickR;
+
+      shoulderShiftX = -0.12;
+      shoulderShiftZ = 0.22;
+      armLX = -1.50;
+      armRX = -1.36;
+      armLY = 0;
+      armRY = 0;
+      armLZ = -0.56;
+      armRZ = 0.56;
+
+      torsoX = -0.12;
+      torsoZ = -s * 0.12;
+      headZ = s * 0.14;
+      headX = 0.12;
+    } else if (em === 'dance3') {
+      // 🪩 Танец 3: диско-волна руками и корпусом
+      customLimbPositions = true;
+      const dBeat = et * 5.2;
+      const s = Math.sin(dBeat);
+      const c = Math.cos(dBeat);
+      const dip = -Math.abs(Math.cos(dBeat * 2)) * 0.09;
+
+      posLegL = { x: 0.25 + s * 0.05, y: R6_PIVOTS.hipY + dip, z: 0 };
+      posLegR = { x: -0.25 + s * 0.05, y: R6_PIVOTS.hipY + dip, z: 0 };
+      posTorso = { x: s * 0.14, y: R6_PIVOTS.waistY + dip, z: 0 };
+
+      torsoZ = -s * 0.2;
+      torsoY = c * 0.32;
+      torsoX = Math.sin(dBeat * 2) * 0.07;
+      headZ = s * 0.16;
+      headY = -c * 0.22;
+
+      armRX = -2.42 + s * 0.72;
+      armRZ = -0.42 + s * 0.52;
+      armLX = -1.15 - s * 0.72;
+      armLZ = 0.42 + s * 0.42;
+
+      legLZ = Math.max(0, s) * 0.32;
+      legRZ = -Math.max(0, -s) * 0.32;
+      legLX = c * 0.26;
+      legRX = -c * 0.26;
+    } else if (em === 'dab') {
+      // 😎 Дэб: голова опущена в сгиб согнутой перед лицом левой руки, правая рука резко вытянута в сторону и вверх
+      const snap = Math.pow(env, 0.45);
+      headX = 0.52 * snap;
+      headY = -0.45 * snap;
+      headZ = -0.22 * snap;
+
+      torsoX = 0.18 * snap;
+      torsoY = -0.25 * snap;
+      torsoZ = -0.18 * snap;
+
+      shoulderShiftX = -0.08 * snap;
+      shoulderShiftZ = 0.18 * snap;
+
+      // Левая рука согнута перед лицом
+      armLX = -1.75 * snap;
+      armLY = -0.35 * snap;
+      armLZ = -0.82 * snap;
+
+      // Правая рука вытянута по диагонали вправо-вверх
+      armRX = -2.25 * snap;
+      armRY = 0.25 * snap;
+      armRZ = -0.95 * snap;
+    } else if (em === 'cry') {
+      // 😭 Плакать: обе ладони закрывают лицо, плечи и голова дрожат от всхлипываний
+      const sob = Math.abs(Math.sin(et * 8.5));
+      const sway = Math.sin(et * 2.8);
+
+      shoulderShiftX = -0.16 * env;
+      shoulderShiftY = sob * 0.08 * env;
+      shoulderShiftZ = 0.24 * env;
+
+      headX = (0.38 + sob * 0.12) * env;
+      headZ = sway * 0.08 * env;
+      torsoX = (0.16 + sob * 0.05) * env;
+      torsoZ = sway * 0.05 * env;
+
+      armLX = (-2.05 - sob * 0.08) * env;
+      armRX = (-2.05 - sob * 0.08) * env;
+      armLZ = -0.48 * env;
+      armRZ = 0.48 * env;
+    } else if (em === 'angry') {
+      // 😡 Злиться: сжатые кулаки трясутся по бокам, корпус напряжён, ноги притоптывают от ярости
+      customLimbPositions = true;
+      const stompPhase = et * 11.0;
+      const stompL = Math.max(0, Math.sin(stompPhase));
+      const stompR = Math.max(0, -Math.sin(stompPhase));
+      const rageShake = Math.sin(et * 26.0);
+
+      posLegL = { x: 0.27, y: R6_PIVOTS.hipY + stompL * 0.12 * env, z: 0 };
+      posLegR = { x: -0.27, y: R6_PIVOTS.hipY + stompR * 0.12 * env, z: 0 };
+      posTorso = { x: rageShake * 0.02 * env, y: R6_PIVOTS.waistY - 0.04 * env, z: 0 };
+
+      torsoX = 0.24 * env;
+      headX = (0.18 + Math.abs(rageShake) * 0.06) * env;
+      headY = rageShake * 0.08 * env;
+
+      shoulderShiftY = 0.08 * env;
+      armLX = (-1.15 + rageShake * 0.12) * env;
+      armRX = (-1.15 - rageShake * 0.12) * env;
+      armLZ = 0.36 * env;
+      armRZ = -0.36 * env;
+
+      legLX = -stompL * 0.42 * env;
+      legRX = -stompR * 0.42 * env;
+    }
   }
 
-  // Анимация удара/выстрела от плечевого сустава
+  // Анимация удара/выстрела от плечевого сустава (если походка 'monster' — удар двумя руками сразу!)
   if (ent.attackAnimT && ent.attackAnimT > 0) {
     ent.attackAnimT = Math.max(0, ent.attackAnimT - dt);
     const dur = ent.attackAnimDuration || 0.28;
@@ -1604,6 +2263,14 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
     if (ent.attackStyle === 'shoot') {
       armRX = -1.55 - 0.28 * strikeCurve;
       torsoX -= 0.06 * strikeCurve;
+    } else if (gait === 'monster') {
+      // Двуручный сокрушающий удар монстра сверху вниз!
+      armLX = -1.42 - 0.95 * strikeCurve;
+      armRX = -1.48 - 0.95 * strikeCurve;
+      armLZ = -0.24 * strikeCurve;
+      armRZ = 0.24 * strikeCurve;
+      torsoX += 0.34 * strikeCurve;
+      headX += 0.18 * strikeCurve;
     } else {
       armRX = -1.95 * strikeCurve;
       armRY = 0.32 * strikeCurve;
@@ -1615,21 +2282,70 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
 
   const blend = 1 - Math.exp(-18 * Math.max(0.001, dt));
 
-  rig.legL.position.set(0.25, R6_PIVOTS.hipY + walkBounce * 0.4, 0);
-  rig.legR.position.set(-0.25, R6_PIVOTS.hipY + walkBounce * 0.4, 0);
-  rig.torso.position.set(0, R6_PIVOTS.waistY + walkBounce, 0);
+  const transformTorsoOffset = (ox, oy, oz) => {
+    const cz = Math.cos(torsoZ), sz = Math.sin(torsoZ);
+    const x1 = ox * cz - oy * sz;
+    const y1 = ox * sz + oy * cz;
+    const z1 = oz;
 
-  const upperShiftZ = Math.sin(torsoX) * 0.88;
-  const upperShiftY = (Math.cos(torsoX) - 1) * 0.88 + walkBounce;
-  const shoulderTwistZ = Math.sin(torsoY) * 0.65;
+    const cy = Math.cos(torsoY), sy = Math.sin(torsoY);
+    const x2 = x1 * cy + z1 * sy;
+    const y2 = y1;
+    const z2 = -x1 * sy + z1 * cy;
 
-  rig.armL.position.set(0.73, R6_PIVOTS.shoulderY + upperShiftY + idleBreath * 0.5, upperShiftZ - shoulderTwistZ);
-  rig.armR.position.set(-0.73, R6_PIVOTS.shoulderY + upperShiftY + idleBreath * 0.5, upperShiftZ + shoulderTwistZ);
-  rig.head.position.set(0, R6_PIVOTS.neckY + upperShiftY, upperShiftZ * 1.1);
+    const cx = Math.cos(torsoX), sx = Math.sin(torsoX);
+    const x3 = x2;
+    const y3 = y2 * cx - z2 * sx;
+    const z3 = y2 * sx + z2 * cx;
+
+    return {
+      x: posTorso.x + x3,
+      y: posTorso.y + y3,
+      z: posTorso.z + z3
+    };
+  };
+
+  let posArmL, posArmR, posHead;
+  if (explicitUpperPositions) {
+    posArmL = explicitUpperPositions.armL;
+    posArmR = explicitUpperPositions.armR;
+    posHead = explicitUpperPositions.head;
+  } else {
+    const shoulderRelY = (R6_PIVOTS.shoulderY - R6_PIVOTS.waistY) + shoulderShiftY + idleBreath * 0.5;
+    const neckRelY = R6_PIVOTS.neckY - R6_PIVOTS.waistY;
+    posArmL = transformTorsoOffset(0.73 + shoulderShiftX, shoulderRelY, shoulderShiftZ);
+    posArmR = transformTorsoOffset(-0.73 - shoulderShiftX, shoulderRelY, shoulderShiftZ);
+    posHead = transformTorsoOffset(0, neckRelY, 0);
+  }
+
+  if (customLimbPositions || ent.activeEmote || ent._emotePosBlendT > 0) {
+    const pBlend = 1 - Math.exp(-15 * Math.max(0.001, dt));
+    const lerpPos = (mesh, target) => {
+      mesh.position.x += (target.x - mesh.position.x) * pBlend;
+      mesh.position.y += (target.y - mesh.position.y) * pBlend;
+      mesh.position.z += (target.z - mesh.position.z) * pBlend;
+    };
+    lerpPos(rig.legL, posLegL);
+    lerpPos(rig.legR, posLegR);
+    lerpPos(rig.torso, posTorso);
+    lerpPos(rig.armL, posArmL);
+    lerpPos(rig.armR, posArmR);
+    lerpPos(rig.head, posHead);
+  } else {
+    rig.legL.position.set(posLegL.x, posLegL.y, posLegL.z);
+    rig.legR.position.set(posLegR.x, posLegR.y, posLegR.z);
+    rig.torso.position.set(posTorso.x, posTorso.y, posTorso.z);
+    rig.armL.position.set(posArmL.x, posArmL.y, posArmL.z);
+    rig.armR.position.set(posArmR.x, posArmR.y, posArmR.z);
+    rig.head.position.set(posHead.x, posHead.y, posHead.z);
+  }
 
   rig.legL.rotation.x += (legLX - rig.legL.rotation.x) * blend;
-  rig.legR.rotation.x += (legRX - rig.legR.rotation.x) * blend;
+  rig.legL.rotation.y += (legLY - rig.legL.rotation.y) * blend;
   rig.legL.rotation.z += (legLZ - rig.legL.rotation.z) * blend;
+
+  rig.legR.rotation.x += (legRX - rig.legR.rotation.x) * blend;
+  rig.legR.rotation.y += (legRY - rig.legR.rotation.y) * blend;
   rig.legR.rotation.z += (legRZ - rig.legR.rotation.z) * blend;
 
   rig.armL.rotation.x += (armLX - rig.armL.rotation.x) * blend;
@@ -1648,8 +2364,6 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
   rig.head.rotation.y += (headY - rig.head.rotation.y) * blend;
   rig.head.rotation.z += (headZ - rig.head.rotation.z) * blend;
 }
-
-// Движение всех Питомцев относительно их собственной мировой позиции
 function updateEntityPets(ent, dt) {
   if (!ent || !ent.rig || !ent.rig.petEntries || ent.rig.petEntries.length === 0) return;
 
@@ -1823,56 +2537,169 @@ export function updateAllPets(dt) {
   }
 }
 
-export function makeTagSprite(w = 280, h = 105, sx = 3.1, sy = 1.15) {
+export function pushEntityChatBubble(ent, text, durationSec = 5.2) {
+  if (!ent) return;
+  const clean = String(text || '').trim();
+  if (!clean) {
+    ent.chat = '';
+    ent.chatT = 0;
+    return;
+  }
+  if (!Array.isArray(ent.chatQueue)) ent.chatQueue = [];
+  const now = performance.now() * 0.001;
+
+  ent.chatQueue.push({
+    text: clean,
+    bornAt: now,
+    duration: durationSec
+  });
+  // Храним максимум 3 последних сообщения (новое вытесняет самое старое вверх)
+  while (ent.chatQueue.length > 3) {
+    ent.chatQueue.shift();
+  }
+
+  ent.chat = clean;
+  ent.chatT = durationSec;
+  ent._lastPushedChat = clean;
+}
+
+export function makeTagSprite(w = 400, h = 210, sx = 4.3, sy = 2.25) {
   const c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
+  c.width = Math.max(380, w);
+  c.height = Math.max(200, h);
   const t = new THREE.CanvasTexture(c);
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthWrite: false }));
-  s.scale.set(sx, sy, 1);
+  const s = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: t,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false
+    })
+  );
+  s.scale.set(Math.max(4.1, sx), Math.max(2.15, sy), 1);
+  // Привязываем нижний край спрайта к точке над головой, чтобы ник был высоко, а облачка чата росли вверх
+  s.center.set(0.5, 0.12);
+  s.renderOrder = 990;
   s.userData = { c, g: c.getContext('2d'), t, last: '' };
   return s;
 }
 
-export function updateTag(spr, rankText, nameText, chatText, isMe = false, hpInfo = null) {
+export function updateTag(spr, rankText, nameText, chatText, isMe = false, hpInfo = null, ent = null) {
+  if (!spr || !spr.userData) return;
+  const owner = ent || spr.userData.editorRef?.ent || null;
+  const now = performance.now() * 0.001;
+
+  // Если у сущности изменилось поле ent.chat напрямую (например, реплика NPC или эмоция) — кладём его в очередь облачков
+  if (owner) {
+    if (!Array.isArray(owner.chatQueue)) owner.chatQueue = [];
+    if (chatText && chatText !== owner._lastPushedChat) {
+      // В режиме Студии показываем превью фразы только когда сам персонаж выделен, а в Игре — всегда с таймером угасания
+      if (S.state !== 'edit' || (S.selectedRef?.kind === 'char' && S.selectedRef.ent === owner)) {
+        pushEntityChatBubble(owner, chatText, 5.0);
+      } else {
+        owner._lastPushedChat = chatText;
+      }
+    } else if (!chatText) {
+      owner._lastPushedChat = '';
+    }
+    // Очищаем истёкшие сообщения
+    owner.chatQueue = owner.chatQueue.filter(m => now - m.bornAt < m.duration);
+    if (owner.chatQueue.length === 0 && owner.chatT <= 0 && S.state === 'play') {
+      owner.chat = '';
+    }
+  }
+
+  const activeBubbles = owner && Array.isArray(owner.chatQueue)
+    ? owner.chatQueue
+    : (chatText && S.state !== 'play' ? [{ text: chatText, bornAt: now - 0.5, duration: 999 }] : []);
+
+  // Формируем ключ кэша с квантованием времени анимации (30 FPS), чтобы плавно отрисовывать Pop-In и Fade-Out
+  const bubblesKey = activeBubbles
+    .map(b => {
+      const age = now - b.bornAt;
+      const rem = b.duration - age;
+      const animStep = (age < 0.28 || rem < 1.1) ? Math.floor(now * 30) : 'steady';
+      return `${b.text}@${animStep}`;
+    })
+    .join('||');
+
   const hpKey = hpInfo && hpInfo.show ? `${Math.ceil(hpInfo.hp)}/${hpInfo.maxHp}` : '';
-  const key = `${rankText}|${nameText}|${chatText}|${isMe}|${hpKey}`;
+  const key = `${rankText}|${nameText}|${bubblesKey}|${isMe}|${hpKey}`;
   if (spr.userData.last === key) return;
   spr.userData.last = key;
+
   const { c, g, t } = spr.userData;
   g.clearRect(0, 0, c.width, c.height);
 
-  if (chatText) {
-    g.fillStyle = 'rgba(255,255,255,.95)';
-    g.strokeStyle = '#222';
-    g.lineWidth = 3;
+  // 1. Отрисовка до 3 облачков сообщений (снизу вверх: самое свежее над именем, предыдущие выше)
+  const baseNameY = 148;
+  const bubbleHeight = 36;
+  const bubbleGap = 5;
+
+  for (let i = 0; i < activeBubbles.length; i++) {
+    const b = activeBubbles[i];
+    const age = Math.max(0, now - b.bornAt);
+    const rem = Math.max(0, b.duration - age);
+
+    // Плавное появление (0.22с) и плавное угасание за последнюю 1.0с жизни сообщения
+    const fadeIn = clamp(age / 0.22, 0, 1);
+    const fadeOut = clamp(rem / 1.0, 0, 1);
+    const alpha = fadeIn * fadeOut;
+    if (alpha <= 0.02) continue;
+
+    // Самое новое сообщение (последнее в массиве) находится на слоте 0 прямо над именем, старые — выше
+    const slotFromBottom = activeBubbles.length - 1 - i;
+    const popOffset = (1 - fadeIn) * 10;
+    const floatUpOffset = (1 - fadeOut) * 6;
+    const cy = baseNameY - 34 - slotFromBottom * (bubbleHeight + bubbleGap) + popOffset - floatUpOffset;
+    const scale = 0.88 + 0.12 * fadeIn;
+
+    g.save();
+    g.globalAlpha = alpha * (slotFromBottom === 0 ? 1.0 : slotFromBottom === 1 ? 0.92 : 0.82);
+    g.translate(c.width / 2, cy);
+    g.scale(scale, scale);
+
+    g.font = '800 15.5px "Montserrat",sans-serif';
+    const textMetrics = g.measureText(b.text);
+    const boxW = clamp(textMetrics.width + 32, 90, c.width - 16);
+    const boxH = bubbleHeight;
+
+    g.fillStyle = 'rgba(255, 255, 255, 0.96)';
+    g.strokeStyle = '#141a29';
+    g.lineWidth = 3.2;
     g.beginPath();
-    g.roundRect(14, 4, c.width - 28, 32, 10);
+    g.roundRect(-boxW / 2, -boxH / 2, boxW, boxH, 11);
     g.fill();
     g.stroke();
-    g.fillStyle = '#111';
-    g.font = '800 13px "Montserrat",sans-serif';
+
+    g.fillStyle = '#0f172a';
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    g.fillText(chatText, c.width / 2, 20);
+    g.fillText(b.text, 0, 1, boxW - 18);
+    g.restore();
   }
-  g.font = '900 17px "Montserrat",sans-serif';
+
+  // 2. Отрисовка Никнейма (без лишних префиксов, если rankText пустой)
+  g.font = '900 18.5px "Montserrat",sans-serif';
   g.textAlign = 'center';
   g.textBaseline = 'middle';
-  g.lineWidth = 5;
-  g.strokeStyle = 'rgba(0,0,0,.85)';
-  const label = `${rankText} ${nameText}`;
-  g.strokeText(label, c.width / 2, 54);
+  g.lineWidth = 5.5;
+  g.strokeStyle = 'rgba(0,0,0,.88)';
+  const cleanRank = String(rankText || '').trim();
+  const cleanName = String(nameText || '').trim();
+  const label = cleanRank ? `${cleanRank} ${cleanName}` : cleanName;
+  g.strokeText(label, c.width / 2, baseNameY);
   g.fillStyle = isMe ? '#56f0ff' : '#ffe066';
-  g.fillText(label, c.width / 2, 54);
+  g.fillText(label, c.width / 2, baseNameY);
 
+  // 3. Полоска здоровья (HP Bar)
   if (hpInfo && hpInfo.show) {
-    const bw = 160;
-    const bh = 16;
+    const bw = 184;
+    const bh = 18;
     const bx = (c.width - bw) / 2;
-    const by = 74;
+    const by = baseNameY + 18;
     const ratio = clamp(hpInfo.hp / Math.max(1, hpInfo.maxHp), 0, 1);
-    g.fillStyle = 'rgba(0,0,0,.78)';
+    g.fillStyle = 'rgba(0,0,0,.82)';
     g.beginPath();
     g.roundRect(bx - 2, by - 2, bw + 4, bh + 4, 6);
     g.fill();
@@ -1883,7 +2710,7 @@ export function updateTag(spr, rankText, nameText, chatText, isMe = false, hpInf
       g.fill();
     }
     g.fillStyle = '#fff';
-    g.font = '800 11px "Montserrat",sans-serif';
+    g.font = '800 12px "Montserrat",sans-serif';
     g.fillText(`${Math.ceil(hpInfo.hp)} / ${hpInfo.maxHp} HP`, c.width / 2, by + bh / 2 + 1);
   }
 
