@@ -398,8 +398,9 @@
 
         <div class="actions-row">
             <div style="display: flex; gap: 10px;">
-                <button id="btnCheck" class="btn btn-secondary">🔄 Проверить файлы и обновления</button>
+                <button id="btnCheck" class="btn btn-secondary">🔄 Проверить обновления</button>
                 <button id="btnUpdate" class="btn btn-update" style="display: none;">⬇️ Скачать обновление</button>
+                <button id="btnQuit" class="btn btn-secondary" title="Остановить сервер и закрыть лаунчер">✖ Выход</button>
             </div>
             <button id="btnPlay" class="btn btn-play">▶ ИГРАТЬ В DEBIX</button>
         </div>
@@ -505,13 +506,31 @@
         await fetchStatus();
     });
 
+    let isLaunchingGame = false;
+
     $('btnPlay').addEventListener('click', async () => {
-        const res = await fetch('/api/launcher/play', { method: 'POST' });
-        const data = await res.json();
-        if (!data.ok && data.error) {
-            alert(data.error);
+        if (isLaunchingGame) return;
+        isLaunchingGame = true;
+        $('btnPlay').disabled = true;
+        $('btnPlay').textContent = '⏳ ЗАПУСК ИГРОВОГО СЕРВЕРА...';
+
+        try {
+            const res = await fetch('/api/launcher/play', { method: 'POST' });
+            const data = await res.json();
+            if (!data.ok && data.error) {
+                alert(data.error);
+            }
+        } finally {
+            isLaunchingGame = false;
+            await fetchStatus();
         }
-        await fetchStatus();
+    });
+
+    $('btnQuit').addEventListener('click', async () => {
+        try {
+            await fetch('/api/launcher/quit', { method: 'POST' });
+        } catch (e) {}
+        window.close();
     });
 
     fetchStatus();
