@@ -1,9 +1,9 @@
 {
   "app": "DebiX",
-  "version": "0.0.1",
-  "commitSha": "ea60047a1a7ed9ec7c5280be513ed8ae332aaed0",
-  "timestamp": 1794649864506,
-  "notes": "Первый официальный релиз DebiX",
+  "version": "0.0.2",
+  "commitSha": "7a9db7cb826e3e56daecbeb1d39117da27eca273",
+  "timestamp": 1794650104079,
+  "notes": "Проверка раз-два",
   "files": {
     "index.html": {
       "sha256": "f95ab73caf57a16a31463ba5875f884b57905d09bad600084d9e53c783b72366",
@@ -118,5 +118,5 @@
       "size": 17171
     }
   },
-  "signature": "RpOgjCOrRrX4QOvg9t5aaXTnG1Q0nWdDqh4b/ggNlfbw0dsloH+FrtekqnZr20aGXlXdKnodxalsCzz7+ssSAg=="
+  "signature": "aAw04vkNk9aKbphgaEYUh/8MYkvA6Ahl7l0IY5oUNd+SRxBtj+FtmmNdwpcAoCboHFArroYByKVl9U5YDXsvBA=="
 }
