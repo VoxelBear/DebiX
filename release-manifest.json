@@ -1,0 +1,122 @@
+{
+  "app": "DebiX",
+  "version": "0.0.1",
+  "commitSha": "ea60047a1a7ed9ec7c5280be513ed8ae332aaed0",
+  "timestamp": 1794649864506,
+  "notes": "Первый официальный релиз DebiX",
+  "files": {
+    "index.html": {
+      "sha256": "f95ab73caf57a16a31463ba5875f884b57905d09bad600084d9e53c783b72366",
+      "size": 24761
+    },
+    "lan-server.js": {
+      "sha256": "0b13fe26078b69f83b8a65b7baa4112d814a81d877a9d4ed35eb31a9f33d20e6",
+      "size": 8922
+    },
+    "launcher.html": {
+      "sha256": "70521648d71d69361b067bedcd177085a9824a93fd65a8a8e0c31aee172a86a1",
+      "size": 17748
+    },
+    "package.json": {
+      "sha256": "1d534c7bc57ffc540b17196de66e25588ac3496d7dc1c67926260ae7594dd407",
+      "size": 412
+    },
+    "css/base.css": {
+      "sha256": "7f4a6f946b15b667a2a96b7d70375d307825fad5291b139f246e0c974cb48b43",
+      "size": 4370
+    },
+    "css/hud.css": {
+      "sha256": "a37b08a7a25be4b83b76a9af671a6e829015605b18d07a72c89bf40adf5542ca",
+      "size": 10184
+    },
+    "css/studio.css": {
+      "sha256": "fabce7625c375ea2ef820563cffbf24a7be38c0f40c89ff1ff8c2cba1df9c096",
+      "size": 24443
+    },
+    "src/core/AudioEngine.js": {
+      "sha256": "73b108bb4c44fdaf0298d34f8500ce3b36d2b8c471dd334e5bcd41fd8228b02d",
+      "size": 50922
+    },
+    "src/core/CharacterRig.js": {
+      "sha256": "220d8d4117a8aee8c64f8ea66d6a27627afc17dbdaaba63ebad62db6f0d47f45",
+      "size": 110740
+    },
+    "src/core/EntityManager.js": {
+      "sha256": "5d08d8493aff3cbfe27ea8ffe822ce7b589a66edc19b598ee4785fa93410a361",
+      "size": 27046
+    },
+    "src/core/MultiplayerManager.js": {
+      "sha256": "2b2e2ba696cb409dd8c7e11a365a8bbfd1e4a7e5ae36b98a81d0576673979771",
+      "size": 144388
+    },
+    "src/core/ParticleSystem.js": {
+      "sha256": "06a43ec5ba8a85585f2e8f1f2218a14f5b87493367d542916ce2cd257328453d",
+      "size": 12330
+    },
+    "src/core/SceneManager.js": {
+      "sha256": "797490c5f162cf0859823317380428f51340d0ad8f906775da74a7e680dcc133",
+      "size": 6517
+    },
+    "src/core/Serializer.js": {
+      "sha256": "e6891b757dff3a6ab656ab4d12b3a3d787427a66ffbab2b8686f47389ac65b94",
+      "size": 51679
+    },
+    "src/core/State.js": {
+      "sha256": "4ae3e5f299ea0485b95b0b39a6b3dcb6f633ddce248622c8340a12fbb1608b92",
+      "size": 7830
+    },
+    "src/core/TextureFactory.js": {
+      "sha256": "47df6a52451392711d006bfa30f2c3e0ea9cb4ae627acc7b4bcba32dc56c5afd",
+      "size": 17245
+    },
+    "src/core/WorldRegistry.js": {
+      "sha256": "330ae2c8ca0be80f8e35a4caea9e2ded0f4a104cf0289f2528fd2a546d82d14a",
+      "size": 59452
+    },
+    "src/games/HeavenQueueGame.js": {
+      "sha256": "fa717ab1ea382d9a3942296ca336006b3d4b49971ab15ee9001ed42ab703a3ac",
+      "size": 26681
+    },
+    "src/games/SandboxGame.js": {
+      "sha256": "61af36be4d8ae3652c84a773eec78fb0584d40884b14cdb1cd18a503e2c7c0f9",
+      "size": 3233
+    },
+    "src/player/LiquidCameraFilter.js": {
+      "sha256": "6387f692faa44a7d30e467ee66ff679006b67c8462b0cfffaf546ed93086b24d",
+      "size": 14133
+    },
+    "src/player/NpcTacticalAI.js": {
+      "sha256": "732243d3d06c2a759424c1bf94d25112e347e17b49c90a409fa139450ba95842",
+      "size": 45886
+    },
+    "src/player/PhysicsAndCombat.js": {
+      "sha256": "73b042a8d82de99d7e01544172bcdd8d6dbf0ea7250d854aaf938dafa885b3df",
+      "size": 240827
+    },
+    "src/player/PlayerController.js": {
+      "sha256": "09981dd9f31dcd02031a5af38f209403686a1a76fb2de66e7ee949a1032e42f3",
+      "size": 45926
+    },
+    "src/studio/HierarchyAndSpawn.js": {
+      "sha256": "51aae37fb13eba94f2f3b51174f3a15236946e11e7b45c5b30de18bb15445d7d",
+      "size": 152003
+    },
+    "src/studio/InspectorPanel.js": {
+      "sha256": "0cf0bc2b9dcf605ee2e7adc991fdd12531af8693e64d156d1f16e55f8f609d98",
+      "size": 301671
+    },
+    "src/studio/PaintStudio2D.js": {
+      "sha256": "03916079e1df97598e1fd18259d173f18504fe75b141171851f11da93ee74825",
+      "size": 38497
+    },
+    "src/studio/StudioController.js": {
+      "sha256": "0ca615b95da67f72cc0613500a5b9a0b7095814e70720c455ba772fb5e990144",
+      "size": 102445
+    },
+    "src/studio/StudioGrid.js": {
+      "sha256": "7013ca0b6fb4adc21eca7af0addeab3a824b9bc503e72f296f2668516de46eb4",
+      "size": 17171
+    }
+  },
+  "signature": "RpOgjCOrRrX4QOvg9t5aaXTnG1Q0nWdDqh4b/ggNlfbw0dsloH+FrtekqnZr20aGXlXdKnodxalsCzz7+ssSAg=="
+}
