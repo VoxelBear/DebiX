@@ -22,13 +22,19 @@ const ROOT_DIR = IS_PACKAGED_EXE ? path.dirname(process.execPath) : __dirname;
 // Если .exe запущен с флагом --run-lan-server, он работает как движок для внешнего lan-server.js
 if (process.argv.includes('--run-lan-server')) {
     const Module = require('module');
-    const snapshotNodeModules = path.join(SNAPSHOT_DIR, 'node_modules');
-    if (!Module.globalPaths.includes(snapshotNodeModules)) {
-        Module.globalPaths.push(snapshotNodeModules);
-    }
-    try { require('ws'); } catch (e) {} // Предзагрузка вшитого пакета ws из .exe
+    const bundledWs = require('ws'); // Вшиваем ws в .exe при компиляции
+    const origLoad = Module._load;
+    Module._load = function (request, parent, isMain) {
+        if (request === 'ws') return bundledWs;
+        return origLoad.apply(this, arguments);
+    };
+
     process.chdir(ROOT_DIR);
-    require(path.join(ROOT_DIR, 'lan-server.js'));
+    const serverScriptPath = path.join(ROOT_DIR, 'lan-server.js');
+    const serverModule = new Module(serverScriptPath, module);
+    serverModule.filename = serverScriptPath;
+    serverModule.paths = Module._nodeModulePaths(ROOT_DIR);
+    serverModule._compile(fs.readFileSync(serverScriptPath, 'utf8'), serverScriptPath);
     return;
 }
 
@@ -41,14 +47,14 @@ const LOCAL_VERSION_FILE = path.join(ROOT_DIR, 'local-version.json');
 // ============================================================================
 const LAUNCHER_CONFIG = {
     // Укажи свой GitHub / GitLab репозиторий:
-    gitOwner: 'YOUR_GITHUB_USERNAME',
+    gitOwner: 'VoxelBear',
     gitRepo: 'DebiX',
     // Лаунчер смотрит ТОЛЬКО в ветку 'release' (обычные коммиты в main игнорируются!)
     releaseBranch: 'release',
 
     // Вставь сюда публичный ключ, который выдаст команда: node tools/publish-release.js --keygen
     PUBLIC_KEY_PEM: `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEA0000000000000000000000000000000000000000000=
+MCowBQYDK2VwAyEAiUxjledhctwPMU/rz0Zz7JZovFzPCgkcR24zpNPJbIs=
 -----END PUBLIC KEY-----`
 };
 

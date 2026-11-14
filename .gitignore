@@ -8,3 +8,8 @@ Thumbs.db
 .tools/*.pem
 tools/.private_key.pem
 tools/.public_key.pem
+
+# Сборка DebiX-Launcher.exe (не коммитить бинарник)
+*.exe
+DebiX-Launcher.exe
+.pkg-cache/
