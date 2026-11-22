@@ -1,9 +1,9 @@
 {
   "app": "DebiX",
-  "version": "0.0.4",
-  "commitSha": "e7e0d925609cc2b7aa8b07ef94654a3438c220e3",
-  "timestamp": 1794654274869,
-  "notes": "Синхронизация контрольных сумм SHA-256",
+  "version": "0.0.5",
+  "commitSha": "117c36e2bfac6c8c5b33d7ad34b153b6198e131d",
+  "timestamp": 1795364626388,
+  "notes": "Хуй",
   "files": {
     "index.html": {
       "sha256": "46900eda40e18e6747436ecac19094c12f40e82a52270b1c486dc1110534dcf7",
@@ -37,6 +37,10 @@
       "sha256": "73b108bb4c44fdaf0298d34f8500ce3b36d2b8c471dd334e5bcd41fd8228b02d",
       "size": 50922
     },
+    "src/core/BBModelLoader.js": {
+      "sha256": "e0068abae652eeafb61f1c58f607396a1e0f9141f1c3c44783712c64d20eb6a8",
+      "size": 17424
+    },
     "src/core/CharacterRig.js": {
       "sha256": "96e0ddcc956e208f72439f3dfcfc5f9a515bc468ade8eae12a1c00bbbc1e77b8",
       "size": 108022
@@ -56,6 +60,10 @@
     "src/core/SceneManager.js": {
       "sha256": "797490c5f162cf0859823317380428f51340d0ad8f906775da74a7e680dcc133",
       "size": 6517
+    },
+    "src/core/ScriptEngine.js": {
+      "sha256": "cd245e264a2d9b82b0bf545eafe1d1f5c4b34b8b923e5d7d9844380912c4827c",
+      "size": 94503
     },
     "src/core/Serializer.js": {
       "sha256": "e6891b757dff3a6ab656ab4d12b3a3d787427a66ffbab2b8686f47389ac65b94",
@@ -118,5 +126,5 @@
       "size": 17171
     }
   },
-  "signature": "coy0KnhZQgkg5h21CxdrrVjhj1kAxBu9V81C50WEXA4scIM28aWV0Cv7yvQou4wiY+dkpbwrSppPAYKFc2qoBA=="
+  "signature": "ZhiM/0cnRxD2muvCQeWYOWPyP+d9qLVUi7GLki5gbu+VuAw6BPG8hrxfBj+pSmGvItHTO43pMbGE628QgRLzBg=="
 }
