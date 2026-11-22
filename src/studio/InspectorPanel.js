@@ -1,5 +1,6 @@
 ﻿// src/studio/InspectorPanel.js
 import { S, $, clamp, showBanner } from '../core/State.js';
+import { promptUploadBBModel, buildBBModelGroup, extractBBModelParts } from '../core/BBModelLoader.js';
 import { updateSkybox } from '../core/SceneManager.js';
 import { createBlockMaterial, setMeshFrontSprite, flipImageURLHorizontally } from '../core/TextureFactory.js';
 import {
@@ -32,6 +33,7 @@ import {
   normalizePartEffects
 } from '../core/CharacterRig.js';
 import {
+  addSceneBlock,
   createDefaultLightData,
   createDefaultLogicData,
   createDefaultInteractionData,
@@ -87,6 +89,7 @@ import {
 } from './StudioController.js';
 import {
   refreshHierarchyUI,
+  refreshPrefabDockUI,
   getItem3DThumbnail,
   getCosmetic3DThumbnail,
   recordHierarchyBaseline,
@@ -96,6 +99,165 @@ import {
   saveSelectedObjectAsPrefab
 } from './HierarchyAndSpawn.js';
 import { openPaintModal } from './PaintStudio2D.js';
+import {
+  createDefaultScriptData,
+  renderScriptAddonInspectorCardHTML,
+  bindScriptAddonInspectorEvents,
+  openScriptStudioModal
+} from '../core/ScriptEngine.js';
+
+function normalizeInspectorWindowKey(rawTitle, idx = 0) {
+  const scope = !S.selectedRef ? 'world' : (S.selectedRef.kind || 'obj');
+  const clean = String(rawTitle || '')
+    .replace(/[▼▶]/g, '')
+    .replace(/\([^)]*\)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 48);
+  return `${scope}::${clean || ('sec_' + idx)}`;
+}
+
+export function enhanceAllInspectorCollapsibleWindows(cont = $('inspectorContent')) {
+  if (!cont) return;
+  if (!S.inspectorCollapsedState || typeof S.inspectorCollapsedState !== 'object') {
+    S.inspectorCollapsedState = {};
+  }
+
+  // Делегированный клик и MutationObserver привязываются к #inspectorContent один раз навсегда
+  if (!cont._collapsibleObserverBound) {
+    cont._collapsibleObserverBound = true;
+
+    cont.addEventListener('click', e => {
+      if (e.target.closest('button, input, select, textarea, a, label')) return;
+
+      const h5 = e.target.closest('.prop-group > h5, .insp-sec > .insp-sec-title');
+      if (h5 && cont.contains(h5)) {
+        const box = h5.parentElement;
+        const key = box.dataset.collapsibleKey || normalizeInspectorWindowKey(h5.textContent, 0);
+        box.dataset.collapsibleKey = key;
+        const nextCollapsed = !box.classList.contains('is-collapsed');
+        box.classList.toggle('is-collapsed', nextCollapsed);
+        S.inspectorCollapsedState[key] = nextCollapsed;
+        const arrow = h5.querySelector('.ecs-arrow');
+        if (arrow) arrow.textContent = nextCollapsed ? '▶' : '▼';
+        return;
+      }
+
+      const compHead = e.target.closest('.ecs-comp-card > .ecs-comp-head');
+      if (compHead && cont.contains(compHead)) {
+        if (
+          compHead.dataset.compToggle ||
+          compHead.dataset.npcmodToggle ||
+          compHead.dataset.scrRootToggle ||
+          compHead.dataset.scrItemToggle
+        ) {
+          return;
+        }
+        const card = compHead.parentElement;
+        const body = card.querySelector(':scope > .ecs-comp-body');
+        const key = card.dataset.collapsibleKey || normalizeInspectorWindowKey(compHead.textContent, 100);
+        card.dataset.collapsibleKey = key;
+        const nextCollapsed = body ? !body.hidden : !card.classList.contains('is-collapsed');
+        if (body) body.hidden = nextCollapsed;
+        card.classList.toggle('is-collapsed', nextCollapsed);
+        S.inspectorCollapsedState[key] = nextCollapsed;
+        const arrow = compHead.querySelector('.ecs-arrow');
+        if (arrow) arrow.textContent = nextCollapsed ? '▶' : '▼';
+      }
+    });
+
+    const obs = new MutationObserver(() => {
+      enhanceAllInspectorCollapsibleWindows(cont);
+    });
+    obs.observe(cont, { childList: true });
+  }
+
+  // Кнопка быстрого сворачивания/разворачивания всех окон в шапке Инспектора
+  const secHeader = document.querySelector('.ed-sidebar.right .ed-sec-title');
+  if (secHeader && !$('btnToggleAllInspectorSecs')) {
+    const toggleAllBtn = document.createElement('button');
+    toggleAllBtn.type = 'button';
+    toggleAllBtn.id = 'btnToggleAllInspectorSecs';
+    toggleAllBtn.className = 'ed-btn';
+    toggleAllBtn.style.cssText = 'padding:1px 6px;font-size:10px;margin-left:auto;margin-right:6px';
+    toggleAllBtn.title = 'Свернуть / Развернуть все окна в Инспекторе';
+    toggleAllBtn.textContent = '⊟ Все';
+    const badge = $('inspTypeBadge');
+    if (badge) secHeader.insertBefore(toggleAllBtn, badge);
+    else secHeader.appendChild(toggleAllBtn);
+
+    toggleAllBtn.onclick = () => {
+      const boxes = cont.querySelectorAll('.prop-group, .insp-sec, .ecs-comp-card');
+      const anyOpen = Array.from(boxes).some(b => {
+        const body = b.querySelector(':scope > .ecs-comp-body');
+        return body ? !body.hidden : !b.classList.contains('is-collapsed');
+      });
+      boxes.forEach((b, idx) => {
+        const head = b.querySelector(':scope > h5, :scope > .insp-sec-title, :scope > .ecs-comp-head');
+        if (!head) return;
+        const k = b.dataset.collapsibleKey || normalizeInspectorWindowKey(head.textContent, idx);
+        b.dataset.collapsibleKey = k;
+        S.inspectorCollapsedState[k] = anyOpen;
+        b.classList.toggle('is-collapsed', anyOpen);
+        const body = b.querySelector(':scope > .ecs-comp-body');
+        if (body) body.hidden = anyOpen;
+        const arr = head.querySelector('.ecs-arrow');
+        if (arr) arr.textContent = anyOpen ? '▶' : '▼';
+      });
+      toggleAllBtn.textContent = anyOpen ? '⊞ Все' : '⊟ Все';
+    };
+  }
+
+  // Маркируем все .prop-group и .insp-sec стрелками и восстанавливаем состояние
+  cont.querySelectorAll('.prop-group, .insp-sec').forEach((grp, idx) => {
+    const head = grp.querySelector(':scope > h5, :scope > .insp-sec-title');
+    if (!head) return;
+    const key = grp.dataset.collapsibleKey || normalizeInspectorWindowKey(head.textContent, idx);
+    grp.dataset.collapsibleKey = key;
+    head.classList.add('prop-group-collapsible-head');
+
+    const isCollapsed = Boolean(S.inspectorCollapsedState[key]);
+    grp.classList.toggle('is-collapsed', isCollapsed);
+
+    let arrow = head.querySelector(':scope > .ecs-arrow');
+    if (!arrow) {
+      arrow = document.createElement('span');
+      arrow.className = 'ecs-arrow';
+      arrow.style.marginRight = '5px';
+      head.prepend(arrow);
+    }
+    arrow.textContent = isCollapsed ? '▶' : '▼';
+  });
+
+  // Маркируем все карточки .ecs-comp-card без собственных стрелок
+  cont.querySelectorAll('.ecs-comp-card').forEach((card, idx) => {
+    const head = card.querySelector(':scope > .ecs-comp-head');
+    const body = card.querySelector(':scope > .ecs-comp-body');
+    if (!head || !body) return;
+    if (
+      head.dataset.compToggle ||
+      head.dataset.npcmodToggle ||
+      head.dataset.scrRootToggle ||
+      head.dataset.scrItemToggle
+    ) {
+      return;
+    }
+    const key = card.dataset.collapsibleKey || normalizeInspectorWindowKey(head.textContent, 100 + idx);
+    card.dataset.collapsibleKey = key;
+    const isCollapsed = Boolean(S.inspectorCollapsedState[key]);
+    body.hidden = isCollapsed;
+    card.classList.toggle('is-collapsed', isCollapsed);
+
+    const titleBox = head.querySelector('.ecs-comp-title') || head;
+    let arrow = titleBox.querySelector('.ecs-arrow');
+    if (!arrow) {
+      arrow = document.createElement('span');
+      arrow.className = 'ecs-arrow';
+      titleBox.prepend(arrow);
+    }
+    arrow.textContent = isCollapsed ? '▶' : '▼';
+  });
+}
 
 function formatSnapDeg(rad) {
   const deg = snapAngleDeg(THREE.MathUtils.radToDeg(Number(rad) || 0));
@@ -187,7 +349,7 @@ function bindCustomFactionsEditorEvents(cont, onCreatedCallback = null) {
       if (onCreatedCallback) onCreatedCallback(newFac);
       sfx.jump?.();
       showBanner(`🚩 Создана фракция «${newFac.name}»!`, newFac.color);
-      renderInspectorUI();
+      _renderInspectorUICore();
     };
   }
 
@@ -196,7 +358,7 @@ function bindCustomFactionsEditorEvents(cont, onCreatedCallback = null) {
       const idx = +inp.dataset.facName;
       if (facs[idx]) facs[idx].name = e.target.value || 'Фракция';
     };
-    inp.onchange = () => renderInspectorUI();
+    inp.onchange = () => _renderInspectorUICore();
   });
 
   cont.querySelectorAll('[data-fac-col]').forEach(inp => {
@@ -204,7 +366,7 @@ function bindCustomFactionsEditorEvents(cont, onCreatedCallback = null) {
       const idx = +inp.dataset.facCol;
       if (facs[idx]) facs[idx].color = e.target.value;
     };
-    inp.onchange = () => renderInspectorUI();
+    inp.onchange = () => _renderInspectorUICore();
   });
 
   cont.querySelectorAll('[data-fac-plr]').forEach(sel => {
@@ -229,7 +391,7 @@ function bindCustomFactionsEditorEvents(cont, onCreatedCallback = null) {
         if (!tgtFac.relations) tgtFac.relations = {};
         tgtFac.relations[srcId] = val;
       }
-      renderInspectorUI();
+      _renderInspectorUICore();
     };
   });
 
@@ -245,7 +407,7 @@ function bindCustomFactionsEditorEvents(cont, onCreatedCallback = null) {
         }
       }
       sfx.oof?.();
-      renderInspectorUI();
+      _renderInspectorUICore();
     };
   });
 }
@@ -260,7 +422,7 @@ export function syncLibraryItemIfEditing(ref = S.selectedRef) {
   }
 }
 
-export function renderInspectorUI() {
+function _renderInspectorUICore() {
   const cont = $('inspectorContent');
   const selectedRef = S.selectedRef;
 
@@ -421,8 +583,10 @@ export function renderInspectorUI() {
           <button class="ed-btn" id="btnAllHpOn" type="button" style="flex:1;justify-content:center">❤️ HP всем: 🟢</button>
           <button class="ed-btn" id="btnAllHpOff" type="button" style="flex:1;justify-content:center">🛡️ HP всем: 🔴</button>
         </div>
-        <div class="prop-group" style="border-color:#ff6b6b">
-          <h5>🚩 Конструктор Фракций и Отношений (${(S.worldSettings.factions || []).length})</h5>
+      </div>
+
+      <div class="prop-group" style="border-color:#ff6b6b">
+        <h5>🚩 Конструктор Фракций и Отношений (${(S.worldSettings.factions || []).length})</h5>
         <div style="font-size:10px;color:#cbd5e1;margin-bottom:4px">
           Создавай свои фракции для NPC и настраивай, кто с кем дружит (🤝 Союз), держит нейтралитет (😐) или воюет (⚔️ Война).
         </div>
@@ -485,12 +649,22 @@ export function renderInspectorUI() {
         • В левой панели создавай <b>Мечи, Бластеры, Посохи, Бомбы, Аптечки, Факелы и 2-ручные Контейнеры</b>.<br>
         • У каждого оружия настраивается до <b>16 примитивов корпуса</b>, до <b>16 примитивов снаряда</b>, <b>Точка хвата (🤚)</b> и <b>Точка вылета (🎯)</b>!
       </div>
+
+      <!-- 🧩 ГЛОБАЛЬНЫЙ СКРИПТ ПРАВИЛ МИРА -->
+      <div class="insp-sec">
+        <div class="insp-sec-title">🧩 ГЛОБАЛЬНЫЙ СКРИПТ ПРАВИЛ МИРА</div>
+        ${renderScriptAddonInspectorCardHTML(
+          S.worldSettings.worldScriptData || (S.worldSettings.worldScriptData = createDefaultScriptData('world')),
+          'world',
+          false
+        )}
+      </div>
     `;
 
     $('studioProjTitleInp').oninput = e => {
       S.currentProjectTitle = e.target.value;
     };
-    $('wBtnImportJson').onclick = () => promptImportJsonFile(() => renderInspectorUI());
+    $('wBtnImportJson').onclick = () => promptImportJsonFile(() => _renderInspectorUICore());
     $('wBtnExportJson').onclick = () => {
       rebuildPhysicsArrays();
       exportProjectToJsonFile(serializeSceneState(), S.currentProjectTitle);
@@ -519,7 +693,7 @@ export function renderInspectorUI() {
         if (s === 'night') Object.assign(S.worldSettings, { skyTop: '#050714', skyMid: '#141e30', skyBot: '#243b55', fogColor: '#141e30' });
         if (s === 'heaven') Object.assign(S.worldSettings, { skyTop: '#f39c12', skyMid: '#ffeaa7', skyBot: '#ffffff', fogColor: '#fff3c4' });
         updateSkybox();
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     });
 
@@ -616,7 +790,7 @@ export function renderInspectorUI() {
           ringColor: '#ffce3a'
         });
         updateSkybox();
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     }
 
@@ -638,7 +812,7 @@ export function renderInspectorUI() {
       btn.onclick = () => {
         S.worldSettings.celestialBodies.splice(+btn.dataset.cbDel, 1);
         updateSkybox();
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     });
 
@@ -667,7 +841,7 @@ export function renderInspectorUI() {
     if ($('btnUploadCustomSfx')) {
       $('btnUploadCustomSfx').onclick = () => promptUploadCustomAudio('sfx', entry => {
         if (window.__debixSyncCustomAsset) window.__debixSyncCustomAsset('audio', entry);
-        renderInspectorUI();
+        _renderInspectorUICore();
       });
     }
     if ($('btnUploadCustomMusic')) {
@@ -675,7 +849,7 @@ export function renderInspectorUI() {
         if (window.__debixSyncCustomAsset) window.__debixSyncCustomAsset('audio', entry);
         setWorldMusic('custom:' + entry.id);
         if (window.__debixSyncWorldSettings) window.__debixSyncWorldSettings(false);
-        renderInspectorUI();
+        _renderInspectorUICore();
       });
     }
     if ($('btnUploadCustomAmb')) {
@@ -683,7 +857,7 @@ export function renderInspectorUI() {
         if (window.__debixSyncCustomAsset) window.__debixSyncCustomAsset('audio', entry);
         setWorldAmbience('custom:' + entry.id);
         if (window.__debixSyncWorldSettings) window.__debixSyncWorldSettings(false);
-        renderInspectorUI();
+        _renderInspectorUICore();
       });
     }
     cont.querySelectorAll('[data-aud-play]').forEach(btn => {
@@ -694,10 +868,22 @@ export function renderInspectorUI() {
         const idx = +btn.dataset.audDel;
         S.customAudioLibrary.splice(idx, 1);
         sfx.oof();
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     });
     bindCustomFactionsEditorEvents(cont);
+
+    if (!S.worldSettings.worldScriptData) {
+      S.worldSettings.worldScriptData = createDefaultScriptData('world');
+    }
+    bindScriptAddonInspectorEvents(
+      cont,
+      S.worldSettings.worldScriptData,
+      'world',
+      (needFullRefresh) => {
+        if (needFullRefresh) _renderInspectorUICore();
+      }
+    );
     return;
   }
 
@@ -835,13 +1021,16 @@ export function renderInspectorUI() {
           <div class="prop-row">
             <label>🧊 Форма</label>
             <select class="ed-inp" id="inpItmPtShape" style="flex:1">
+              <option value="none" ${part.shape === 'none' ? 'selected' : ''}>🎯 Пустышка (Пивот / Группа)</option>
               <option value="box" ${part.shape === 'box' ? 'selected' : ''}>🧊 Куб (Box)</option>
               <option value="sphere" ${part.shape === 'sphere' ? 'selected' : ''}>⚪ Сфера (Sphere)</option>
               <option value="cylinder" ${part.shape === 'cylinder' ? 'selected' : ''}>🛢️ Цилиндр (Cylinder)</option>
               <option value="cone" ${part.shape === 'cone' ? 'selected' : ''}>🔺 Конус / Остриё (Cone)</option>
               <option value="torus" ${part.shape === 'torus' ? 'selected' : ''}>🍩 Кольцо (Torus)</option>
               <option value="plane" ${part.shape === 'plane' ? 'selected' : ''}>▭ Плоскость (Plane)</option>
+              <option value="bbmodel" ${part.shape === 'bbmodel' ? 'selected' : ''}>📦 3D-Модель (.bbmodel)</option>
             </select>
+            <button class="ed-btn" id="btnUploadItmPtBBM" type="button" title="Загрузить .bbmodel в эту деталь">📥 .bbmodel</button>
           </div>
           <div class="prop-row"><label>Позиция</label><div class="vec3">
             <input type="number" step="0.05" class="ed-inp" id="inpItmPX" value="${(part.x || 0).toFixed(2)}">
@@ -1130,6 +1319,13 @@ export function renderInspectorUI() {
         </div>
       </div>
 
+      <!-- 🧩 СКРИПТ-АДДОН ПРЕДМЕТА -->
+      ${renderScriptAddonInspectorCardHTML(
+        item.scriptData || (item.scriptData = createDefaultScriptData('item')),
+        'item',
+        false
+      )}
+
       <button class="ed-btn apply-oneclick" id="btnSaveItemToLib" type="button" style="justify-content:center;padding:8px">
         ${isEditingFromLib ? '💾 Обновить предмет в Арсенале' : '⭐ Сохранить предмет в Арсенал (Библиотеку)'}
       </button>
@@ -1188,6 +1384,15 @@ export function renderInspectorUI() {
     };
 
     $('btnUndoItemLocal').onclick = () => undoLastItemAction();
+
+    bindScriptAddonInspectorEvents(
+      cont,
+      item.scriptData,
+      'item',
+      (needFullRefresh) => {
+        if (needFullRefresh) _renderInspectorUICore();
+      }
+    );
 
     cont.querySelectorAll('[data-imode]').forEach(btn => {
       btn.onclick = () => {
@@ -1294,6 +1499,14 @@ export function renderInspectorUI() {
         return;
       }
       pushItemUndoState('Удаление детали');
+      const removedPt = activePartsArr[partIdx];
+      if (removedPt && removedPt.id) {
+        for (const pt of activePartsArr) {
+          if (pt && pt.parentPartId === removedPt.id) {
+            pt.parentPartId = removedPt.parentPartId || null;
+          }
+        }
+      }
       activePartsArr.splice(partIdx, 1);
       sfx.oof();
       refreshItemEditor(isEditingProj ? 'proj_part' : 'part', Math.max(0, partIdx - 1), false);
@@ -1308,6 +1521,44 @@ export function renderInspectorUI() {
       part.shape = e.target.value;
       refreshItemEditor(isEditingProj ? 'proj_part' : 'part', partIdx, false);
     };
+    if ($('btnUploadItmPtBBM')) {
+      $('btnUploadItmPtBBM').onclick = () => {
+        promptUploadBBModel(modelData => {
+          pushItemUndoState('Загрузка .bbmodel в предмет');
+          const extracted = extractBBModelParts(modelData, 12);
+          if (extracted.parts.length > 1) {
+            if (activePartsArr.length === 1 && !activePartsArr[0].bbmodelData) {
+              activePartsArr.length = 0;
+            }
+            for (const ep of extracted.parts) {
+              if (activePartsArr.length >= MAX_ITEM_PARTS) break;
+              const np = normalizePartEffects({
+                id: 'ipt_' + Date.now() + '_' + Math.floor(Math.random() * 9999),
+                name: ep.name,
+                shape: 'bbmodel',
+                bbmodelData: ep.bbmodelData,
+                x: ep.dx, y: ep.dy, z: ep.dz,
+                rx: ep.rx, ry: ep.ry, rz: ep.rz,
+                sx: ep.w, sy: ep.h, sz: ep.d,
+                color: '#ffffff',
+                texDataURL: null
+              }, isEditingProj, false);
+              np.components = { visual: true };
+              activePartsArr.push(np);
+            }
+            item.name = modelData.name || item.name;
+          } else {
+            part.shape = 'bbmodel';
+            part.name = modelData.name || part.name;
+            part.bbmodelData = JSON.parse(JSON.stringify(modelData));
+            const nat = buildBBModelGroup(modelData)?.userData?.naturalSize;
+            if (nat) { part.sx = nat.w; part.sy = nat.h; part.sz = nat.d; }
+          }
+          refreshPrefabDockUI();
+          refreshItemEditor(isEditingProj ? 'proj_part' : 'part', 0, false);
+        });
+      };
+    }
     if ($('btnAddItmPtVisual')) {
       $('btnAddItmPtVisual').onclick = () => {
         pushItemUndoState('Добавление свойства Визуал детали');
@@ -1599,7 +1850,7 @@ export function renderInspectorUI() {
         S.savedItemsLibrary.push(JSON.parse(JSON.stringify(item)));
         sfx.cash();
         showBanner(`⭐ «${item.name}» сохранён в Арсенал! Теперь его можно выдавать игроку и спавнить в 1 клик.`, '#00e676');
-        renderInspectorUI();
+        _renderInspectorUICore();
       }
     };
     return;
@@ -1640,6 +1891,11 @@ export function renderInspectorUI() {
           <button class="ed-btn" id="btnUndoCosLocal" type="button" title="Отменить действие внутри этого аксессуара (Ctrl+Z)">↩️ Отмена</button>
         </div>
         ${isEditingFromLib ? `<div style="font-size:10px;color:#ffce3a">🛠️ Редактирование предмета из сохранённого Гардероба</div>` : ''}
+        <div class="prop-row">
+          <label>Надето (Активно)</label>
+          <input type="checkbox" id="cosEnabledChk" ${item.enabled !== false ? 'checked' : ''}>
+          <span style="font-size:10px;color:${item.enabled !== false ? '#00e676' : '#ff6b6b'}">${item.enabled !== false ? '🟢 Надето на персонаже' : '🔴 Снято (Скрыто в мире)'}</span>
+        </div>
         <div class="prop-row"><label>Название</label><input class="ed-inp" id="cosName" value="${item.name}"></div>
         <div class="prop-row">
           <label>Тип / Слот</label>
@@ -1694,13 +1950,16 @@ export function renderInspectorUI() {
           <div class="prop-row">
             <label>Форма</label>
             <select class="ed-inp" id="cosShape">
+              <option value="none" ${part.shape === 'none' ? 'selected' : ''}>🎯 Пустышка (Пивот / Группа)</option>
               <option value="box" ${part.shape === 'box' ? 'selected' : ''}>Куб (Box)</option>
               <option value="sphere" ${part.shape === 'sphere' ? 'selected' : ''}>Сфера (Sphere)</option>
               <option value="cylinder" ${part.shape === 'cylinder' ? 'selected' : ''}>Цилиндр (Cylinder)</option>
               <option value="cone" ${part.shape === 'cone' ? 'selected' : ''}>Конус / Рог (Cone)</option>
               <option value="torus" ${part.shape === 'torus' ? 'selected' : ''}>Кольцо / Нимб (Torus)</option>
               <option value="plane" ${part.shape === 'plane' ? 'selected' : ''}>Плоскость / Крыло (Plane)</option>
+              <option value="bbmodel" ${part.shape === 'bbmodel' ? 'selected' : ''}>📦 3D-Модель (.bbmodel)</option>
             </select>
+            <button class="ed-btn" id="btnUploadCosPtBBM" type="button" title="Загрузить .bbmodel в эту деталь аксессуара">📥 .bbmodel</button>
           </div>
           <div class="prop-row">
             <label>Цвет и Спрайт</label>
@@ -1827,13 +2086,13 @@ export function renderInspectorUI() {
         selectedRef.inWorldPlacement = false;
         selectEditorObject(selectedRef, true);
         openItemStudio3D(selectedRef);
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     }
     if ($('btnCosExitStudio3D')) {
       $('btnCosExitStudio3D').onclick = () => {
         closeItemStudio3D(true);
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     }
 
@@ -1843,6 +2102,18 @@ export function renderInspectorUI() {
       selectEditorObject({ kind: 'char', ent });
     };
     $('btnUndoCosLocal').onclick = () => undoLastCosmeticAction();
+    if ($('cosEnabledChk')) {
+      $('cosEnabledChk').onchange = e => {
+        const nextOn = e.target.checked;
+        if (nextOn && countActiveItemsInSlot(ent, item.parentSlot, item) >= MAX_ACTIVE_PER_SLOT) {
+          e.target.checked = false;
+          showBanner(`Слот «${SLOT_LABELS_RU[item.parentSlot] || item.parentSlot}» уже занят (${MAX_ACTIVE_PER_SLOT}/${MAX_ACTIVE_PER_SLOT})!`, '#ffce3a');
+          return;
+        }
+        item.enabled = nextOn;
+        rebuildAndReselect(partIdx);
+      };
+    }
     $('cosName').oninput = e => {
       item.name = e.target.value;
       if ($('itemStudioSubjectTitle') && S.itemStudioOpen) {
@@ -1961,6 +2232,42 @@ export function renderInspectorUI() {
       part.shape = e.target.value;
       rebuildAndReselect(partIdx);
     };
+    if ($('btnUploadCosPtBBM')) {
+      $('btnUploadCosPtBBM').onclick = () => {
+        promptUploadBBModel(modelData => {
+          pushCosmeticUndoState('Загрузка .bbmodel в аксессуар');
+          const extracted = extractBBModelParts(modelData, 14);
+          if (extracted.parts.length > 1) {
+            if (item.parts.length === 1 && !item.parts[0].bbmodelData) {
+              item.parts.length = 0;
+            }
+            for (const ep of extracted.parts) {
+              if (item.parts.length >= MAX_COSMETIC_PARTS) break;
+              item.parts.push(normalizePartEffects({
+                id: 'pt_' + Date.now() + '_' + Math.floor(Math.random() * 9999),
+                name: ep.name,
+                shape: 'bbmodel',
+                bbmodelData: ep.bbmodelData,
+                x: ep.dx, y: ep.dy, z: ep.dz,
+                rx: ep.rx, ry: ep.ry, rz: ep.rz,
+                sx: ep.w, sy: ep.h, sz: ep.d,
+                color: '#ffffff',
+                texDataURL: null
+              }, isPet, false));
+            }
+            item.name = modelData.name || item.name;
+          } else {
+            part.shape = 'bbmodel';
+            part.name = modelData.name || part.name;
+            part.bbmodelData = JSON.parse(JSON.stringify(modelData));
+            const nat = buildBBModelGroup(modelData)?.userData?.naturalSize;
+            if (nat) { part.sx = nat.w * 0.5; part.sy = nat.h * 0.5; part.sz = nat.d * 0.5; }
+          }
+          refreshPrefabDockUI();
+          rebuildAndReselect(0);
+        });
+      };
+    }
     $('cosCol').onfocus = () => pushCosmeticUndoState('Смена цвета детали');
     $('cosCol').oninput = e => {
       part.color = e.target.value;
@@ -1976,7 +2283,7 @@ export function renderInspectorUI() {
         part.texDataURL = null;
         if (selectedRef.mesh) setMeshFrontSprite(selectedRef.mesh, null);
         syncLibraryItemIfEditing(selectedRef);
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     }
 
@@ -2101,7 +2408,7 @@ export function renderInspectorUI() {
         S.savedCosmeticsLibrary.push(JSON.parse(JSON.stringify(item)));
         sfx.cash();
         showBanner(`⭐ «${item.name}» (${item.parts.length} дет.) сохранён в общий Гардероб!`, '#00e676');
-        renderInspectorUI();
+        _renderInspectorUICore();
       }
     };
     return;
@@ -2171,7 +2478,8 @@ export function renderInspectorUI() {
       { key: 'cost', icon: '💰', title: 'Плата / Цена (R$)', desc: 'Требовать монеты R$ за активацию объекта, двери, телепорта или покупку' },
       { key: 'item', icon: '⚔️', title: 'Предмет / Оружие', desc: 'Сделать этот объект и его дочерние примитивы удерживаемым оружием или предметом' },
       { key: 'spawner', icon: '🏭', title: 'Спавнер Объектов', desc: 'Генерация NPC, монет или физических кубов по таймеру или действию' },
-      { key: 'sound', icon: '🔊', title: '3D Звук и Импакт', desc: 'Привязка встроенного или своего звука к активации объекта или 3D-зоне вокруг него' }
+      { key: 'sound', icon: '🔊', title: '3D Звук и Импакт', desc: 'Привязка встроенного или своего звука к активации объекта или 3D-зоне вокруг него' },
+      { key: 'script', icon: '🧩', title: 'Скрипт-Аддон (DebiX Script)', desc: 'Кастомный код на JS: физика, магниты, логика и свои ползунки params' }
     ];
 
     const unaddedComps = CATALOG_COMPONENTS.filter(c => !comps[c.key]?.enabled);
@@ -2266,8 +2574,24 @@ export function renderInspectorUI() {
                 <option value="wedge" ${box.shape === 'wedge' ? 'selected' : ''}>📐 Клин / Рампа (Wedge)</option>
                 <option value="torus" ${box.shape === 'torus' ? 'selected' : ''}>🍩 Кольцо / Тор (Torus)</option>
                 <option value="plane" ${box.shape === 'plane' ? 'selected' : ''}>▭ Плоскость / Пластина (Plane)</option>
+                <option value="bbmodel" ${box.shape === 'bbmodel' ? 'selected' : ''}>📦 Своя 3D-Модель (.bbmodel)</option>
               </select>
             </div>
+            <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px">
+              <button class="ed-btn apply-oneclick" id="btnUploadBBModel" type="button" style="flex:1;justify-content:center">📥 Загрузить .bbmodel</button>
+              ${box.shape === 'bbmodel' && box.bbmodelGroup?.userData?.naturalSize ? `
+                <button class="ed-btn" id="btnFitBBModelSize" type="button" title="Выставить родные пропорции модели Blockbench">📐 Пропорции</button>
+              ` : ''}
+            </div>
+            ${(S.customModelsLibrary || []).length > 0 ? `
+              <div class="prop-row" style="margin-top:4px">
+                <label>Из библиотеки</label>
+                <select class="ed-inp" id="selBBModelLib" style="flex:1">
+                  <option value="">-- Выбрать загруженную модель (${S.customModelsLibrary.length}) --</option>
+                  ${S.customModelsLibrary.map((m, idx) => `<option value="${idx}" ${box.bbmodelData?.id === m.id ? 'selected' : ''}>📦 ${m.name}</option>`).join('')}
+                </select>
+              </div>
+            ` : ''}
           </div>
         </div>
       ` : ''}
@@ -3113,6 +3437,13 @@ export function renderInspectorUI() {
         </div>
       ` : ''}
 
+      <!-- 11. КОМПОНЕНТ: 🧩 СКРИПТ-АДДОН -->
+      ${comps.script?.enabled ? renderScriptAddonInspectorCardHTML(
+        box.scriptData || (box.scriptData = createDefaultScriptData('block')),
+        'block',
+        true
+      ) : ''}
+
       ${addMenuHTML}
     `;
 
@@ -3158,6 +3489,10 @@ export function renderInspectorUI() {
         } else if (key === 'sound') {
           if (!box.soundData) box.soundData = createDefaultSoundData();
           comps.sound.soundData = box.soundData;
+        } else if (key === 'script') {
+          if (!box.scriptData) box.scriptData = createDefaultScriptData('block');
+          box.scriptData.enabled = true;
+          comps.script.enabled = true;
         }
 
         sfx.jump();
@@ -3167,7 +3502,7 @@ export function renderInspectorUI() {
           window.__debixSyncBlockUpsert(box, false);
         }
         refreshHierarchyUI();
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     });
 
@@ -3177,7 +3512,7 @@ export function renderInspectorUI() {
         const key = head.dataset.compToggle;
         if (comps[key]) {
           comps[key].collapsed = !comps[key].collapsed;
-          renderInspectorUI();
+          _renderInspectorUICore();
         }
       };
     });
@@ -3209,7 +3544,7 @@ export function renderInspectorUI() {
           window.__debixSyncBlockUpsert(box, false);
         }
         refreshHierarchyUI();
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     });
 
@@ -3287,6 +3622,92 @@ export function renderInspectorUI() {
         }
         selBoxHelper.setFromObject(box.m);
         refreshHierarchyUI();
+        _renderInspectorUICore();
+      };
+    }
+
+    const applyLoadedBBModelToBox = modelData => {
+      pushUndoState('Установка 3D-модели .bbmodel');
+      const extracted = extractBBModelParts(modelData, 8);
+      box.label = modelData.name || box.label;
+
+      if (extracted.parts.length > 1) {
+        const rootPos = box.m.position.clone();
+        const rootQuat = box.m.quaternion.clone();
+        box.shape = 'none';
+        box.bbmodelData = null;
+        ensureBlockComponents(box);
+        box.components.geometry.enabled = false;
+        box.components.visual.enabled = false;
+        box.m.scale.set(extracted.totalSize.w, extracted.totalSize.h, extracted.totalSize.d);
+        box.w = extracted.totalSize.w;
+        box.h = extracted.totalSize.h;
+        box.d = extracted.totalSize.d;
+        syncBlockComponentsState(box);
+
+        for (const ep of extracted.parts) {
+          const offset = new THREE.Vector3(ep.dx, ep.dy, ep.dz).applyQuaternion(rootQuat);
+          const childPos = rootPos.clone().add(offset);
+          const childQuat = rootQuat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(ep.rx, ep.ry, ep.rz)));
+          const childEuler = new THREE.Euler().setFromQuaternion(childQuat);
+
+          const chBox = addSceneBlock({
+            x: childPos.x,
+            y: childPos.y + ep.h * 0.5,
+            z: childPos.z,
+            w: ep.w,
+            h: ep.h,
+            d: ep.d,
+            shape: 'bbmodel',
+            bbmodelData: ep.bbmodelData,
+            colorHex: '#ffffff',
+            label: ep.name,
+            isCustom: true
+          });
+          chBox.m.position.copy(childPos);
+          chBox.m.rotation.copy(childEuler);
+          chBox.m.updateMatrixWorld(true);
+          chBox.parentKey = `block:${box.id}`;
+          chBox.weldToParent = true;
+          syncBlockComponentsState(chBox);
+        }
+        box.hierCollapsed = false;
+      } else {
+        box.shape = 'bbmodel';
+        box.bbmodelData = JSON.parse(JSON.stringify(modelData));
+        ensureBlockComponents(box);
+        box.components.geometry.enabled = true;
+        syncBlockComponentsState(box);
+        const nat = box.bbmodelGroup?.userData?.naturalSize;
+        if (nat) {
+          box.m.scale.set(nat.w, nat.h, nat.d);
+          box.w = nat.w; box.h = nat.h; box.d = nat.d;
+        }
+      }
+
+      rebuildPhysicsArrays();
+      refreshPrefabDockUI();
+      selectEditorObject({ kind: 'block', box });
+    };
+
+    if ($('btnUploadBBModel')) {
+      $('btnUploadBBModel').onclick = () => promptUploadBBModel(applyLoadedBBModelToBox);
+    }
+    if ($('selBBModelLib')) {
+      $('selBBModelLib').onchange = e => {
+        const m = (S.customModelsLibrary || [])[+e.target.value];
+        if (m) applyLoadedBBModelToBox(m);
+      };
+    }
+    if ($('btnFitBBModelSize')) {
+      $('btnFitBBModelSize').onclick = () => {
+        const nat = box.bbmodelGroup?.userData?.naturalSize;
+        if (!nat) return;
+        pushUndoState('Пропорции .bbmodel');
+        box.m.scale.set(nat.w, nat.h, nat.d);
+        box.w = nat.w; box.h = nat.h; box.d = nat.d;
+        rebuildPhysicsArrays();
+        selBoxHelper.setFromObject(box.m);
         renderInspectorUI();
       };
     }
@@ -3315,7 +3736,7 @@ export function renderInspectorUI() {
         pushUndoState('Удаление принта');
         box.customTexDataURL = null;
         setMeshFrontSprite(box.m, null);
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     }
     if ($('inpLightMode')) {
@@ -3324,7 +3745,7 @@ export function renderInspectorUI() {
         ld.mode = e.target.value;
         if (!ld.color) ld.color = box.colorHex;
         syncBlockLightVisuals(box);
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     }
     if ($('inpLightCol')) {
@@ -3398,7 +3819,7 @@ export function renderInspectorUI() {
           window.__debixSyncBlockUpsert(box, false);
         }
         refreshHierarchyUI();
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     }
     if ($('inpBlkDynPhys')) {
@@ -3412,7 +3833,7 @@ export function renderInspectorUI() {
         if (window.__debixSyncBlockUpsert && !S.isApplyingRemoteSync) {
           window.__debixSyncBlockUpsert(box, false);
         }
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     }
     if ($('inpBlkWeldParent')) {
@@ -3427,13 +3848,13 @@ export function renderInspectorUI() {
         box.weight = clamp(Number.isNaN(val) ? 15 : val, -5000, 10000);
         if (box.components?.physics) box.components.physics.weight = box.weight;
       };
-      $('inpBlkWeight').onchange = () => renderInspectorUI();
+      $('inpBlkWeight').onchange = () => _renderInspectorUICore();
     }
     cont.querySelectorAll('[data-w-preset]').forEach(btn => {
       btn.onclick = () => {
         box.weight = +btn.dataset.wPreset;
         if (box.components?.physics) box.components.physics.weight = box.weight;
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     });
     const startPickConstraintIn3D = cType => {
@@ -3467,7 +3888,7 @@ export function renderInspectorUI() {
             : `🔥 Сварка создана: «${box.label}» ➕ «${targetBox.label}»`,
           '#00e676'
         );
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     };
     if ($('btnPickRope3D')) $('btnPickRope3D').onclick = () => startPickConstraintIn3D('rope');
@@ -3478,7 +3899,7 @@ export function renderInspectorUI() {
         const cid = btn.dataset.delCstr;
         S.physicsConstraints = (S.physicsConstraints || []).filter(c => c.id !== cid);
         sfx.oof?.();
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     });
     cont.querySelectorAll('[data-cstr-len]').forEach(inp => {
@@ -3509,7 +3930,7 @@ export function renderInspectorUI() {
       $('inpLiqPhysOn').onchange = e => {
         box.liquidPhysicsEnabled = e.target.checked;
         if (box.components?.physics) box.components.physics.liquidPhysicsEnabled = box.liquidPhysicsEnabled;
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     }
     if ($('inpLiqBuoyancy')) {
@@ -3584,7 +4005,7 @@ export function renderInspectorUI() {
           window.__debixSyncBlockUpsert(box, false);
         }
         refreshHierarchyUI();
-        if (rerender) renderInspectorUI();
+        if (rerender) _renderInspectorUICore();
       };
 
       ['inpItTrig', 'inpItAct', 'inpItHpMode', 'inpItTpMode', 'inpItRewardType', 'inpItConsume', 'inpItDeplete'].forEach(id => {
@@ -3663,7 +4084,7 @@ export function renderInspectorUI() {
         if (selectedRef.editMode === 'motion_wp') {
           selectEditorObject({ kind: 'block', box, editMode: 'motion_wp', wpIdx }, true);
         }
-        if (rerender) renderInspectorUI();
+        if (rerender) _renderInspectorUICore();
       };
 
       ['inpMotPivot', 'inpMotTrig', 'inpMotLoop'].forEach(id => {
@@ -3684,7 +4105,7 @@ export function renderInspectorUI() {
             selectEditorObject({ kind: 'block', box, editMode: 'motion_wp', wpIdx: md.activeWaypointIdx }, true);
           } else {
             rebuildPhysicsArrays();
-            renderInspectorUI();
+            _renderInspectorUICore();
           }
         };
       });
@@ -3711,7 +4132,7 @@ export function renderInspectorUI() {
           md.activeWaypointIdx = md.waypoints.length - 1;
           sfx.jump();
           rebuildPhysicsArrays();
-          renderInspectorUI();
+          _renderInspectorUICore();
         };
       }
 
@@ -3723,7 +4144,7 @@ export function renderInspectorUI() {
           md.activeWaypointIdx = Math.max(0, wpIdx - 1);
           sfx.oof();
           rebuildPhysicsArrays();
-          renderInspectorUI();
+          _renderInspectorUICore();
         };
       }
 
@@ -3818,7 +4239,7 @@ export function renderInspectorUI() {
         syncBlockComponentsState(box);
         syncStudioMotionAndSignalHelpers();
         refreshHierarchyUI();
-        if (rerender) renderInspectorUI();
+        if (rerender) _renderInspectorUICore();
       };
 
       ['inpSigTag', 'inpSigTarget'].forEach(id => {
@@ -3872,14 +4293,14 @@ export function renderInspectorUI() {
         $('inpCompItmHold').onchange = e => {
           itm.holdMode = e.target.value;
           comps.item.itemData = itm;
-          renderInspectorUI();
+          _renderInspectorUICore();
         };
       }
       if ($('inpCompItmUse')) {
         $('inpCompItmUse').onchange = e => {
           itm.useType = e.target.value;
           comps.item.itemData = itm;
-          renderInspectorUI();
+          _renderInspectorUICore();
         };
       }
       if ($('inpCompItmIco')) {
@@ -3987,7 +4408,7 @@ export function renderInspectorUI() {
         if ($('inpSndRad')) snd.radius = Math.max(2, +$('inpSndRad').value || 18);
         if ($('inpSndPitchVar')) snd.pitchVar = clamp(+$('inpSndPitchVar').value || 0, 0, 0.5);
         if ($('inpSndInt')) snd.interval = Math.max(0.4, +$('inpSndInt').value || 2.5);
-        if (rerender) renderInspectorUI();
+        if (rerender) _renderInspectorUICore();
       };
       if ($('inpSndId')) $('inpSndId').onchange = () => syncSnd(false);
       if ($('inpSndMode')) $('inpSndMode').onchange = () => syncSnd(true);
@@ -4001,10 +4422,29 @@ export function renderInspectorUI() {
         $('btnUploadObjCustomSnd').onclick = () => {
           promptUploadCustomAudio('sfx', entry => {
             snd.soundId = 'custom:' + entry.id;
-            renderInspectorUI();
+            _renderInspectorUICore();
           });
         };
       }
+    }
+
+    if (comps.script?.enabled) {
+      if (!box.scriptData) box.scriptData = createDefaultScriptData('block');
+      bindScriptAddonInspectorEvents(
+        cont,
+        box.scriptData,
+        'block',
+        (needFullRefresh) => {
+          syncBlockComponentsState(box);
+          if (needFullRefresh) _renderInspectorUICore();
+        },
+        () => {
+          box.components.script.enabled = false;
+          box.scriptData.enabled = false;
+          syncBlockComponentsState(box);
+          _renderInspectorUICore();
+        }
+      );
     }
     return;
   }
@@ -4123,7 +4563,8 @@ export function renderInspectorUI() {
         { key: 'navigation', icon: '🧭', title: 'Движение, Паркур и Поиск пути (A*)', desc: 'Блуждание / Патруль / Следование, прыжки через ямы и преграды, кратчайший маршрут' },
         { key: 'humanError', icon: '🎲', title: 'Модуль Ошибок и «Человечности»', desc: 'Бот может ошибиться в расчёте прыжка через яму, выбрать неточный путь или замешкаться' },
         { key: 'combat', icon: '⚔️', title: 'Боевой модуль и Сенсорика', desc: 'Мирный / Страж (бьёт в ответ) / Враждебный, стрельба и удары оружием из рук, побег' },
-        { key: 'dialogue', icon: '💬', title: 'Диалог по [E] и Лут после смерти', desc: 'Реплики при разговоре по [E], крики при падении и выпадение монет R$ / оружия' }
+        { key: 'dialogue', icon: '💬', title: 'Диалог по [E] и Лут после смерти', desc: 'Реплики при разговоре по [E], крики при падении и выпадение монет R$ / оружия' },
+        { key: 'customScript', icon: '🧩', title: 'Скрипт-Аддон ИИ (DebiX Script)', desc: 'Кастомный JS-код для NPC: поведение, реакция на урон, диалоги и свои ползунки params' }
       ];
       const unaddedNpcMods = NPC_MOD_CATALOG.filter(m => !npcMods[m.key]?.enabled);
 
@@ -4146,7 +4587,7 @@ export function renderInspectorUI() {
             </div>
           </div>
         `
-        : `<div style="text-align:center;font:700 10px var(--f);color:#69f0ae;padding:4px">✓ Все 5 модулей поведения подключены к NPC</div>`;
+        : `<div style="text-align:center;font:700 10px var(--f);color:#69f0ae;padding:4px">✓ Все 6 модуля поведения подключены к NPC</div>`;
 
       const wpListHTML = (npcMods.navigation.waypoints || []).map((wp, wIdx) => `
         <div style="display:flex;align-items:center;gap:4px;background:#101420;padding:3px 6px;border-radius:5px;border:1px solid #252f48;font-size:10px">
@@ -4453,6 +4894,13 @@ export function renderInspectorUI() {
           </div>
         ` : ''}
 
+        <!-- МОДУЛЬ 6: 🧩 СКРИПТ-АДДОН ИИ (DEBIX SCRIPT) -->
+        ${npcMods.customScript?.enabled ? renderScriptAddonInspectorCardHTML(
+          npcMods.customScript,
+          'npc',
+          true
+        ) : ''}
+
         ${addNpcModMenuHTML}
       `;
     }
@@ -4527,6 +4975,14 @@ export function renderInspectorUI() {
           <input type="number" step="5" min="5" max="2000" class="ed-inp" id="inpCharWeight" value="${ent.weight ?? 70}" style="width:80px;font-weight:800;color:#ffce3a">
           <span style="font-size:10px;color:#94a3b8">Подымает до ${Math.round((ent.weight ?? 70) * 0.9)} кг</span>
         </div>
+        ${!ent.isP && npcMods ? `
+          <div class="prop-row" style="border-top:1px dashed #283147;padding-top:5px;margin-top:2px">
+            <label style="flex:1;color:#ff6b6b" title="Если включено — после гибели NPC исчезает навсегда (не возрождается)">💀 Умирать навсегда</label>
+            <input type="checkbox" id="inpNpcBasePermDeath" ${(ent.permanentDeath || npcMods.dialogue?.permanentDeath) ? 'checked' : ''}>
+            <label style="margin-left:8px;color:#94a3b8" title="Через сколько секунд NPC возродится, если смерть не навсегда">Респ.(с)</label>
+            <input type="number" step="0.5" min="0.5" max="120" class="ed-inp" id="inpNpcBaseRespTime" value="${npcMods.dialogue?.respawnTime ?? 3.5}" style="width:58px" ${(ent.permanentDeath || npcMods.dialogue?.permanentDeath) ? 'disabled' : ''}>
+          </div>
+        ` : ''}
       </div>
 
       ${npcModulesHTML}
@@ -4682,6 +5138,26 @@ export function renderInspectorUI() {
       }
     });
 
+    if ($('inpNpcBasePermDeath') && npcMods) {
+      $('inpNpcBasePermDeath').onchange = e => {
+        const perm = e.target.checked;
+        ent.permanentDeath = perm;
+        if (npcMods.dialogue) npcMods.dialogue.permanentDeath = perm;
+        if ($('inpNpcPermDeath')) $('inpNpcPermDeath').checked = perm;
+        if ($('inpNpcBaseRespTime')) $('inpNpcBaseRespTime').disabled = perm;
+        if (ent.isCustomNPC && window.__debixSyncNpcUpsert && !S.isApplyingRemoteSync) {
+          window.__debixSyncNpcUpsert(ent, true);
+        }
+      };
+    }
+    if ($('inpNpcBaseRespTime') && npcMods) {
+      $('inpNpcBaseRespTime').oninput = e => {
+        const sec = Math.max(0.5, +e.target.value || 3.5);
+        if (npcMods.dialogue) npcMods.dialogue.respawnTime = sec;
+        if ($('inpNpcRespTime')) $('inpNpcRespTime').value = sec;
+      };
+    }
+
     // Обработчики модулей NPC
     if (!ent.isP && npcMods) {
       bindCustomFactionsEditorEvents(cont, newFac => {
@@ -4698,14 +5174,20 @@ export function renderInspectorUI() {
         btn.onclick = () => {
           const key = btn.dataset.addNpcmod;
           pushUndoState(`Включение модуля NPC: ${key}`);
+          if (key === 'customScript' && (!npcMods.customScript || !npcMods.customScript.scripts)) {
+            npcMods.customScript = createDefaultScriptData('npc');
+          }
           if (npcMods[key]) {
             npcMods[key].enabled = true;
             npcMods[key].collapsed = false;
+            if (key === 'customScript' && Array.isArray(npcMods.customScript.scripts) && npcMods.customScript.scripts[0]) {
+              npcMods.customScript.scripts[0].enabled = true;
+            }
           }
           ensureNpcModules(ent);
           refreshEntityTagWithHP(ent);
           sfx.jump();
-          renderInspectorUI();
+          _renderInspectorUICore();
         };
       });
 
@@ -4715,7 +5197,7 @@ export function renderInspectorUI() {
           const key = head.dataset.npcmodToggle;
           if (npcMods[key]) {
             npcMods[key].collapsed = !npcMods[key].collapsed;
-            renderInspectorUI();
+            _renderInspectorUICore();
           }
         };
       });
@@ -4729,7 +5211,7 @@ export function renderInspectorUI() {
           ensureNpcModules(ent);
           refreshEntityTagWithHP(ent);
           sfx.oof();
-          renderInspectorUI();
+          _renderInspectorUICore();
         };
       });
 
@@ -4749,7 +5231,7 @@ export function renderInspectorUI() {
           }
           syncEntityHeldItemMesh(ent);
           sfx.coil();
-          renderInspectorUI();
+          _renderInspectorUICore();
         };
       }
 
@@ -4759,7 +5241,7 @@ export function renderInspectorUI() {
           ent.equippedItem = null;
           syncEntityHeldItemMesh(ent);
           sfx.oof();
-          renderInspectorUI();
+          _renderInspectorUICore();
         };
       }
 
@@ -4768,7 +5250,7 @@ export function renderInspectorUI() {
           pushUndoState('Добавление точки патруля NPC');
           npcMods.navigation.waypoints.push({ x: Number(ent.x.toFixed(2)), y: Number(ent.y.toFixed(2)), z: Number(ent.z.toFixed(2)) });
           sfx.jump();
-          renderInspectorUI();
+          _renderInspectorUICore();
         };
       }
 
@@ -4776,7 +5258,7 @@ export function renderInspectorUI() {
         btn.onclick = () => {
           const wIdx = +btn.dataset.npcWpDel;
           npcMods.navigation.waypoints.splice(wIdx, 1);
-          renderInspectorUI();
+          _renderInspectorUICore();
         };
       });
 
@@ -4830,17 +5312,44 @@ export function renderInspectorUI() {
         }
         if ($('inpNpcOopsChat')) npcMods.dialogue.oopsChat = $('inpNpcOopsChat').value;
         if ($('inpNpcDropCoins')) npcMods.dialogue.dropCoins = Math.max(0, +$('inpNpcDropCoins').value || 0);
-        if ($('inpNpcRespTime')) npcMods.dialogue.respawnTime = Math.max(0.5, +$('inpNpcRespTime').value || 3.5);
+        if ($('inpNpcRespTime')) {
+          npcMods.dialogue.respawnTime = Math.max(0.5, +$('inpNpcRespTime').value || 3.5);
+          if ($('inpNpcBaseRespTime')) $('inpNpcBaseRespTime').value = npcMods.dialogue.respawnTime;
+        }
         if ($('inpNpcDropItem')) npcMods.dialogue.dropEquippedItem = $('inpNpcDropItem').checked;
-        if ($('inpNpcPermDeath')) npcMods.dialogue.permanentDeath = $('inpNpcPermDeath').checked;
+        if ($('inpNpcPermDeath')) {
+          const perm = $('inpNpcPermDeath').checked;
+          npcMods.dialogue.permanentDeath = perm;
+          ent.permanentDeath = perm;
+          if ($('inpNpcBasePermDeath')) $('inpNpcBasePermDeath').checked = perm;
+          if ($('inpNpcBaseRespTime')) $('inpNpcBaseRespTime').disabled = perm;
+        }
 
         ensureNpcModules(ent);
         refreshEntityTagWithHP(ent);
         if (ent.isCustomNPC && window.__debixSyncNpcUpsert && !S.isApplyingRemoteSync) {
           window.__debixSyncNpcUpsert(ent, true);
         }
-        if (rerender) renderInspectorUI();
+        if (rerender) _renderInspectorUICore();
       };
+
+      if (ent.aiModules?.customScript?.enabled) {
+        bindScriptAddonInspectorEvents(
+          cont,
+          ent.aiModules.customScript,
+          'npc',
+          (needFullRefresh) => {
+            if (needFullRefresh) _renderInspectorUICore();
+          },
+          () => {
+            ent.aiModules.customScript.enabled = false;
+            if (Array.isArray(ent.aiModules.customScript.scripts)) {
+              ent.aiModules.customScript.scripts.forEach(s => { if (s) s.enabled = false; });
+            }
+            _renderInspectorUICore();
+          }
+        );
+      }
 
       ['inpNpcNavMode', 'inpNpcStance', 'inpNpcIntel', 'inpNpcFaction', 'inpNpcAtkFactions', 'inpNpcCallHelp'].forEach(id => {
         if ($(id)) $(id).onchange = () => syncNpcModulesInputs(true);
@@ -4936,7 +5445,7 @@ export function renderInspectorUI() {
         ent.rig.syncCustomCosmetics(ent.preset.customCosmetics);
         attachRigToEntity(ent);
         if (S.itemStudioOpen) syncItemStudioPreview();
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     });
 
@@ -4959,7 +5468,7 @@ export function renderInspectorUI() {
         attachRigToEntity(ent);
         if (S.itemStudioOpen) syncItemStudioPreview();
         sfx.oof();
-        renderInspectorUI();
+        _renderInspectorUICore();
       };
     });
 
@@ -5111,5 +5620,27 @@ export function syncInspectorInputsFromObject() {
     $('inpEmpRX').value = formatSnapDeg(g.rotation.x);
     $('inpEmpRY').value = formatSnapDeg(g.rotation.y);
     $('inpEmpRZ').value = formatSnapDeg(g.rotation.z);
+  }
+
+  if ($('openScriptStudioTopBtn')) {
+    $('openScriptStudioTopBtn').onclick = () => {
+      openScriptStudioModal(null, 'block', () => {
+        _renderInspectorUICore();
+      });
+    };
+  }
+}
+
+export function renderInspectorUI() {
+  _renderInspectorUICore();
+  const cont = $('inspectorContent');
+  enhanceAllInspectorCollapsibleWindows(cont);
+
+  if ($('openScriptStudioTopBtn')) {
+    $('openScriptStudioTopBtn').onclick = () => {
+      openScriptStudioModal(null, 'block', () => {
+        renderInspectorUI();
+      });
+    };
   }
 }

@@ -1,5 +1,6 @@
 // src/studio/HierarchyAndSpawn.js
 import { S, $, showBanner, ITEM_STUDIO_ORIGIN } from '../core/State.js';
+import { buildBBModelGroup, extractBBModelParts } from '../core/BBModelLoader.js';
 import { cv, renderer, scene, camera } from '../core/SceneManager.js';
 import { createBlockMaterial, drawFacePresetOnCtx } from '../core/TextureFactory.js';
 import { sfx } from '../core/AudioEngine.js';
@@ -23,12 +24,14 @@ import {
   createBlockGeometryByShape,
   createBlockPivotHelperMesh,
   ensureBlockComponents,
-  syncBlockComponentsState
+  syncBlockComponentsState,
+  syncSceneVisibilityForMode
 } from '../core/WorldRegistry.js';
 import {
   spawnCustomNPC,
   spawnWorldItem,
-  attachRigToEntity
+  attachRigToEntity,
+  syncEntityHeldItemMesh
 } from '../core/EntityManager.js';
 import {
   raycaster,
@@ -44,6 +47,7 @@ import {
   syncItemStudioPreview
 } from './StudioController.js';
 import { syncLibraryItemIfEditing } from './InspectorPanel.js';
+import { isPaintModalOpen } from './PaintStudio2D.js';
 
 /* ---------- КАТАЛОГ БАЗОВЫХ ПРЕФАБОВ И КАТЕГОРИЙ (UNITY PROJECT DOCK) ---------- */
 
@@ -127,10 +131,23 @@ const _currParentPos = new THREE.Vector3();
 const _currParentQuat = new THREE.Quaternion();
 const _currParentScale = new THREE.Vector3();
 
+const _prevLocalPos = new THREE.Vector3();
+const _prevLocalQuat = new THREE.Quaternion();
+const _localStepQuat = new THREE.Quaternion();
+const _invPrevLocalQuat = new THREE.Quaternion();
+
 const _stepQuat = new THREE.Quaternion();
 const _invPrevQuat = new THREE.Quaternion();
 const _stepPos = new THREE.Vector3();
 const _childOffset = new THREE.Vector3();
+
+const _baseLocalPos = new THREE.Vector3();
+const _baseLocalQuat = new THREE.Quaternion();
+const _localDeltaQuat = new THREE.Quaternion();
+const _invBaseLocalQuat = new THREE.Quaternion();
+const _baselineChildrenMap = new Map();
+const _baselinePartsMap = new Map();
+
 let _hasBaseline = false;
 
 /* ---------- ПУСТЫЕ ОБЪЕКТЫ С ПИВОТОМ (UNITY EMPTY GAMEOBJECT) ---------- */
@@ -368,17 +385,21 @@ export function compileSceneHierarchyToItemData(rootBox) {
     let locEuler = new THREE.Euler(0, 0, 0);
 
     if (!isRootSelf) {
-      locPos.copy(bm.position).sub(rootPos).applyQuaternion(invRootQuat);
+      locPos.copy(bm.position).sub(rootPos).applyQuaternion(invRootQuat).multiplyScalar(0.35);
       const locQuat = invRootQuat.clone().multiply(bm.quaternion);
       locEuler.setFromQuaternion(locQuat);
     }
 
-    const hasVis = Boolean(b.components.visual?.enabled);
+    const hasVis = Boolean(b.components.visual?.enabled) || b.shape === 'bbmodel';
     const col = hasVis ? (b.colorHex || '#f1f5f9') : '#f1f5f9';
     const ld = b.lightData || {};
     const pd = b.particleData || {};
 
     const ptShape = b.shape === 'wedge' ? 'box' : (b.shape || 'box');
+    const ptBBModel = (b.shape === 'bbmodel' && b.bbmodelData)
+      ? JSON.parse(JSON.stringify(b.bbmodelData))
+      : null;
+
     const pt = normalizePartEffects({
       id: 'ipt_' + b.id,
       name: b.label || `Деталь #${compiledParts.length + 1}`,
@@ -401,15 +422,16 @@ export function compileSceneHierarchyToItemData(rootBox) {
       lightDistance: ld.distance || 12,
       particleData: hasVis && pd.enabled ? JSON.parse(JSON.stringify(pd)) : undefined
     }, false, false);
+    if (ptBBModel) pt.bbmodelData = ptBBModel;
     pt.components = { visual: hasVis };
     compiledParts.push(pt);
   };
 
-  if (rootBox.components.geometry?.enabled) {
+  const descendants = getAllSceneDescendants(`block:${rootBox.id}`);
+  const rootIsContainerOnly = descendants.length > 0 && rootBox.shape !== 'bbmodel' && !rootBox.components.visual?.enabled;
+  if (rootBox.components.geometry?.enabled && !rootIsContainerOnly) {
     pushBlockAsPart(rootBox, true);
   }
-
-  const descendants = getAllSceneDescendants(`block:${rootBox.id}`);
   for (const d of descendants) {
     if (d.kind === 'block' && d.obj) {
       pushBlockAsPart(d.obj, false);
@@ -635,48 +657,109 @@ export function syncFolderPivotToChildren(folder) {
   return folderPivotMesh;
 }
 
-// Запоминает матрицу родительского объекта перед шагом трансформации
+// Проверяет, является ли candidatePartId потомком targetAncestorId в иерархии parentPartId
+export function isPartDescendantOf(partsArr, candidatePartId, targetAncestorId) {
+  if (!Array.isArray(partsArr) || !candidatePartId || !targetAncestorId) return false;
+  if (candidatePartId === targetAncestorId) return true;
+  let curId = candidatePartId;
+  let guard = 0;
+  while (curId && guard++ < 128) {
+    const pt = partsArr.find(p => p && p.id === curId);
+    if (!pt || !pt.parentPartId) break;
+    if (pt.parentPartId === targetAncestorId) return true;
+    curId = pt.parentPartId;
+  }
+  return false;
+}
+
+// Запоминает точное начальное состояние родителя и всех уровней его дочерних элементов перед трансформацией
 export function recordHierarchyBaseline(ref = S.selectedRef) {
   _hasBaseline = false;
+  _baselineChildrenMap.clear();
+  _baselinePartsMap.clear();
   if (!ref) return;
   const mesh = ref.mesh || ref.box?.m || ref.ent?.rig?.g || ref.worldEntry?.group || ref.emptyObj?.group;
   if (!mesh) return;
   mesh.updateMatrixWorld(true);
   _baselineMatrix.copy(mesh.matrixWorld);
+  mesh.getWorldPosition(_prevParentPos);
+  mesh.getWorldQuaternion(_prevParentQuat);
+  _prevParentQuat.normalize();
+
+  _baseLocalPos.copy(mesh.position);
+  _baseLocalQuat.copy(mesh.quaternion).normalize();
+
+  // Снапшот вложенных деталей внутри предмета или аксессуара
+  if (
+    (ref.kind === 'world_item' && (ref.editMode === 'part' || ref.editMode === 'proj_part')) ||
+    (ref.kind === 'cosmetic' && ref.editMode === 'part')
+  ) {
+    const parentPart = ref.part;
+    const partsArr = ref.kind === 'cosmetic'
+      ? ref.item?.parts
+      : (ref.editMode === 'proj_part' ? ref.item?.projectileParts : ref.item?.parts);
+    const partMeshes = (ref.kind === 'cosmetic'
+      ? ref.group?.userData?.partMeshes
+      : (ref.editMode === 'proj_part' ? ref.projPreviewGroup?.userData?.partMeshes : ref.worldEntry?.group?.userData?.partMeshes)) || [];
+
+    if (parentPart && parentPart.id && Array.isArray(partsArr)) {
+      for (let i = 0; i < partsArr.length; i++) {
+        const pt = partsArr[i];
+        const pm = partMeshes[i];
+        if (!pt || !pm || pt.id === parentPart.id) continue;
+        if (isPartDescendantOf(partsArr, pt.id, parentPart.id)) {
+          _baselinePartsMap.set(pt.id, {
+            pos: pm.position.clone(),
+            quat: pm.quaternion.clone().normalize()
+          });
+        }
+      }
+    }
+  }
+
+  // Снапшот дочерних объектов сцены (на любой глубине иерархии)
+  const parentKey = getKeyFromEditorRef(ref);
+  if (parentKey) {
+    const descendants = getAllSceneDescendants(parentKey);
+    for (const d of descendants) {
+      const m = d.kind === 'block'
+        ? d.obj?.m
+        : (d.kind === 'world_item' ? d.obj?.group : (d.kind === 'char' ? d.obj?.rig?.g : d.obj?.group));
+      if (m) {
+        m.updateMatrixWorld(true);
+        _baselineChildrenMap.set(d.key, {
+          pos: m.position.clone(),
+          quat: m.quaternion.clone().normalize()
+        });
+      }
+    }
+  }
+
   _hasBaseline = true;
 }
 
-// Применяет дельту перемещения и вращения родителя ко всем его дочерним объектам (как в Unity)
-// Дочерние объекты (блоки, предметы, персонажи, детали) строго сохраняют СВОЮ СОБСТВЕННУЮ форму, размеры и пропорции!
+// Применяет трансформацию от начального снапшота (Baseline -> Current) ко всем уровням дочерних объектов без накопления погрешности
 export function propagateHierarchyTransform(ref = S.selectedRef) {
   if (!_hasBaseline || !ref) return;
   const rootMesh = ref.mesh || ref.box?.m || ref.ent?.rig?.g || ref.worldEntry?.group || ref.emptyObj?.group;
   if (!rootMesh) return;
 
   rootMesh.updateMatrixWorld(true);
+  rootMesh.getWorldPosition(_currParentPos);
+  rootMesh.getWorldQuaternion(_currParentQuat);
+  _currParentQuat.normalize();
 
-  // Извлекаем предыдущую и текущую позицию/вращение родителя
-  _baselineMatrix.decompose(_prevParentPos, _prevParentQuat, _prevParentScale);
-  rootMesh.matrixWorld.decompose(_currParentPos, _currParentQuat, _currParentScale);
-
-  // Вычисляем чистое вращение родителя (без влияния не-единичного масштаба)
+  // Чистый поворот относительно начального состояния (Baseline -> Current)
   _invPrevQuat.copy(_prevParentQuat).invert();
-  _stepQuat.copy(_currParentQuat).multiply(_invPrevQuat);
+  _stepQuat.copy(_currParentQuat).multiply(_invPrevQuat).normalize();
 
-  // Вектор сдвига пивота родителя
-  _stepPos.subVectors(_currParentPos, _prevParentPos);
-
-  // Запоминаем текущую матрицу для следующего шага
-  _baselineMatrix.copy(rootMesh.matrixWorld);
-
-  // 1. Если трансформируется деталь внутри предмета/аксессуара, у которой есть дочерние детали (part.parentPartId)
+  // 1. Если трансформируется деталь внутри предмета/аксессуара, у которой есть дочерние детали (любой глубины вложенности)
   if (
     (ref.kind === 'world_item' && (ref.editMode === 'part' || ref.editMode === 'proj_part')) ||
     (ref.kind === 'cosmetic' && ref.editMode === 'part')
   ) {
     const parentPart = ref.part;
-    const holder = ref.mesh?.parent;
-    if (parentPart && parentPart.id && holder) {
+    if (parentPart && parentPart.id && _baselinePartsMap.size > 0) {
       const partsArr = ref.kind === 'cosmetic'
         ? ref.item.parts
         : (ref.editMode === 'proj_part' ? ref.item.projectileParts : ref.item.parts);
@@ -684,40 +767,36 @@ export function propagateHierarchyTransform(ref = S.selectedRef) {
         ? ref.group?.userData?.partMeshes
         : (ref.editMode === 'proj_part' ? ref.projPreviewGroup?.userData?.partMeshes : ref.worldEntry?.group?.userData?.partMeshes)) || [];
 
-      const transformChildParts = parentId => {
-        for (let i = 0; i < partsArr.length; i++) {
-          const pt = partsArr[i];
-          const pm = partMeshes[i];
-          if (!pt || !pm || pt.parentPartId !== parentId) continue;
+      _invBaseLocalQuat.copy(_baseLocalQuat).invert();
+      _localDeltaQuat.copy(rootMesh.quaternion).normalize().multiply(_invBaseLocalQuat).normalize();
 
-          // Вращаем позицию дочерней детали вокруг пивота родительской детали
-          _childOffset.subVectors(pm.position, _prevParentPos);
-          _childOffset.applyQuaternion(_stepQuat);
-          pm.position.copy(_currParentPos).add(_childOffset);
+      for (let i = 0; i < partsArr.length; i++) {
+        const pt = partsArr[i];
+        const pm = partMeshes[i];
+        if (!pt || !pm) continue;
+        const initSnap = _baselinePartsMap.get(pt.id);
+        if (!initSnap) continue;
 
-          // Вращаем ориентацию дочерней детали
-          pm.quaternion.premultiply(_stepQuat);
-          pm.rotation.setFromQuaternion(pm.quaternion);
+        _childOffset.subVectors(initSnap.pos, _baseLocalPos).applyQuaternion(_localDeltaQuat);
+        pm.position.copy(rootMesh.position).add(_childOffset);
 
-          // Форма и масштаб детали сохраняются неизменными!
-          pt.x = pm.position.x;
-          pt.y = pm.position.y;
-          pt.z = pm.position.z;
-          pt.rx = pm.rotation.x;
-          pt.ry = pm.rotation.y;
-          pt.rz = pm.rotation.z;
-          pm.updateMatrixWorld(true);
+        pm.quaternion.copy(_localDeltaQuat).multiply(initSnap.quat).normalize();
+        pm.rotation.setFromQuaternion(pm.quaternion);
 
-          transformChildParts(pt.id);
-        }
-      };
-      transformChildParts(parentPart.id);
+        pt.x = pm.position.x;
+        pt.y = pm.position.y;
+        pt.z = pm.position.z;
+        pt.rx = pm.rotation.x;
+        pt.ry = pm.rotation.y;
+        pt.rz = pm.rotation.z;
+        pm.updateMatrixWorld(true);
+      }
     }
     return;
   }
 
-  // 2. Трансформация дочерних объектов сцены (Блоков, Предметов, Персонажей, Пустышек)
-  if (S.itemStudioOpen) return;
+  // 2. Трансформация дочерних объектов сцены (работает и на карте, и для иерархий блоков на подиуме 3D STUDIO)
+  if (S.itemStudioOpen && ref.kind !== 'block' && ref.kind !== 'empty' && ref.kind !== 'folder') return;
   const parentKey = getKeyFromEditorRef(ref);
   if (!parentKey) return;
 
@@ -725,21 +804,18 @@ export function propagateHierarchyTransform(ref = S.selectedRef) {
   if (descendants.length === 0) return;
 
   for (const d of descendants) {
+    const initSnap = _baselineChildrenMap.get(d.key);
     if (d.kind === 'block') {
       const box = d.obj;
       const m = box.m;
-      if (!m) continue;
+      if (!m || !initSnap) continue;
 
-      // Смещение дочернего блока вокруг пивота родителя
-      _childOffset.subVectors(m.position, _prevParentPos);
-      _childOffset.applyQuaternion(_stepQuat);
+      _childOffset.subVectors(initSnap.pos, _prevParentPos).applyQuaternion(_stepQuat);
       m.position.copy(_currParentPos).add(_childOffset);
 
-      // Вращение дочернего блока вслед за родителем
-      m.quaternion.premultiply(_stepQuat);
+      m.quaternion.copy(_stepQuat).multiply(initSnap.quat).normalize();
       m.rotation.setFromQuaternion(m.quaternion);
 
-      // КРИТИЧЕСКИ ВАЖНО: Дочерний блок ВСЕГДА сохраняет свою собственную форму и размеры (w, h, d)!
       m.scale.set(box.w, box.h, box.d);
 
       box.cx = m.position.x;
@@ -751,26 +827,27 @@ export function propagateHierarchyTransform(ref = S.selectedRef) {
       box.rx = m.rotation.x;
       box.ry = m.rotation.y;
       box.rz = m.rotation.z;
-      if (box.logicRuntime) box.logicRuntime.basePos = m.position.clone();
+      if (box.logicRuntime) {
+        box.logicRuntime.basePos = m.position.clone();
+        box.logicRuntime.baseQuat = m.quaternion.clone();
+      }
       if (box.cpVisualGroup) {
         box.cpVisualGroup.position.copy(m.position);
         if (box.checkpointData?.enabled) box.cpVisualGroup.rotation.copy(m.rotation);
       }
-      if (box.haloSprite) box.haloSprite.position.copy(m.position);
+      if (box.haloSprite) box.haloSprite.position.copy(box.m.position);
       m.updateMatrixWorld(true);
     } else if (d.kind === 'world_item') {
       const wi = d.obj;
       const g = wi.group;
-      if (!g) continue;
+      if (!g || !initSnap) continue;
 
-      _childOffset.subVectors(g.position, _prevParentPos);
-      _childOffset.applyQuaternion(_stepQuat);
+      _childOffset.subVectors(initSnap.pos, _prevParentPos).applyQuaternion(_stepQuat);
       g.position.copy(_currParentPos).add(_childOffset);
 
-      g.quaternion.premultiply(_stepQuat);
+      g.quaternion.copy(_stepQuat).multiply(initSnap.quat).normalize();
       g.rotation.setFromQuaternion(g.quaternion);
 
-      // Сохраняем исходный масштаб предмета
       wi.x = g.position.x;
       wi.y = g.position.y;
       wi.z = g.position.z;
@@ -784,13 +861,12 @@ export function propagateHierarchyTransform(ref = S.selectedRef) {
     } else if (d.kind === 'char') {
       const ent = d.obj;
       const g = ent.rig?.g;
-      if (!g) continue;
+      if (!g || !initSnap) continue;
 
-      _childOffset.subVectors(g.position, _prevParentPos);
-      _childOffset.applyQuaternion(_stepQuat);
+      _childOffset.subVectors(initSnap.pos, _prevParentPos).applyQuaternion(_stepQuat);
       g.position.copy(_currParentPos).add(_childOffset);
 
-      g.quaternion.premultiply(_stepQuat);
+      g.quaternion.copy(_stepQuat).multiply(initSnap.quat).normalize();
       g.rotation.setFromQuaternion(g.quaternion);
 
       ent.x = g.position.x;
@@ -809,13 +885,12 @@ export function propagateHierarchyTransform(ref = S.selectedRef) {
     } else if (d.kind === 'empty') {
       const emp = d.obj;
       const g = emp.group;
-      if (!g) continue;
+      if (!g || !initSnap) continue;
 
-      _childOffset.subVectors(g.position, _prevParentPos);
-      _childOffset.applyQuaternion(_stepQuat);
+      _childOffset.subVectors(initSnap.pos, _prevParentPos).applyQuaternion(_stepQuat);
       g.position.copy(_currParentPos).add(_childOffset);
 
-      g.quaternion.premultiply(_stepQuat);
+      g.quaternion.copy(_stepQuat).multiply(initSnap.quat).normalize();
       g.rotation.setFromQuaternion(g.quaternion);
 
       emp.x = g.position.x;
@@ -1267,6 +1342,14 @@ export function getCosmetic3DThumbnail(cosData, forceRefresh = false) {
 }
 
 function getCustomBlockPrefabThumbnail(blkSnap) {
+  if (blkSnap.shape === 'bbmodel' && blkSnap.bbmodelData) {
+    const bbmSig = 'cblk_bbm_' + (blkSnap.bbmodelData.id || blkSnap.bbmodelData.name);
+    if (prefabThumbCache.has(bbmSig)) return prefabThumbCache.get(bbmSig);
+    const grp = buildBBModelGroup(blkSnap.bbmodelData, blkSnap.colorHex || '#ffffff');
+    const url = grp ? renderObject3DToDataURL(grp, { rotY: -0.6, rotX: 0.22, padding: 1.15 }) : '';
+    prefabThumbCache.set(bbmSig, url);
+    return url;
+  }
   const sig = 'cblk_' + JSON.stringify({
     s: blkSnap.shape,
     w: blkSnap.w,
@@ -1386,6 +1469,23 @@ function getAllAvailablePrefabCards() {
       isCustom: true,
       libType: 'custom_prefab',
       customPrefabId: cp.id
+    });
+  }
+
+  const customModels = S.customModelsLibrary || [];
+  for (let i = 0; i < customModels.length; i++) {
+    const m = customModels[i];
+    if (!m) continue;
+    cards.push({
+      id: `lib_bbm_${i}`,
+      spawnKey: `lib_bbm_${i}`,
+      title: `📦 ${m.name || ('BBModel #' + (i + 1))}`,
+      category: 'library',
+      border: '#a29bfe',
+      thumb: getCustomBlockPrefabThumbnail({ shape: 'bbmodel', bbmodelData: m, colorHex: '#ffffff' }),
+      isCustom: true,
+      libType: 'saved_bbmodel',
+      libIdx: i
     });
   }
 
@@ -1554,6 +1654,9 @@ export function refreshPrefabDockUI() {
       } else if (cid.startsWith('lib_cos_')) {
         const idx = +cid.replace('lib_cos_', '');
         if (S.savedCosmeticsLibrary[idx]) S.savedCosmeticsLibrary.splice(idx, 1);
+      } else if (cid.startsWith('lib_bbm_')) {
+        const idx = +cid.replace('lib_bbm_', '');
+        if (S.customModelsLibrary && S.customModelsLibrary[idx]) S.customModelsLibrary.splice(idx, 1);
       }
       refreshPrefabDockUI();
     };
@@ -1596,6 +1699,15 @@ function serializeBlockSnapshotForPrefab(b, originPos = null) {
     spawnerData: b.spawnerData ? JSON.parse(JSON.stringify(b.spawnerData)) : null,
     particleData: b.particleData ? JSON.parse(JSON.stringify(b.particleData)) : null,
     lightData: b.lightData ? JSON.parse(JSON.stringify(b.lightData)) : null,
+    scriptData: b.scriptData ? {
+      enabled: Boolean(b.scriptData.enabled),
+      targetType: b.scriptData.targetType || 'block',
+      name: b.scriptData.name || 'Мой Скрипт',
+      code: b.scriptData.code || '',
+      paramValues: JSON.parse(JSON.stringify(b.scriptData.paramValues || {})),
+      showBadge: b.scriptData.showBadge !== false
+    } : null,
+    bbmodelData: b.bbmodelData ? JSON.parse(JSON.stringify(b.bbmodelData)) : null,
     logicData: b.logicData ? JSON.parse(JSON.stringify(b.logicData)) : null
   };
 }
@@ -1799,7 +1911,9 @@ export function refreshHierarchyUI() {
         isSel,
         collapsed: !!sf.collapsed,
         canHaveVisLock: false,
-        canEditFolder: true
+        canEditFolder: true,
+        canToggleActive: true,
+        disabled: !!sf.isDisabled
       });
     }
   }
@@ -1821,8 +1935,10 @@ export function refreshHierarchyUI() {
         isSel,
         collapsed: !!emp.hierCollapsed,
         hidden: !!emp.editorHidden,
+        disabled: !!emp.isDisabled,
         locked: !!emp.editorLocked,
-        canHaveVisLock: true
+        canHaveVisLock: true,
+        canToggleActive: true
       });
     }
   }
@@ -1842,10 +1958,85 @@ export function refreshHierarchyUI() {
       icon,
       isSel: isSelChar,
       collapsed: ent.hierCollapsed !== undefined ? !!ent.hierCollapsed : true,
-      hidden: ent.rig?.g?.visible === false,
+      hidden: !!ent.editorHidden,
+      disabled: !!ent.isDisabled,
       locked: !!ent.editorLocked,
-      canHaveVisLock: true
+      canHaveVisLock: true,
+      canToggleActive: !ent.isP
     });
+
+    // Вложенные удерживаемые (1 рука / Хотбар) и переносимые (2 руки) предметы персонажа
+    const registerHeldOrCarriedItemNode = (itm, slotKey, badgeText) => {
+      if (!itm) return;
+      normalizeItemData(itm);
+      const itemNodeKey = `char_item:${charId}:${slotKey}`;
+      const isSelItm =
+        S.selectedRef?.kind === 'world_item' &&
+        S.selectedRef.item === itm &&
+        (!S.selectedRef.editMode || S.selectedRef.editMode === 'root');
+
+      registerNode({
+        key: itemNodeKey,
+        kind: 'char_item',
+        id: `${charId}:${slotKey}`,
+        obj: itm,
+        ownerEnt: ent,
+        slotKey,
+        parentKey: charKey,
+        title: `${itm.icon || '🗡️'} ${itm.name || 'Предмет'}`,
+        badge: badgeText,
+        thumbUrl: getItem3DThumbnail(itm),
+        isSel: isSelItm,
+        collapsed: itm.hierCollapsed !== undefined ? !!itm.hierCollapsed : true,
+        hidden: false,
+        locked: false,
+        canHaveVisLock: false
+      });
+
+      const parts = itm.parts || [];
+      for (let pIdx = 0; pIdx < parts.length; pIdx++) {
+        const pt = parts[pIdx];
+        const parentPtIdx = pt.parentPartId ? parts.findIndex(x => x.id === pt.parentPartId) : -1;
+        const ptParentKey = parentPtIdx >= 0 ? `char_item_part:${charId}:${slotKey}:${parentPtIdx}` : itemNodeKey;
+        const isSelPt =
+          S.selectedRef?.kind === 'world_item' &&
+          S.selectedRef.item === itm &&
+          S.selectedRef.editMode === 'part' &&
+          S.selectedRef.partIdx === pIdx;
+
+        registerNode({
+          key: `char_item_part:${charId}:${slotKey}:${pIdx}`,
+          kind: 'char_item_part',
+          id: `${charId}:${slotKey}:${pIdx}`,
+          obj: pt,
+          ownerEnt: ent,
+          ownerItem: itm,
+          slotKey,
+          partIdx: pIdx,
+          parentKey: ptParentKey,
+          title: pt.name || `Часть #${pIdx + 1}`,
+          badge: pt.shape,
+          icon: '🧩',
+          isSel: isSelPt,
+          collapsed: false,
+          canHaveVisLock: false
+        });
+      }
+    };
+
+    if (ent.carriedItem) {
+      registerHeldOrCarriedItemNode(ent.carriedItem, 'carried', '📦 В 2 руках');
+    }
+    if (ent.isP && Array.isArray(ent.inventory)) {
+      for (let sIdx = 0; sIdx < ent.inventory.length; sIdx++) {
+        const slotItm = ent.inventory[sIdx];
+        if (!slotItm || typeof slotItm !== 'object') continue;
+        const isAct = (S.activeSlot ?? 0) === sIdx;
+        registerHeldOrCarriedItemNode(slotItm, `slot_${sIdx}`, isAct ? `🤚 В руке (#${sIdx + 1})` : `🎒 Слот #${sIdx + 1}`);
+      }
+    } else if (!ent.isP && ent.equippedItem) {
+      registerHeldOrCarriedItemNode(ent.equippedItem, 'equipped', '🤚 В руке');
+    }
 
     // Вложенные 3D-Аксессуары и Питомцы персонажа
     const cosList = ent.preset?.customCosmetics || [];
@@ -1874,14 +2065,15 @@ export function refreshHierarchyUI() {
         collapsed: cos.hierCollapsed !== undefined ? !!cos.hierCollapsed : true,
         hidden: cos.enabled === false,
         locked: false,
-        canHaveVisLock: false
+        canHaveVisLock: true
       });
 
       // Дочерние примитивы внутри аксессуара
       for (let pIdx = 0; pIdx < cos.parts.length; pIdx++) {
         const pt = cos.parts[pIdx];
-        const ptParentKey = pt.parentPartId
-          ? `cos_part:${charId}:${cIdx}:${cos.parts.findIndex(x => x.id === pt.parentPartId)}`
+        const parentPtIdx = pt.parentPartId ? cos.parts.findIndex(x => x.id === pt.parentPartId) : -1;
+        const ptParentKey = parentPtIdx >= 0
+          ? `cos_part:${charId}:${cIdx}:${parentPtIdx}`
           : cosKey;
         const isSelPt =
           S.selectedRef?.kind === 'cosmetic' &&
@@ -1944,9 +2136,11 @@ export function refreshHierarchyUI() {
         thumbUrl: getItem3DThumbnail(wi.item),
         isSel: isSelWi,
         collapsed: wi.hierCollapsed !== undefined ? !!wi.hierCollapsed : true,
-        hidden: wi.group?.visible === false,
-        locked: !!wi.editorLocked,
-        canHaveVisLock: true
+      hidden: !!wi.editorHidden,
+      disabled: !!wi.isDisabled,
+      locked: !!wi.editorLocked,
+      canHaveVisLock: true,
+      canToggleActive: true
       });
 
       const parts = wi.item.parts || [];
@@ -2003,20 +2197,24 @@ export function refreshHierarchyUI() {
         badgeRight = b.shape || 'Примитив';
       }
 
+      const isCarriedBlk = S.player && S.player.carriedPhysicsBlock === b;
+
       registerNode({
         key: `block:${b.id}`,
         kind: 'block',
         id: b.id,
         obj: b,
-        parentKey: getParentKeyOfNode(b),
+        parentKey: isCarriedBlk ? 'char:player' : getParentKeyOfNode(b),
         title: b.label,
-        badge: badgeRight,
+        badge: isCarriedBlk ? '📦 В руках [E]' : badgeRight,
         icon: getBlockHierarchyIcon(b),
         isSel,
         collapsed: !!b.hierCollapsed,
-        hidden: b.m?.visible === false,
-        locked: !!b.editorLocked,
-        canHaveVisLock: true
+      hidden: !!b.editorHidden,
+      disabled: !!b.isDisabled,
+      locked: !!b.editorLocked,
+      canHaveVisLock: true,
+      canToggleActive: true
       });
     }
   }
@@ -2076,6 +2274,16 @@ export function refreshHierarchyUI() {
       const ent = ref.ent;
       const charId = ent.isP ? 'player' : (ent.isArchangel ? 'archangel' : ent.id);
       isolatedRootKey = `char:${charId}`;
+    } else if (ref.kind === 'block' && ref.box) {
+      let rootBox = ref.box;
+      let guard = 0;
+      while (rootBox.parentKey && rootBox.parentKey.startsWith('block:') && guard++ < 64) {
+        const pid = rootBox.parentKey.slice(6);
+        const pBox = S.allBlocks.find(b => b.id === pid);
+        if (!pBox || pBox === rootBox) break;
+        rootBox = pBox;
+      }
+      isolatedRootKey = `block:${rootBox.id}`;
     }
 
     const isolatedNode = isolatedRootKey ? nodesMap.get(isolatedRootKey) : null;
@@ -2160,18 +2368,23 @@ export function refreshHierarchyUI() {
       `
       : '';
 
+    const activeToggleBtn = node.canToggleActive
+      ? `<button class="hier-qbtn ${node.disabled ? 'is-off' : 'is-on'}" data-hactive="${node.key}" type="button" title="${node.disabled ? 'Объект ВЫКЛЮЧЕН везде (Студия + Игра). Нажми чтобы включить' : 'Объект ВКЛЮЧЁН (как в Unity). Нажми чтобы полностью отключить'}">${node.disabled ? '⛔' : '☑️'}</button>`
+      : '';
+
     const visLockBtns = node.canHaveVisLock
       ? `
-        <button class="hier-qbtn ${node.hidden ? 'active' : ''}" data-hvis="${node.kind}:${node.id}" type="button" title="Скрыть / Показать">${node.hidden ? '🚫' : '👁️'}</button>
+        ${activeToggleBtn}
+        <button class="hier-qbtn ${node.hidden ? 'active' : ''}" data-hvis="${node.kind}:${node.id}" type="button" title="Скрыть / Показать ТОЛЬКО в Студии (не влияет на игру)">${node.hidden ? '🚫' : '👁️'}</button>
         <button class="hier-qbtn ${node.locked ? 'active' : ''}" data-hlock="${node.kind}:${node.id}" type="button" title="Заблокировать / Разблокировать">${node.locked ? '🔒' : '🔓'}</button>
       `
-      : '';
+      : activeToggleBtn;
 
     const countBadge = hasChildren ? `<small style="color:#56f0ff">(${node.children.length})</small>` : '';
 
     return `
       <div class="hier-tree-node">
-        <div class="hier-item ${node.isSel ? 'sel' : ''} ${node.hidden ? 'is-hidden' : ''} ${node.locked ? 'is-locked' : ''}"
+        <div class="hier-item ${node.isSel ? 'sel' : ''} ${node.hidden ? 'is-hidden' : ''} ${node.locked ? 'is-locked' : ''} ${node.disabled ? 'is-disabled-obj' : ''}"
              data-hkey="${node.key}" data-hkind="${node.kind}" data-hid="${node.id}">
           <div class="hier-item-main">
             ${expBtn}
@@ -2273,34 +2486,61 @@ export function refreshHierarchyUI() {
   cont.querySelectorAll('[data-hvis]').forEach(btn => {
     btn.onclick = e => {
       e.stopPropagation();
+      if (btn.dataset.hvis && btn.dataset.hvis.startsWith('cosmetic:')) {
+        const node = nodesMap.get(btn.dataset.hvis);
+        if (node && node.obj && node.ownerEnt) {
+          node.obj.enabled = node.obj.enabled === false;
+          node.ownerEnt.rig?.syncCustomCosmetics(node.ownerEnt.preset.customCosmetics);
+          attachRigToEntity(node.ownerEnt);
+          if (S.itemStudioOpen) syncItemStudioPreview();
+          refreshHierarchyUI();
+        }
+        return;
+      }
       const info = getSceneNodeByKey(btn.dataset.hvis);
       if (!info || !info.obj) return;
       const target = info.obj;
       const kind = info.kind;
 
-      const toggleVisOnNode = (k, t, nextVis) => {
-        if (k === 'block' && t.m) {
-          t.m.visible = nextVis;
-          if (t.cpVisualGroup) t.cpVisualGroup.visible = nextVis;
-          if (t.haloSprite) t.haloSprite.visible = nextVis;
-        } else if (k === 'world_item' && t.group) {
-          t.group.visible = nextVis;
-          if (t.tag) t.tag.visible = nextVis;
-        } else if (k === 'char' && t.rig?.g) {
-          t.rig.g.visible = nextVis;
-          if (t.tag) t.tag.visible = nextVis;
-        } else if (k === 'empty' && t.group) {
-          t.editorHidden = !nextVis;
-          if (t.helper) t.helper.visible = nextVis && S.state === 'edit';
-        }
+      const nextHidden = !Boolean(target.editorHidden);
+      const setStudioHidden = t => {
+        if (!t) return;
+        t.editorHidden = nextHidden;
       };
-
-      const curVis = info.mesh ? info.mesh.visible !== false : true;
-      const nextVis = !curVis;
-      toggleVisOnNode(kind, target, nextVis);
+      setStudioHidden(target);
       for (const desc of getAllSceneDescendants(btn.dataset.hvis)) {
-        toggleVisOnNode(desc.kind, desc.obj, nextVis);
+        setStudioHidden(desc.obj);
       }
+      syncSceneVisibilityForMode(S.state);
+      refreshHierarchyUI();
+    };
+  });
+
+  // Кнопка полного Включения / Выключения объекта (как в Unity — действует и в Студии, и в Игре)
+  cont.querySelectorAll('[data-hactive]').forEach(btn => {
+    btn.onclick = e => {
+      e.stopPropagation();
+      const key = btn.dataset.hactive;
+      const info = getSceneNodeByKey(key);
+      if (!info || !info.obj) return;
+      if (info.kind === 'char' && info.obj.isP) {
+        showBanner('Игрока нельзя отключить!', '#ffce3a');
+        return;
+      }
+      pushUndoState('Переключение активности объекта');
+      const nextDisabled = !Boolean(info.obj.isDisabled);
+      const setNodeDisabled = t => {
+        if (!t || t.isP) return;
+        t.isDisabled = nextDisabled;
+        if (nextDisabled && t.ragdoll) t.ragdoll = null;
+      };
+      setNodeDisabled(info.obj);
+      for (const desc of getAllSceneDescendants(key)) {
+        setNodeDisabled(desc.obj);
+      }
+      syncSceneVisibilityForMode(S.state);
+      rebuildPhysicsArrays();
+      sfx.click?.();
       refreshHierarchyUI();
     };
   });
@@ -2357,8 +2597,8 @@ export function refreshHierarchyUI() {
         return;
       }
       if (node.kind === 'block') {
-        selectEditorObject({ kind: 'block', box: node.obj });
-        focusOnSelected();
+        selectEditorObject({ kind: 'block', box: node.obj, inStudio: S.itemStudioOpen });
+        if (!S.itemStudioOpen) focusOnSelected();
         return;
       }
       if (node.kind === 'world_item') {
@@ -2423,6 +2663,48 @@ export function refreshHierarchyUI() {
           inWorldPlacement: !S.itemStudioOpen
         });
       }
+      if (node.kind === 'char_item' || node.kind === 'char_item_part') {
+        const ent = node.ownerEnt;
+        const itm = node.kind === 'char_item' ? node.obj : node.ownerItem;
+        ent.hierCollapsed = false;
+        if (node.kind === 'char_item_part') itm.hierCollapsed = false;
+
+        // Если предмет лежит в слоте хотбара игрока — делаем этот слот активным, чтобы создался heldItemMesh
+        if (ent.isP && typeof node.slotKey === 'string' && node.slotKey.startsWith('slot_')) {
+          const sIdx = +node.slotKey.replace('slot_', '');
+          if (!Number.isNaN(sIdx)) S.activeSlot = sIdx;
+        }
+        syncEntityHeldItemMesh(ent);
+
+        // НИКОГДА не передаём ent.rig.g в качестве group предмета, иначе rebuildWorldItemVisual удалит модель игрока со сцены!
+        let meshGrp = node.slotKey === 'carried'
+          ? ent.rig?.carriedItemMesh
+          : ent.rig?.heldItemMesh;
+        if (!meshGrp || meshGrp === ent.rig?.g) {
+          meshGrp = buildItemGroup(itm, { isProjectile: false, showMarkers: true, applyGripOffset: false });
+          scene.add(meshGrp);
+        }
+
+        const proxyEntry = {
+          id: `held_${ent.id || 'player'}_${node.slotKey}`,
+          item: itm,
+          x: ent.x || 0,
+          y: (ent.y || 0) + 1.4,
+          z: ent.z || 0,
+          group: meshGrp,
+          _ownerEnt: ent,
+          _slotKey: node.slotKey
+        };
+        selectEditorObject({
+          kind: 'world_item',
+          worldEntry: proxyEntry,
+          item: itm,
+          editMode: node.kind === 'char_item_part' ? 'part' : 'root',
+          partIdx: node.partIdx || 0,
+          inWorldPlacement: !S.itemStudioOpen
+        });
+        return;
+      }
     };
   });
 
@@ -2455,8 +2737,39 @@ function findLatestDoorTag() {
   return 'door_1';
 }
 
-export function spawnPrimitiveInEditor(shape = 'box', worldDropPos = null) {
-  const shapeLabel = PRIMITIVE_LABELS_RU[shape] || shape;
+export function spawnPrimitiveInEditor(shape = 'box', worldDropPos = null, parentPartIdOverride = undefined) {
+  const shapeLabel = shape === 'none' ? 'Пустышка' : (PRIMITIVE_LABELS_RU[shape] || shape);
+
+  // Если в 3D Студии открыт блок сцены — создаём дочерний блок прямо на подиуме без выхода из 3D Студии!
+  if (S.selectedRef && S.selectedRef.kind === 'block' && S.selectedRef.box) {
+    const parentBox = S.selectedRef.box;
+    pushUndoState(`Создание дочернего объекта (${shapeLabel})`);
+    const pos = worldDropPos ? worldDropPos.clone() : parentBox.m.position.clone();
+    const isRawEmpty = shape === 'none';
+    const sz = isRawEmpty ? 1 : 1.5;
+    const chBox = addSceneBlock({
+      x: pos.x,
+      y: pos.y + sz * 0.5,
+      z: pos.z,
+      w: sz, h: sz, d: sz,
+      colorHex: '#f1f5f9',
+      shape: isRawEmpty ? 'box' : shape,
+      label: `${shapeLabel} #${S.blockIdCounter}`,
+      isRawEmpty,
+      isRawPrimitive: !isRawEmpty,
+      isCustom: true
+    });
+    chBox.m.position.copy(pos);
+    chBox.m.rotation.copy(parentBox.m.rotation);
+    chBox.m.updateMatrixWorld(true);
+    setParentKeyOfNode(chBox, `block:${parentBox.id}`);
+    parentBox.hierCollapsed = false;
+    ensureNodeHierOrder(chBox);
+    rebuildPhysicsArrays();
+    selectEditorObject({ kind: 'block', box: chBox, inStudio: S.itemStudioOpen });
+    sfx.jump();
+    return;
+  }
 
   if (!S.selectedRef || (S.selectedRef.kind !== 'world_item' && S.selectedRef.kind !== 'cosmetic')) {
     let targetWi = S.worldItems[S.worldItems.length - 1];
@@ -2516,16 +2829,25 @@ export function spawnPrimitiveInEditor(shape = 'box', worldDropPos = null) {
       localPos.z = Math.round(localPos.z * 4) / 4;
     }
 
+    const resolvedParentPartId = parentPartIdOverride !== undefined
+      ? parentPartIdOverride
+      : ((ref.editMode === 'part' || ref.editMode === 'proj_part') && ref.part ? ref.part.id : null);
+    const parentPtObj = resolvedParentPartId ? targetArr.find(p => p && p.id === resolvedParentPartId) : null;
+    if (!worldDropPos && parentPtObj) {
+      localPos.set(parentPtObj.x || 0, parentPtObj.y || 0, parentPtObj.z || 0);
+    }
+
     const newPart = normalizePartEffects({
       id: 'ipt_' + Date.now() + '_' + Math.floor(Math.random() * 999),
       name: `${shapeLabel} #${targetArr.length + 1}`,
       shape,
+      parentPartId: resolvedParentPartId || null,
       x: Number(localPos.x.toFixed(2)),
       y: Number(localPos.y.toFixed(2)),
       z: Number(localPos.z.toFixed(2)),
-      rx: 0,
-      ry: 0,
-      rz: 0,
+      rx: parentPtObj ? (parentPtObj.rx || 0) : 0,
+      ry: parentPtObj ? (parentPtObj.ry || 0) : 0,
+      rz: parentPtObj ? (parentPtObj.rz || 0) : 0,
       sx: 0.5,
       sy: 0.5,
       sz: 0.5,
@@ -2583,17 +2905,26 @@ export function spawnPrimitiveInEditor(shape = 'box', worldDropPos = null) {
       localPos.z = Math.round(localPos.z * 4) / 4;
     }
 
+    const resolvedParentPartId = parentPartIdOverride !== undefined
+      ? parentPartIdOverride
+      : (ref.editMode === 'part' && ref.part ? ref.part.id : null);
+    const parentPtObj = resolvedParentPartId ? item.parts.find(p => p && p.id === resolvedParentPartId) : null;
+    if (!worldDropPos && parentPtObj) {
+      localPos.set(parentPtObj.x || 0, parentPtObj.y || 0, parentPtObj.z || 0);
+    }
+
     const isPet = item.parentSlot === 'pet';
     const newPart = normalizePartEffects({
       id: 'pt_' + Date.now() + '_' + Math.floor(Math.random() * 999),
       name: `${shapeLabel} #${item.parts.length + 1}`,
       shape,
+      parentPartId: resolvedParentPartId || null,
       x: Number(localPos.x.toFixed(2)),
       y: Number(localPos.y.toFixed(2)),
       z: Number(localPos.z.toFixed(2)),
-      rx: 0,
-      ry: 0,
-      rz: 0,
+      rx: parentPtObj ? (parentPtObj.rx || 0) : 0,
+      ry: parentPtObj ? (parentPtObj.ry || 0) : 0,
+      rz: parentPtObj ? (parentPtObj.rz || 0) : 0,
       sx: 0.48,
       sy: 0.48,
       sz: 0.48,
@@ -2634,7 +2965,25 @@ export function spawnPrimitiveInEditor(shape = 'box', worldDropPos = null) {
 }
 
 export function spawnPrefabFromCard(st, dropWorldPos = null, openForEdit = false) {
-  if (!st) return;
+  if (!st || isPaintModalOpen() || S.scriptModalOpen) return;
+
+  // Строгая изоляция 3D Студии: внутри 3D Студии разрешены ТОЛЬКО примитивы и .bbmodel-детали, но НЕ мировые префабы/NPC!
+  if (S.itemStudioOpen) {
+    if (
+      S.selectedRef &&
+      (S.selectedRef.kind === 'world_item' || S.selectedRef.kind === 'cosmetic' || S.selectedRef.kind === 'block') &&
+      (st === 'prim_empty' || st.startsWith('prim_'))
+    ) {
+      const primShape = st === 'prim_empty' ? 'none' : st.replace('prim_', '');
+      spawnPrimitiveInEditor(primShape === 'wedge' ? 'box' : primShape, dropWorldPos);
+      return;
+    }
+    if (!st.startsWith('lib_bbm_')) {
+      sfx.oof?.();
+      showBanner('🛠️ В 3D Студии нельзя спавнить префабы мира и NPC! Выйди из 3D Студии (✅ Готово), чтобы размещать объекты на карте.', '#ffce3a');
+      return;
+    }
+  }
 
   let sp;
   const isSurfaceDrop = !!dropWorldPos;
@@ -2668,6 +3017,89 @@ export function spawnPrefabFromCard(st, dropWorldPos = null, openForEdit = false
       inWorldPlacement: !openForEdit
     });
     sfx.coil();
+    return;
+  }
+
+  if (st.startsWith('lib_bbm_')) {
+    const libIdx = +st.replace('lib_bbm_', '');
+    const modelData = (S.customModelsLibrary || [])[libIdx];
+    if (!modelData) return;
+
+    // Если открыта 3D Студия предмета или аксессуара — добавляем .bbmodel как деталь внутрь него
+    if (S.itemStudioOpen && S.selectedRef && (S.selectedRef.kind === 'world_item' || S.selectedRef.kind === 'cosmetic')) {
+      spawnPrimitiveInEditor('bbmodel', dropWorldPos);
+      if (S.selectedRef.part) {
+        const nat = buildBBModelGroup(modelData)?.userData?.naturalSize || { w: 1, h: 1, d: 1 };
+        S.selectedRef.part.shape = 'bbmodel';
+        S.selectedRef.part.name = modelData.name || 'BBModel';
+        S.selectedRef.part.bbmodelData = JSON.parse(JSON.stringify(modelData));
+        S.selectedRef.part.sx = nat.w;
+        S.selectedRef.part.sy = nat.h;
+        S.selectedRef.part.sz = nat.d;
+        selectEditorObject(S.selectedRef, true);
+      }
+      return;
+    }
+
+    pushUndoState(`Спавн 3D-модели «${modelData.name}»`);
+    const extracted = extractBBModelParts(modelData, 8);
+    const nat = extracted.totalSize;
+    const rootCenterY = isSurfaceDrop ? sp.y + nat.h * 0.5 : sp.y;
+
+    if (extracted.parts.length > 1) {
+      const rootBox = addSceneBlock({
+        x: sp.x, y: rootCenterY + nat.h * 0.5, z: sp.z,
+        w: nat.w, h: nat.h, d: nat.d,
+        shape: 'none',
+        colorHex: '#ffffff',
+        label: modelData.name || 'BBModel',
+        isRawEmpty: true,
+        isCustom: true
+      });
+      rootBox.m.position.set(sp.x, rootCenterY, sp.z);
+      rootBox.m.updateMatrixWorld(true);
+      rootBox.hierCollapsed = false;
+
+      for (const ep of extracted.parts) {
+        const chBox = addSceneBlock({
+          x: sp.x + ep.dx,
+          y: rootCenterY + ep.dy + ep.h * 0.5,
+          z: sp.z + ep.dz,
+          w: ep.w, h: ep.h, d: ep.d,
+          shape: 'bbmodel',
+          bbmodelData: ep.bbmodelData,
+          colorHex: '#ffffff',
+          label: ep.name,
+          isCustom: true
+        });
+        chBox.m.position.set(sp.x + ep.dx, rootCenterY + ep.dy, sp.z + ep.dz);
+        chBox.m.rotation.set(ep.rx, ep.ry, ep.rz);
+        chBox.m.updateMatrixWorld(true);
+        setParentKeyOfNode(chBox, `block:${rootBox.id}`);
+        chBox.weldToParent = true;
+        syncBlockComponentsState(chBox);
+      }
+      rebuildPhysicsArrays();
+      selectEditorObject({ kind: 'block', box: rootBox, inStudio: openForEdit });
+      if (!openForEdit) focusOnSelected();
+      sfx.jump();
+      return;
+    }
+
+    const topYVal = isSurfaceDrop ? sp.y + nat.h : sp.y + nat.h * 0.5;
+    const box = addSceneBlock({
+      x: sp.x, y: topYVal, z: sp.z,
+      w: nat.w, h: nat.h, d: nat.d,
+      shape: 'bbmodel',
+      bbmodelData: modelData,
+      colorHex: '#ffffff',
+      label: modelData.name || 'BBModel',
+      isCustom: true
+    });
+    rebuildPhysicsArrays();
+    selectEditorObject({ kind: 'block', box, inStudio: openForEdit });
+    if (!openForEdit) focusOnSelected();
+    sfx.jump();
     return;
   }
 
@@ -3203,44 +3635,185 @@ function computeStudioPrimitiveDropPoint(clientX, clientY) {
   return podiumCenter;
 }
 
-function createPreviewGhost3D(dragState) {
-  if (dragState.kind === 'hier_item') return null;
-
+function applyGhostAppearance(rootObj, colorHex = 0x56f0ff, opacity = 0.45) {
   const ghostMat = new THREE.MeshBasicMaterial({
-    color: 0x56f0ff,
-    wireframe: false,
+    color: colorHex,
     transparent: true,
-    opacity: 0.48,
+    opacity,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+  rootObj.traverse(o => {
+    o.userData.noCollider = true;
+    o.castShadow = false;
+    o.receiveShadow = false;
+    if (o.isMesh && !o.userData?.isCharPickMesh) {
+      o.material = ghostMat;
+    }
+  });
+  rootObj.userData._ghostMaterials = [ghostMat];
+}
+
+function addGhostBoxWithOutline(parent, geo, w, h, d, colorHex = 0x56f0ff, posX = 0, posY = 0, posZ = 0) {
+  const mat = new THREE.MeshBasicMaterial({
+    color: colorHex,
+    transparent: true,
+    opacity: 0.36,
     depthWrite: false
   });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.scale.set(w, h, d);
+  mesh.position.set(posX, posY, posZ);
+  mesh.userData.noCollider = true;
 
-  if (dragState.kind === 'primitive') {
-    const geo = getSharedPrimitiveGeo(dragState.key || 'box');
-    const mesh = new THREE.Mesh(geo, ghostMat);
-    mesh.scale.setScalar(0.5);
-    mesh.userData.noCollider = true;
-    scene.add(mesh);
-    return mesh;
-  }
+  const wireMat = new THREE.LineBasicMaterial({
+    color: 0x56f0ff,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false
+  });
+  const wire = new THREE.LineSegments(new THREE.EdgesGeometry(geo), wireMat);
+  wire.scale.set(w, h, d);
+  wire.position.set(posX, posY, posZ);
+  wire.userData.noCollider = true;
 
+  parent.add(mesh, wire);
+}
+
+function createPreviewGhost3D(dragState) {
+  if (dragState.kind === 'hier_item') return null;
   const st = dragState.key;
-  if (st && st.startsWith('item_')) {
-    const itemData = createStarterItemTemplate(st.replace('item_', ''));
-    const grp = buildItemGroup(itemData, { isProjectile: false, showMarkers: false, applyGripOffset: false });
-    grp.traverse(o => {
-      o.userData.noCollider = true;
-    });
+
+  // Примитивы в 3D Студии
+  if (dragState.kind === 'primitive') {
+    const grp = new THREE.Group();
+    const shape = st === 'none' ? 'box' : (st || 'box');
+    const geo = shape === 'wedge' ? createBlockGeometryByShape('wedge') : getSharedPrimitiveGeo(shape);
+    addGhostBoxWithOutline(grp, geo, 0.5, 0.5, 0.5, 0x56f0ff);
+    grp.userData.groundOffsetY = 0;
     scene.add(grp);
     return grp;
   }
 
-  const geo = st === 'teleport'
-    ? new THREE.CylinderGeometry(1.6, 1.6, 0.5, 16)
-    : new THREE.BoxGeometry(st === 'npc' ? 1.2 : 4, st === 'npc' ? 2.5 : 4, st === 'npc' ? 0.8 : 4);
-  const mesh = new THREE.Mesh(geo, ghostMat);
-  mesh.userData.noCollider = true;
-  scene.add(mesh);
-  return mesh;
+  // Блокировка превью мировых префабов внутри 3D Студии
+  if (S.itemStudioOpen && !st.startsWith('prim_') && !st.startsWith('lib_bbm_')) {
+    return null;
+  }
+
+  // 1. Встроенное или сохранённое оружие / предмет
+  if (st.startsWith('item_') || st.startsWith('lib_item_')) {
+    const itemData = st.startsWith('item_')
+      ? createStarterItemTemplate(st.replace('item_', ''))
+      : S.savedItemsLibrary[+st.replace('lib_item_', '')];
+    if (itemData) {
+      const grp = buildItemGroup(itemData, { isProjectile: false, showMarkers: false, applyGripOffset: false });
+      applyGhostAppearance(grp, 0x56f0ff, 0.55);
+      grp.userData.groundOffsetY = 0.4;
+      scene.add(grp);
+      return grp;
+    }
+  }
+
+  // 2. NPC-Бот (точный силуэт R6)
+  if (st === 'npc') {
+    const rig = createRobloxRig({}, 1, false);
+    applyGhostAppearance(rig.g, 0x56f0ff, 0.45);
+    rig.g.userData.groundOffsetY = 0;
+    scene.add(rig.g);
+    return rig.g;
+  }
+
+  // 3. 3D-модель Blockbench (.bbmodel)
+  if (st.startsWith('lib_bbm_')) {
+    const modelData = (S.customModelsLibrary || [])[+st.replace('lib_bbm_', '')];
+    if (modelData) {
+      const bbm = buildBBModelGroup(modelData, '#56f0ff');
+      if (bbm) {
+        const nat = bbm.userData?.naturalSize || { w: 2, h: 2, d: 2 };
+        const grp = new THREE.Group();
+        bbm.scale.set(nat.w, nat.h, nat.d);
+        applyGhostAppearance(bbm, 0x56f0ff, 0.48);
+        grp.add(bbm);
+        grp.userData.groundOffsetY = nat.h * 0.5;
+        scene.add(grp);
+        return grp;
+      }
+    }
+  }
+
+  // 4. Пользовательский сохранённый префаб (блок + все его дочерние части, NPC или предмет)
+  if (st.startsWith('custom_prefab_')) {
+    const cp = (S.customPrefabsLibrary || []).find(p => p.id === st.replace('custom_prefab_', ''));
+    if (cp && cp.data) {
+      if (cp.kind === 'npc') {
+        const rig = createRobloxRig(cp.data, cp.data.scale || 1, false);
+        applyGhostAppearance(rig.g, 0x00e676, 0.46);
+        rig.g.userData.groundOffsetY = 0;
+        scene.add(rig.g);
+        return rig.g;
+      }
+      if (cp.kind === 'world_item') {
+        const grp = buildItemGroup(cp.data, { isProjectile: false, showMarkers: false, applyGripOffset: false });
+        applyGhostAppearance(grp, 0x00e676, 0.55);
+        grp.userData.groundOffsetY = 0.4;
+        scene.add(grp);
+        return grp;
+      }
+      if (cp.kind === 'block') {
+        const d = cp.data;
+        const grp = new THREE.Group();
+        const rootGeo = createBlockGeometryByShape(d.shape || 'box');
+        addGhostBoxWithOutline(grp, rootGeo, d.w || 2, d.h || 2, d.d || 2, 0x00e676, 0, 0, 0);
+        if (Array.isArray(d.childrenBlocks)) {
+          for (const ch of d.childrenBlocks) {
+            const cGeo = createBlockGeometryByShape(ch.shape || 'box');
+            addGhostBoxWithOutline(grp, cGeo, ch.w || 1, ch.h || 1, ch.d || 1, 0x56f0ff, ch.dx || 0, ch.dy || 0, ch.dz || 0);
+          }
+        }
+        grp.userData.groundOffsetY = (d.h || 1) * 0.5;
+        scene.add(grp);
+        return grp;
+      }
+    }
+  }
+
+  // 5. Точные размеры и формы всех встроенных блоков / логических префабов
+  const grp = new THREE.Group();
+  const BUILTIN_SPECS = {
+    prim_empty: { shape: 'box', w: 1, h: 1, d: 1, col: 0x56f0ff },
+    solid:      { shape: 'box', w: 4, h: 4, d: 4, col: 0x56f0ff },
+    liquid:     { shape: 'box', w: 6, h: 3.5, d: 6, col: 0x00a8ff },
+    gas:        { shape: 'box', w: 8, h: 2.5, d: 6, col: 0xe2e8f0 },
+    checkpoint: { shape: 'box', w: 6.4, h: 0.8, d: 6.4, col: 0xffeaa7 },
+    door:       { shape: 'box', w: 5, h: 5, d: 0.8, col: 0xf39c12 },
+    button:     { shape: 'box', w: 1.4, h: 2.2, d: 1.4, col: 0x00e676 },
+    plate:      { shape: 'box', w: 3.2, h: 0.35, d: 3.2, col: 0xffce3a },
+    vip_gate:   { shape: 'box', w: 6, h: 5, d: 0.7, col: 0xffce3a },
+    shop_pad:   { shape: 'box', w: 3.4, h: 0.7, d: 3.4, col: 0x00e676 },
+    kill:       { shape: 'box', w: 4.6, h: 0.4, d: 0.8, col: 0xff3e3e },
+    trampoline: { shape: 'box', w: 4, h: 0.8, d: 4, col: 0x00e676 },
+    spawner:    { shape: 'box', w: 3.5, h: 0.8, d: 3.5, col: 0x9b59b6 }
+  };
+
+  if (st === 'teleport') {
+    const cylGeo = createBlockGeometryByShape('cylinder');
+    addGhostBoxWithOutline(grp, cylGeo, 3.2, 0.5, 3.2, 0x00d2ff, -3, 0, 0);
+    addGhostBoxWithOutline(grp, cylGeo, 3.2, 0.5, 3.2, 0xa29bfe, 3, 0, 0);
+    grp.userData.groundOffsetY = 0.25;
+  } else if (st && st.startsWith('prim_')) {
+    const sh = st.replace('prim_', '');
+    const geo = createBlockGeometryByShape(sh);
+    addGhostBoxWithOutline(grp, geo, 2, 2, 2, 0x56f0ff);
+    grp.userData.groundOffsetY = 1.0;
+  } else {
+    const spec = BUILTIN_SPECS[st] || { shape: 'box', w: 4, h: 4, d: 4, col: 0x56f0ff };
+    const geo = createBlockGeometryByShape(spec.shape);
+    addGhostBoxWithOutline(grp, geo, spec.w, spec.h, spec.d, spec.col);
+    grp.userData.groundOffsetY = spec.h * 0.5;
+  }
+
+  scene.add(grp);
+  return grp;
 }
 
 function getOrderedSiblingNodes(parentKey) {
@@ -3275,17 +3848,31 @@ function handleHierarchyReparentDrop(draggedKey, targetKey, dropPosition = 'insi
   // 1. Вложенность и смена порядка примитивов внутри одного предмета (item_part)
   if (draggedKey.startsWith('item_part:')) {
     const [, wiId, ptIdxStr] = draggedKey.split(':');
-    const wi = S.worldItems.find(w => w.id === wiId);
+    const wi = S.worldItems.find(w => w.id === wiId) || (S.selectedRef?.worldEntry?.id === wiId ? S.selectedRef.worldEntry : null);
     if (!wi || !wi.item) return;
     const parts = wi.item.parts;
     const fromIdx = +ptIdxStr;
     const childPt = parts[fromIdx];
     if (!childPt) return;
 
+    const finishItemPartReorder = () => {
+      const newIdx = Math.max(0, parts.indexOf(childPt));
+      selectEditorObject({
+        kind: 'world_item',
+        worldEntry: wi,
+        item: wi.item,
+        editMode: 'part',
+        partIdx: newIdx,
+        inWorldPlacement: !S.itemStudioOpen,
+        libIdx: S.selectedRef?.libIdx
+      }, true);
+      if (S.itemStudioOpen) syncItemStudioPreview();
+      sfx.jump();
+    };
+
     if (!targetKey || targetKey === `world_item:${wiId}`) {
       childPt.parentPartId = null;
-      sfx.jump();
-      refreshHierarchyUI();
+      finishItemPartReorder();
       return;
     }
     if (targetKey.startsWith(`item_part:${wiId}:`)) {
@@ -3294,21 +3881,20 @@ function handleHierarchyReparentDrop(draggedKey, targetKey, dropPosition = 'insi
       if (!targetPt || targetPt === childPt) return;
 
       if (dropPosition === 'inside') {
-        if (targetPt.parentPartId !== childPt.id) {
+        if (!isPartDescendantOf(parts, targetPt.id, childPt.id)) {
           childPt.parentPartId = targetPt.id;
-          sfx.jump();
-          refreshHierarchyUI();
+          finishItemPartReorder();
           showBanner(`🧩 «${childPt.name}» вложен в «${targetPt.name}»!`, '#00e676');
         }
       } else {
-        // Меняем порядок деталей местами (выше / ниже)
-        childPt.parentPartId = targetPt.parentPartId || null;
+        if (!isPartDescendantOf(parts, targetPt.parentPartId, childPt.id)) {
+          childPt.parentPartId = targetPt.parentPartId || null;
+        }
         parts.splice(fromIdx, 1);
         const newTargetIdx = parts.indexOf(targetPt);
         const insertIdx = dropPosition === 'before' ? newTargetIdx : newTargetIdx + 1;
         parts.splice(insertIdx, 0, childPt);
-        sfx.jump();
-        refreshHierarchyUI();
+        finishItemPartReorder();
       }
     }
     return;
@@ -3318,17 +3904,38 @@ function handleHierarchyReparentDrop(draggedKey, targetKey, dropPosition = 'insi
   if (draggedKey.startsWith('cos_part:')) {
     const [, charId, cosIdxStr, ptIdxStr] = draggedKey.split(':');
     const entInfo = getSceneNodeByKey(`char:${charId}`);
-    const cos = entInfo?.obj?.preset?.customCosmetics?.[+cosIdxStr];
+    const ent = entInfo?.obj;
+    const cos = ent?.preset?.customCosmetics?.[+cosIdxStr];
     if (!cos) return;
     const parts = cos.parts;
     const fromIdx = +ptIdxStr;
     const childPt = parts[fromIdx];
     if (!childPt) return;
 
+    const finishCosPartReorder = () => {
+      const newIdx = Math.max(0, parts.indexOf(childPt));
+      if (ent?.rig) {
+        ent.rig.syncCustomCosmetics(ent.preset.customCosmetics);
+        attachRigToEntity(ent);
+      }
+      const newGroup = ent?.rig?.customCosMeshes?.find(g => g.userData?.cosmeticItem === cos);
+      selectEditorObject({
+        kind: 'cosmetic',
+        ent,
+        item: cos,
+        group: newGroup,
+        editMode: 'part',
+        partIdx: newIdx,
+        inWorldPlacement: !S.itemStudioOpen,
+        libIdx: S.selectedRef?.libIdx
+      }, true);
+      if (S.itemStudioOpen) syncItemStudioPreview();
+      sfx.jump();
+    };
+
     if (!targetKey || targetKey === `cosmetic:${charId}:${cosIdxStr}`) {
       childPt.parentPartId = null;
-      sfx.jump();
-      refreshHierarchyUI();
+      finishCosPartReorder();
       return;
     }
     if (targetKey.startsWith(`cos_part:${charId}:${cosIdxStr}:`)) {
@@ -3337,20 +3944,20 @@ function handleHierarchyReparentDrop(draggedKey, targetKey, dropPosition = 'insi
       if (!targetPt || targetPt === childPt) return;
 
       if (dropPosition === 'inside') {
-        if (targetPt.parentPartId !== childPt.id) {
+        if (!isPartDescendantOf(parts, targetPt.id, childPt.id)) {
           childPt.parentPartId = targetPt.id;
-          sfx.jump();
-          refreshHierarchyUI();
+          finishCosPartReorder();
           showBanner(`🧩 «${childPt.name}» вложен в «${targetPt.name}»!`, '#00e676');
         }
       } else {
-        childPt.parentPartId = targetPt.parentPartId || null;
+        if (!isPartDescendantOf(parts, targetPt.parentPartId, childPt.id)) {
+          childPt.parentPartId = targetPt.parentPartId || null;
+        }
         parts.splice(fromIdx, 1);
         const newTargetIdx = parts.indexOf(targetPt);
         const insertIdx = dropPosition === 'before' ? newTargetIdx : newTargetIdx + 1;
         parts.splice(insertIdx, 0, childPt);
-        sfx.jump();
-        refreshHierarchyUI();
+        finishCosPartReorder();
       }
     }
     return;
@@ -3428,7 +4035,40 @@ export function openHierarchyContextMenu(clientX, clientY, targetNodeKey = null)
   closeHierarchyContextMenu();
   if (S.state !== 'edit') return;
 
-  // Разрешаем привязку пустышки к основным узлам сцены (если кликнули по детали внутри предмета — берём сам предмет)
+  // Определяем, кликнули ли по предмету/аксессуару или его детали (либо открыта 3D Студия предмета/аксессуара)
+  let itemOrCosPartContext = null;
+  if (targetNodeKey && (targetNodeKey.startsWith('world_item:') || targetNodeKey.startsWith('item_part:'))) {
+    const parts = targetNodeKey.split(':');
+    const wiId = parts[1];
+    const wi = S.worldItems.find(w => w.id === wiId) || (S.selectedRef?.worldEntry?.id === wiId ? S.selectedRef.worldEntry : null);
+    if (wi && wi.item) {
+      const ptIdx = targetNodeKey.startsWith('item_part:') ? +parts[2] : -1;
+      const ptObj = ptIdx >= 0 ? wi.item.parts[ptIdx] : null;
+      itemOrCosPartContext = { kind: 'world_item', wi, item: wi.item, part: ptObj, partIdx: ptIdx };
+    }
+  } else if (targetNodeKey && (targetNodeKey.startsWith('cosmetic:') || targetNodeKey.startsWith('cos_part:'))) {
+    const parts = targetNodeKey.split(':');
+    const charId = parts[1];
+    const cIdx = +parts[2];
+    const entInfo = getSceneNodeByKey(`char:${charId}`);
+    const ent = entInfo?.obj;
+    const cos = ent?.preset?.customCosmetics?.[cIdx];
+    if (ent && cos) {
+      const ptIdx = targetNodeKey.startsWith('cos_part:') ? +parts[3] : -1;
+      const ptObj = ptIdx >= 0 ? cos.parts[ptIdx] : null;
+      itemOrCosPartContext = { kind: 'cosmetic', ent, item: cos, part: ptObj, partIdx: ptIdx };
+    }
+  } else if (!targetNodeKey && S.itemStudioOpen && S.selectedRef && (S.selectedRef.kind === 'world_item' || S.selectedRef.kind === 'cosmetic')) {
+    itemOrCosPartContext = {
+      kind: S.selectedRef.kind,
+      wi: S.selectedRef.worldEntry,
+      ent: S.selectedRef.ent,
+      item: S.selectedRef.item,
+      part: null,
+      partIdx: -1
+    };
+  }
+
   let resolvedParentKey = targetNodeKey;
   if (resolvedParentKey && resolvedParentKey.startsWith('item_part:')) {
     const wiId = resolvedParentKey.split(':')[1];
@@ -3471,7 +4111,7 @@ export function openHierarchyContextMenu(clientX, clientY, targetNodeKey = null)
       <button class="hier-ctx-btn" data-ctx-act="create_prim_root" data-shape="sphere" type="button">⚪ Создать Примитив: Сфера</button>
       <button class="hier-ctx-btn" data-ctx-act="create_prim_root" data-shape="wedge" type="button">📐 Создать Примитив: Клин</button>
       <div class="hier-ctx-sep"></div>
-      <button class="hier-ctx-btn" data-ctx-act="create_folder" type="button">📁 Создать группу / папку</button>
+      ${!S.itemStudioOpen || targetInfo ? `<button class="hier-ctx-btn" data-ctx-act="create_folder" type="button">📁 Создать группу / папку</button>` : ''}
     `;
   }
 
@@ -3546,7 +4186,7 @@ export function openHierarchyContextMenu(clientX, clientY, targetNodeKey = null)
     setParentKeyOfNode(box, parentKey || null);
     ensureNodeHierOrder(box);
     rebuildPhysicsArrays();
-    selectEditorObject({ kind: 'block', box });
+    selectEditorObject({ kind: 'block', box, inStudio: S.itemStudioOpen });
     sfx.jump();
   };
 
@@ -3556,6 +4196,41 @@ export function openHierarchyContextMenu(clientX, clientY, targetNodeKey = null)
       const act = btn.dataset.ctxAct;
       const shape = btn.dataset.shape || 'box';
       closeHierarchyContextMenu();
+
+      if (
+        itemOrCosPartContext &&
+        (act === 'create_empty_root' || act === 'create_empty_child' || act === 'create_prim_root' || act === 'create_prim_child')
+      ) {
+        const isEmpty = act === 'create_empty_root' || act === 'create_empty_child';
+        const targetShape = isEmpty ? 'none' : (shape === 'wedge' ? 'box' : shape);
+        const parentPtId = (act === 'create_empty_child' || act === 'create_prim_child') && itemOrCosPartContext.part
+          ? itemOrCosPartContext.part.id
+          : null;
+
+        if (itemOrCosPartContext.kind === 'world_item') {
+          selectEditorObject({
+            kind: 'world_item',
+            worldEntry: itemOrCosPartContext.wi,
+            item: itemOrCosPartContext.item,
+            editMode: 'part',
+            partIdx: Math.max(0, itemOrCosPartContext.partIdx),
+            inWorldPlacement: !S.itemStudioOpen
+          }, true);
+        } else {
+          const grp = itemOrCosPartContext.ent.rig?.customCosMeshes?.find(g => g.userData?.cosmeticItem === itemOrCosPartContext.item);
+          selectEditorObject({
+            kind: 'cosmetic',
+            ent: itemOrCosPartContext.ent,
+            item: itemOrCosPartContext.item,
+            group: grp,
+            editMode: 'part',
+            partIdx: Math.max(0, itemOrCosPartContext.partIdx),
+            inWorldPlacement: !S.itemStudioOpen
+          }, true);
+        }
+        spawnPrimitiveInEditor(targetShape, null, parentPtId);
+        return;
+      }
 
       if (act === 'create_empty_root') {
         pushUndoState('Создание пустого объекта');
@@ -3661,6 +4336,9 @@ export function openPrefabDockContextMenu(clientX, clientY, cardId, spawnKey) {
         } else if (cid.startsWith('lib_cos_')) {
           const idx = +cid.replace('lib_cos_', '');
           if (S.savedCosmeticsLibrary[idx]) S.savedCosmeticsLibrary.splice(idx, 1);
+        } else if (cid.startsWith('lib_bbm_')) {
+          const idx = +cid.replace('lib_bbm_', '');
+          if (S.customModelsLibrary && S.customModelsLibrary[idx]) S.customModelsLibrary.splice(idx, 1);
         }
         sfx.oof();
         refreshPrefabDockUI();
@@ -3686,6 +4364,17 @@ export function initHierarchyAndSpawn() {
     addFolderBtn.parentNode.insertBefore(emptyBtn, addFolderBtn);
 
     emptyBtn.onclick = () => {
+      if (S.selectedRef && (S.selectedRef.kind === 'world_item' || S.selectedRef.kind === 'cosmetic')) {
+        const parentPtId = (S.selectedRef.editMode === 'part' || S.selectedRef.editMode === 'proj_part') && S.selectedRef.part
+          ? S.selectedRef.part.id
+          : null;
+        spawnPrimitiveInEditor('none', null, parentPtId);
+        return;
+      }
+      if (S.selectedRef && S.selectedRef.kind === 'block' && S.itemStudioOpen) {
+        spawnPrimitiveInEditor('none', null);
+        return;
+      }
       const parentKey = getKeyFromEditorRef(S.selectedRef);
       pushUndoState('Создание пустышки');
       let x = 0, y = 2, z = 0, rx = 0, ry = 0, rz = 0;
@@ -3760,6 +4449,7 @@ export function initHierarchyAndSpawn() {
   const hierCont = $('hierContainer');
   if (hierCont) {
     hierCont.addEventListener('contextmenu', e => {
+      if (isPaintModalOpen() || S.scriptModalOpen) return;
       if (S.state !== 'edit') return;
       e.preventDefault();
       e.stopPropagation();
@@ -3863,6 +4553,7 @@ export function initHierarchyAndSpawn() {
   };
 
   document.addEventListener('pointerdown', e => {
+    if (isPaintModalOpen() || S.scriptModalOpen) return;
     if (!e.target.closest('.hier-ctx-menu')) {
       closeHierarchyContextMenu();
     }
@@ -3983,7 +4674,8 @@ export function initHierarchyAndSpawn() {
             activeDrag.preview3D.position.copy(pt);
           } else {
             const pt = computeWorldDropPoint(e.clientX, e.clientY);
-            activeDrag.preview3D.position.set(pt.x, pt.y + 0.5, pt.z);
+            const yOff = activeDrag.preview3D.userData?.groundOffsetY ?? 0.5;
+            activeDrag.preview3D.position.set(pt.x, pt.y + yOff, pt.z);
           }
         }
       }

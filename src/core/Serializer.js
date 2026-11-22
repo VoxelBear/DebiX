@@ -16,7 +16,8 @@ import {
   syncBlockSpecialVisuals,
   syncBlockComponentsState,
   resetAllLogicRuntime,
-  removeBlockHalo
+  removeBlockHalo,
+  syncSceneVisibilityForMode
 } from './WorldRegistry.js';
 import {
   spawnCustomNPC,
@@ -39,6 +40,33 @@ export const GAME_MODES = {
   heaven_queue: HeavenQueueGame,
   sandbox_template: SandboxGame
 };
+
+function serializeCleanScriptData(sd) {
+  if (!sd) return null;
+  const cleanScripts = Array.isArray(sd.scripts)
+    ? sd.scripts.filter(Boolean).map(s => ({
+        id: s.id || ('scr_' + Date.now()),
+        enabled: Boolean(s.enabled),
+        targetType: s.targetType || sd.targetType || 'block',
+        name: s.name || 'Мой Скрипт',
+        code: s.code || '',
+        paramValues: s.paramValues ? JSON.parse(JSON.stringify(s.paramValues)) : {},
+        collapsed: Boolean(s.collapsed),
+        showBadge: s.showBadge !== false
+      }))
+    : undefined;
+
+  return {
+    enabled: Boolean(sd.enabled),
+    collapsed: Boolean(sd.collapsed),
+    targetType: sd.targetType || 'block',
+    name: sd.name || 'Мой Скрипт',
+    code: sd.code || '',
+    paramValues: sd.paramValues ? JSON.parse(JSON.stringify(sd.paramValues)) : {},
+    showBadge: sd.showBadge !== false,
+    scripts: cleanScripts
+  };
+}
 
 export function switchGameTemplate(modeId) {
   const mode = GAME_MODES[modeId] || HeavenQueueGame;
@@ -185,6 +213,14 @@ export function serializeSceneState() {
     savedItemsLibrary: JSON.parse(JSON.stringify(S.savedItemsLibrary || [])),
     customPrefabsLibrary: JSON.parse(JSON.stringify(S.customPrefabsLibrary || [])),
     customAudioLibrary: JSON.parse(JSON.stringify(S.customAudioLibrary || [])),
+    customScriptsLibrary: (S.customScriptsLibrary || []).map(s => ({
+      id: s.id,
+      targetType: s.targetType || 'block',
+      name: s.name || 'Аддон',
+      code: s.code || '',
+      paramValues: s.paramValues ? JSON.parse(JSON.stringify(s.paramValues)) : {}
+    })),
+    customModelsLibrary: JSON.parse(JSON.stringify(S.customModelsLibrary || [])),
     prefabFolders: JSON.parse(JSON.stringify(S.prefabFolders || [])),
     sceneFolders: JSON.parse(JSON.stringify(S.sceneFolders || [])),
     physicsConstraints: JSON.parse(JSON.stringify((S.physicsConstraints || []).filter(c => !c._createdInPlay))),
@@ -195,7 +231,9 @@ export function serializeSceneState() {
       rx: emp.rx || 0, ry: emp.ry || 0, rz: emp.rz || 0,
       sx: emp.sx || 1, sy: emp.sy || 1, sz: emp.sz || 1,
       parentKey: emp.parentKey || null,
-      hierOrder: emp.hierOrder || 0
+      hierOrder: emp.hierOrder || 0,
+      isDisabled: !!emp.isDisabled,
+      editorHidden: !!emp.editorHidden
     })),
     playerData: player
       ? {
@@ -238,7 +276,11 @@ export function serializeSceneState() {
       scaleX: wi.scaleX || 1,
       scaleY: wi.scaleY || 1,
       scaleZ: wi.scaleZ || 1,
-      item: JSON.parse(JSON.stringify(wi.item))
+      isDisabled: !!wi.isDisabled,
+      editorHidden: !!wi.editorHidden,
+      item: Object.assign({}, JSON.parse(JSON.stringify(wi.item)), {
+        scriptData: serializeCleanScriptData(wi.item.scriptData)
+      })
     })),
     blocks: S.allBlocks.map(b => {
       const basePos = (b.logicRuntime && b.logicRuntime.basePos) ? b.logicRuntime.basePos : b.m.position;
@@ -291,10 +333,14 @@ export function serializeSceneState() {
         spawnerData: b.spawnerData ? JSON.parse(JSON.stringify(b.spawnerData)) : null,
         particleData: b.particleData ? JSON.parse(JSON.stringify(b.particleData)) : null,
         lightData: b.lightData ? JSON.parse(JSON.stringify(b.lightData)) : null,
+        scriptData: serializeCleanScriptData(b.scriptData),
+        bbmodelData: b.bbmodelData ? JSON.parse(JSON.stringify(b.bbmodelData)) : null,
         logicData: b.logicData ? Object.assign({}, JSON.parse(JSON.stringify(b.logicData)), { unlocked: false }) : null,
         parentKey: b.parentKey || null,
         hierOrder: b.hierOrder || 0,
-        isCustom: b.isCustom
+        isCustom: b.isCustom,
+        isDisabled: !!b.isDisabled,
+        editorHidden: !!b.editorHidden
       };
     }),
     customNPCs: S.customNPCs.map(n => {
@@ -326,7 +372,10 @@ export function serializeSceneState() {
         hierOrder: n.hierOrder || 0,
         handGripPoint: n.preset?.handGripPoint ? Object.assign({}, n.preset.handGripPoint) : null,
         carryGripPoint: n.preset?.carryGripPoint ? Object.assign({}, n.preset.carryGripPoint) : null,
-        preset: JSON.parse(JSON.stringify(n.preset))
+        preset: JSON.parse(JSON.stringify(n.preset)),
+        isDisabled: !!n.isDisabled,
+        editorHidden: !!n.editorHidden,
+        permanentDeath: !!n.permanentDeath
       };
     })
   };
@@ -351,6 +400,10 @@ export function loadSceneState(data, opts = {}) {
     Object.assign(S.worldSettings, data.worldSettings);
     updateSkybox();
   }
+  if (data.worldSettings?.worldScriptData) {
+    S.worldSettings.worldScriptData = data.worldSettings.worldScriptData;
+    S.worldSettings.worldScriptData._compiled = null;
+  }
   if (data.customDefaultStudDataURL !== undefined) {
     S.customDefaultStudDataURL = data.customDefaultStudDataURL;
   }
@@ -366,6 +419,12 @@ export function loadSceneState(data, opts = {}) {
   if (Array.isArray(data.customAudioLibrary)) {
     S.customAudioLibrary = JSON.parse(JSON.stringify(data.customAudioLibrary));
   }
+  if (Array.isArray(data.customScriptsLibrary)) {
+    S.customScriptsLibrary = JSON.parse(JSON.stringify(data.customScriptsLibrary));
+  }
+  if (Array.isArray(data.customModelsLibrary)) {
+    S.customModelsLibrary = JSON.parse(JSON.stringify(data.customModelsLibrary));
+  }
   if (Array.isArray(data.prefabFolders)) {
     S.prefabFolders = JSON.parse(JSON.stringify(data.prefabFolders));
   }
@@ -379,7 +438,11 @@ export function loadSceneState(data, opts = {}) {
   clearEmptyObjects();
   if (Array.isArray(data.emptyObjects)) {
     for (const se of data.emptyObjects) {
-      spawnEmptyObject(se);
+      const emp = spawnEmptyObject(se);
+      if (emp) {
+        emp.isDisabled = Boolean(se.isDisabled);
+        emp.editorHidden = Boolean(se.editorHidden);
+      }
     }
   }
 
@@ -393,6 +456,12 @@ export function loadSceneState(data, opts = {}) {
     S.blockIdCounter = 1;
     for (const sb of data.blocks) {
       const box = addSceneBlock(sb);
+      box.isDisabled = Boolean(sb.isDisabled);
+      box.editorHidden = Boolean(sb.editorHidden);
+      if (box.scriptData) {
+        box.scriptData._compiled = null;
+        box.scriptData.runtimeDisabled = false;
+      }
       if (sb.id) box.id = sb.id;
       if (sb.parentKey) box.parentKey = sb.parentKey;
       if (sb.weldToParent !== undefined) box.weldToParent = sb.weldToParent;
@@ -455,6 +524,8 @@ export function loadSceneState(data, opts = {}) {
         scaleY: sw.scaleY || 1,
         scaleZ: sw.scaleZ || 1
       });
+      wi.isDisabled = Boolean(sw.isDisabled);
+      wi.editorHidden = Boolean(sw.editorHidden);
       if (sw.parentKey) wi.parentKey = sw.parentKey;
       if (sw.hierOrder !== undefined) wi.hierOrder = sw.hierOrder;
     }
@@ -468,6 +539,10 @@ export function loadSceneState(data, opts = {}) {
     S.customNPCs.length = 0;
     for (const sn of data.customNPCs) {
       const npc = spawnCustomNPC(Object.assign({}, sn.preset, sn));
+      npc.isDisabled = Boolean(sn.isDisabled);
+      npc.editorHidden = Boolean(sn.editorHidden);
+      npc.baseScale = npc.rig?.g?.scale?.x || sn.scale || 1;
+      npc.baseGait = npc.aiModules?.navigation?.gait || 'normal';
       if (sn.parentKey) npc.parentKey = sn.parentKey;
       if (sn.hierOrder !== undefined) npc.hierOrder = sn.hierOrder;
       if (sn.rot !== undefined) {
@@ -530,6 +605,7 @@ export function loadSceneState(data, opts = {}) {
     refreshEntityTagWithHP(player);
     updateShopUI();
   }
+  syncSceneVisibilityForMode(S.state);
   syncProjectTitleInput();
 }
 
@@ -538,6 +614,7 @@ export function startPlaySession() {
   syncAudioWithWorldSettings();
   resetAllLogicRuntime(true);
   S.state = 'play';
+  syncSceneVisibilityForMode('play');
   $('menu').hidden = true;
   $('studioUI').hidden = true;
   $('paintModal').hidden = true;

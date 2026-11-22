@@ -17,6 +17,7 @@ import {
 import {
   update,
   performPlayerMeleeAttack,
+  performPlayerKick,
   triggerBlockSpawner,
   triggerBlockLogic,
   findNearestKeyEBlock,
@@ -28,7 +29,8 @@ import {
   cancelReloadHold,
   releaseChargedThrow,
   syncPlayCameraToPlayer,
-  renderPhysicsConstraintsVisuals
+  renderPhysicsConstraintsVisuals,
+  registerPlayerRagdollStruggle
 } from './PhysicsAndCombat.js';
 import { updateLiquidCameraFilter, resetLiquidCameraFilter } from './LiquidCameraFilter.js';
 import {
@@ -577,7 +579,7 @@ export function initInputControls() {
         undoLastStudioAction();
         return;
       }
-      if (isPaintModalOpen()) return;
+      if (isPaintModalOpen() || S.scriptModalOpen) return;
 
       if (!S.rmbDown && !S.mmbDown) {
         if (e.code === 'KeyW') { sfx.gizmoTick(); setGizmoMode('translate'); }
@@ -592,6 +594,16 @@ export function initInputControls() {
           sfx.spawnPop();
           duplicateSelected();
         }
+      }
+      return;
+    }
+
+    if (S.scriptModalOpen) return;
+
+    if (S.state === 'play' && S.player?.ragdoll?.active) {
+      if (!e.repeat && ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+        e.preventDefault();
+        registerPlayerRagdollStruggle(1.0);
       }
       return;
     }
@@ -639,6 +651,9 @@ export function initInputControls() {
         S.gmodTool.active ? '#56f0ff' : '#ffce3a'
       );
     }
+    if (e.code === 'KeyQ' && !e.repeat && S.state === 'play' && S.player && !S.playerDead && !S.player.isFlying) {
+      performPlayerKick();
+    }
     if (e.code === 'KeyF') performPlayerMeleeAttack(true);
     if (e.code === 'KeyR' && !e.repeat) {
       if (S.gmodTool?.active && S.player && !S.playerDead) {
@@ -675,6 +690,10 @@ export function initInputControls() {
       if (S.lmbDown) return;
       S.lmbDown = true;
       if (S.state !== 'play' || !S.player || S.playerDead) return;
+      if (S.player.ragdoll?.active) {
+        registerPlayerRagdollStruggle(1.2);
+        return;
+      }
       if (S.gmodTool?.active) {
         handleGmodToolTrigger('lmb');
         return;
@@ -698,6 +717,10 @@ export function initInputControls() {
   };
 
   const setPlayRMBState = isDown => {
+    if (isDown && S.state === 'play' && S.player?.ragdoll?.active) {
+      registerPlayerRagdollStruggle(1.1);
+      return;
+    }
     if (isDown && S.state === 'play' && S.gmodTool?.active) {
       handleGmodToolTrigger('rmb');
       return;

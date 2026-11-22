@@ -101,6 +101,7 @@
       <button class="ed-btn" id="btnColliderVis" type="button" title="Показать 3D коллайдеры">🔲 Коллайдеры: 🔴</button>
       <button class="ed-btn" id="openItemStudioBtn" type="button" title="Открыть изолированную 3D Студию предметов и аксессуаров">🛠️ 3D Студия</button>
       <button class="ed-btn" id="openFacePaintBtn" type="button" title="Открыть 2D Студию принтов и партиклов">🎨 2D Студия</button>
+      <button class="ed-btn" id="openScriptStudioTopBtn" type="button" style="border-color:#a29bfe;color:#dcd6ff" title="Открыть встроенный редактор скриптов-аддонов DebiX Script">🧩 Скрипты</button>
       <button class="ed-btn icon-only" id="dupObjBtn" type="button" title="Дублировать внутри объекта (Ctrl+D)">📋</button>
       <button class="ed-btn danger icon-only" id="delObjBtn" type="button" title="Удалить выбранный объект (Delete)">🗑️</button>
       <button class="ed-btn" id="undoObjBtn" type="button" title="Отменить последнее действие (Ctrl+Z)">↩️ Отмена</button>
@@ -251,6 +252,14 @@
             <span id="paintSizeTxt" style="font-size:10px;width:34px;text-align:right">6px</span>
           </div>
           <div class="swatch-row" id="paintSwatches"></div>
+          <div class="paint-palette-sec" id="paintRecentPaletteWrap">
+            <div class="paint-palette-lbl">🕒 Последние 10 цветов (Глобально)</div>
+            <div class="swatch-row" id="paintRecentSwatches"></div>
+          </div>
+          <div class="paint-palette-sec" id="paintObjectPaletteWrap" hidden>
+            <div class="paint-palette-lbl" id="paintObjectPaletteLbl">🎯 Палитра объекта</div>
+            <div class="swatch-row" id="paintObjectSwatches"></div>
+          </div>
           <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px">
             <button class="ed-btn active" id="toolBrush" type="button">🖌️ Кисть</button>
             <button class="ed-btn" id="toolBucket" type="button">🪣 Заливка</button>
@@ -328,6 +337,8 @@
     </div>
   </div>
 </div>
+
+<div id="scriptStudioModal" hidden></div>
 
 <!-- ===================== MODAL OVERLAYS (PROJECT HUB / REBIRTH) ===================== -->
 <div id="menu" hidden>

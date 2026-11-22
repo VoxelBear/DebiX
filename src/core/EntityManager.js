@@ -329,6 +329,11 @@ export function dropHeldOrCarriedItem(ent = S.player, throwSpeed = 3.5, reasonMs
       Math.max(1.5, throwSpeed * 0.45),
       fz * throwSpeed
     );
+    if (wi) {
+      wi._thrownBy = ent;
+      wi._throwGrace = 0.28;
+      wi._physSleep = false;
+    }
     if (wi && window.__debixSyncWorldItemUpsert && !S.isApplyingRemoteSync) {
       window.__debixSyncWorldItemUpsert(wi, false);
     }
@@ -356,6 +361,11 @@ export function dropHeldOrCarriedItem(ent = S.player, throwSpeed = 3.5, reasonMs
       Math.max(2.0, throwSpeed * 0.45),
       fz * throwSpeed
     );
+    if (wi) {
+      wi._thrownBy = ent;
+      wi._throwGrace = 0.28;
+      wi._physSleep = false;
+    }
     if (wi && window.__debixSyncWorldItemUpsert && !S.isApplyingRemoteSync) {
       window.__debixSyncWorldItemUpsert(wi, false);
     }
@@ -506,6 +516,8 @@ export function spawnPlayer(opts = {}) {
     meleeDamage: 25,
     aggressive: false,
     attackCooldown: 0,
+    kickCooldown: 0,
+    ragdoll: null,
     reloadTimer: 0,
     colliderRadius: 0.42,
     colliderHeight: 2.5,
@@ -618,6 +630,14 @@ export function createDefaultNpcModules(opts = {}) {
       dropEquippedItem: true,
       respawnTime: 3.5,
       permanentDeath: !!opts.permanentDeath
+    },
+    customScript: {
+      enabled: false,
+      collapsed: false,
+      targetType: 'npc',
+      name: 'Скрипт Бота',
+      code: '',
+      paramValues: {}
     }
   };
 }
@@ -653,6 +673,12 @@ export function ensureNpcModules(npc) {
   npc.aggressive = Boolean(npc.aiModules.combat?.enabled && npc.aiModules.combat.stance === 'hostile');
   npc.walkSpeed = Number(npc.aiModules.navigation?.walkSpeed) || 5.4;
   npc.jumpPower = Number(npc.aiModules.navigation?.jumpPower) || 10.2;
+  // Единый источник правды для permanentDeath (по умолчанию false — NPC возрождается)
+  const permFlag = npc.permanentDeath !== undefined
+    ? Boolean(npc.permanentDeath)
+    : Boolean(npc.aiModules.dialogue?.permanentDeath);
+  npc.permanentDeath = permFlag;
+  if (npc.aiModules.dialogue) npc.aiModules.dialogue.permanentDeath = permFlag;
   return npc.aiModules;
 }
 
@@ -699,6 +725,10 @@ export function spawnCustomNPC(opts = {}) {
     wander: opts.wander !== undefined ? opts.wander : true,
     aggressive: !!opts.aggressive,
     hpEnabled: opts.hpEnabled !== undefined ? opts.hpEnabled : true,
+    permanentDeath: Boolean(opts.permanentDeath || opts.aiModules?.dialogue?.permanentDeath),
+    _permanentlyDead: false,
+    _deadCooldown: 0,
+    ragdoll: null,
     hp: opts.hp ?? 100,
     maxHp: opts.maxHp ?? 100,
     hpBarTimer: 0,

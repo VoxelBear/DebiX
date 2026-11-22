@@ -92,14 +92,17 @@ export const S = {
     ambiencePreset: 'heaven_wind',
     sfxVolume: 0.85,
     musicVolume: 0.42,
-    ambienceVolume: 0.45
+    ambienceVolume: 0.45,
+    worldScriptData: null
   },
-
-  customDefaultStudDataURL: null,
   savedCosmeticsLibrary: [],
   savedItemsLibrary: [],
   customPrefabsLibrary: [], // Пользовательские префабы блоков/предметов/NPC
   customAudioLibrary: [],   // Пользовательские загруженные звуки и музыка (.mp3/.wav/.ogg в DataURL)
+  customScriptsLibrary: [], // Пользовательские скрипт-аддоны (DebiX Script)
+  scriptLogs: [],           // Логи выполнения скриптов-аддонов
+  scriptModalOpen: false,   // Открыта ли модалка Script Studio IDE
+  customDefaultStudDataURL: null,
   prefabFolders: [
     { id: 'u_fav', name: 'Избранное ⭐', items: ['item_sword', 'item_blaster', 'solid', 'door'] }
   ],

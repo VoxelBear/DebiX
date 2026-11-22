@@ -300,6 +300,7 @@ function emitFromObjectGroup(group, dt) {
 export function updateParticles(dt) {
   // 1. Спавн новых частиц из эмиттеров блоков
   for (const box of S.allBlocks) {
+    if (box.isDisabled || box._depletedDisabled) continue;
     const pd = box.particleData;
     if (!pd || !pd.enabled) continue;
 
@@ -316,14 +317,14 @@ export function updateParticles(dt) {
 
   // 1б. Спавн частиц из частей предметов, оружия, снарядов и аксессуаров/питомцев
   for (const wi of S.worldItems) {
-    if (wi && wi.group) emitFromObjectGroup(wi.group, dt);
+    if (wi && !wi.isDisabled && wi.group) emitFromObjectGroup(wi.group, dt);
   }
   for (const prj of S.activeProjectiles || []) {
     if (prj && (prj.mesh || prj.m || prj.group)) emitFromObjectGroup(prj.mesh || prj.m || prj.group, dt);
   }
 
   const emitFromEntity = ent => {
-    if (!ent || !ent.rig) return;
+    if (!ent || !ent.rig || ent.isDisabled || ent._deadCooldown > 0 || ent._permanentlyDead) return;
     if (ent.rig.heldItemMesh) emitFromObjectGroup(ent.rig.heldItemMesh, dt);
     if (ent.rig.carriedItemMesh) emitFromObjectGroup(ent.rig.carriedItemMesh, dt);
     if (Array.isArray(ent.rig.customCosMeshes)) {

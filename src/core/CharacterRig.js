@@ -1,5 +1,6 @@
 // src/core/CharacterRig.js
 import { S, TAU, clamp } from './State.js';
+import { buildBBModelGroup } from './BBModelLoader.js';
 import {
   makePartMat,
   defaultFaceURL,
@@ -7,8 +8,8 @@ import {
   createHaloSprite
 } from './TextureFactory.js';
 
-export const MAX_COSMETIC_PARTS = 16;
-export const MAX_ITEM_PARTS = 16;
+export const MAX_COSMETIC_PARTS = 64;
+export const MAX_ITEM_PARTS = 64;
 export const MAX_ACTIVE_PER_SLOT = 2;
 
 export const SLOT_LABELS_RU = {
@@ -243,7 +244,15 @@ const SHARED_MAT_CACHE = {};
 export function getSharedPrimitiveGeo(shape = 'box') {
   if (SHARED_GEO_CACHE[shape]) return SHARED_GEO_CACHE[shape];
   let geo;
-  if (shape === 'sphere') geo = new THREE.SphereGeometry(0.4, 14, 10);
+  if (shape === 'bbmodel' || shape === 'none') {
+    geo = new THREE.BufferGeometry();
+    // 2 вершины и 0 треугольников: ничего не рендерит, но Box3.setFromObject не выдаёт ±Infinity/NaN
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([-0.04, -0.04, -0.04, 0.04, 0.04, 0.04], 3));
+    geo.setIndex([]);
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
+  } 
+  else if (shape === 'sphere') geo = new THREE.SphereGeometry(0.4, 14, 10);
   else if (shape === 'cylinder') geo = new THREE.CylinderGeometry(0.35, 0.35, 0.6, 14);
   else if (shape === 'cone') geo = new THREE.ConeGeometry(0.4, 0.7, 14);
   else if (shape === 'torus') geo = new THREE.TorusGeometry(0.38, 0.08, 10, 18);
@@ -1026,7 +1035,33 @@ export function buildItemGroup(item, opts = {}) {
     mesh.userData.itemPartIdx = i;
     mesh.userData.isProjectilePart = isProjectile;
 
-    if (pt.texDataURL) {
+    if (pt.shape === 'none') {
+      mesh.material = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      if (showMarkers && !isProjectile) {
+        const pivHelper = createXRayGripMarkerMesh('#56f0ff', 0.55);
+        pivHelper.traverse(o => {
+          o.userData.noCollider = true;
+          o.userData.itemPart = pt;
+          o.userData.itemPartIdx = i;
+        });
+        mesh.add(pivHelper);
+      }
+    } else if (pt.shape === 'bbmodel' && pt.bbmodelData) {
+      mesh.material = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
+      mesh.castShadow = false;
+      const bbmGrp = buildBBModelGroup(pt.bbmodelData, pt.color || '#ffffff');
+      if (bbmGrp) {
+        bbmGrp.traverse(o => {
+          o.userData.noCollider = true;
+          o.userData.itemPart = pt;
+          o.userData.itemPartIdx = i;
+          o.userData.isProjectilePart = isProjectile;
+        });
+        mesh.add(bbmGrp);
+      }
+    } else if (pt.texDataURL) {
       setMeshFrontSprite(mesh, pt.texDataURL);
     }
 
@@ -1191,7 +1226,36 @@ export function buildPrimitiveMesh(part, item, partIdx, group) {
   mesh.userData.cosmeticPartIdx = partIdx;
   mesh.userData.cosmeticGroup = group;
 
-  if (part.texDataURL) {
+  if (part.shape === 'none') {
+    mesh.material = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    if (S.state === 'edit') {
+      const pivHelper = createXRayGripMarkerMesh('#56f0ff', 0.5);
+      pivHelper.traverse(o => {
+        o.userData.noCollider = true;
+        o.userData.cosmeticItem = item;
+        o.userData.cosmeticPart = part;
+        o.userData.cosmeticPartIdx = partIdx;
+        o.userData.cosmeticGroup = group;
+      });
+      mesh.add(pivHelper);
+    }
+  } else if (part.shape === 'bbmodel' && part.bbmodelData) {
+    mesh.material = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
+    mesh.castShadow = false;
+    const bbmGrp = buildBBModelGroup(part.bbmodelData, part.color || '#ffffff');
+    if (bbmGrp) {
+      bbmGrp.traverse(o => {
+        o.userData.noCollider = true;
+        o.userData.cosmeticItem = item;
+        o.userData.cosmeticPart = part;
+        o.userData.cosmeticPartIdx = partIdx;
+        o.userData.cosmeticGroup = group;
+      });
+      mesh.add(bbmGrp);
+    }
+  } else if (part.texDataURL) {
     setMeshFrontSprite(mesh, part.texDataURL);
   }
 
@@ -1659,7 +1723,7 @@ export function stopEntityEmote(ent) {
 export function triggerEntityAttack(ent, style = 'punch') {
   if (!ent) return;
   if (ent.activeEmote) stopEntityEmote(ent);
-  ent.attackAnimDuration = 0.28;
+  ent.attackAnimDuration = style === 'kick' ? 0.36 : 0.28;
   ent.attackAnimT = ent.attackAnimDuration;
   ent.attackStyle = style;
 }
@@ -1668,6 +1732,60 @@ export function triggerEntityAttack(ent, style = 'punch') {
 export function updateEntityAnimation(ent, dt, opts = {}) {
   if (!ent || !ent.rig) return;
   const rig = ent.rig;
+
+  // ФИЗИЧЕСКИЙ РЭГДОЛЛ R6 (падение, болтающиеся конечности и плавный подъём)
+  if (ent.ragdoll && (ent.ragdoll.active || ent.ragdoll.recoverTimer > 0)) {
+    const rd = ent.ragdoll;
+    const isRec = !rd.active && rd.recoverTimer > 0;
+    const blend = 1 - Math.exp(-(isRec ? 14 : 22) * Math.max(0.001, dt));
+    const L = rd.limbs;
+
+    // При активном рэгдоле тело вращается целиком (rig.g), а суставы свободно болтаются
+    const tTorsoX = isRec ? 0 : (L?.torso?.rx || 0);
+    const tTorsoZ = isRec ? 0 : (L?.torso?.rz || 0);
+    const tHeadX = isRec ? 0 : (L?.head?.rx || 0);
+    const tHeadZ = isRec ? 0 : (L?.head?.rz || 0);
+    const tArmLX = isRec ? 0 : (L?.armL?.rx || 0);
+    const tArmLZ = isRec ? 0.05 : (L?.armL?.rz || 0.35);
+    const tArmRX = isRec ? 0 : (L?.armR?.rx || 0);
+    const tArmRZ = isRec ? -0.05 : (L?.armR?.rz || -0.35);
+    const tLegLX = isRec ? 0 : (L?.legL?.rx || 0);
+    const tLegLZ = isRec ? 0 : (L?.legL?.rz || 0.15);
+    const tLegRX = isRec ? 0 : (L?.legR?.rx || 0);
+    const tLegRZ = isRec ? 0 : (L?.legR?.rz || -0.15);
+
+    rig.legL.position.set(0.25, R6_PIVOTS.hipY, 0);
+    rig.legR.position.set(-0.25, R6_PIVOTS.hipY, 0);
+    rig.torso.position.set(0, R6_PIVOTS.waistY, 0);
+    rig.armL.position.set(0.73, R6_PIVOTS.shoulderY, 0);
+    rig.armR.position.set(-0.73, R6_PIVOTS.shoulderY, 0);
+    rig.head.position.set(0, R6_PIVOTS.neckY, 0);
+
+    rig.torso.rotation.x += (tTorsoX - rig.torso.rotation.x) * blend;
+    rig.torso.rotation.y += (0 - rig.torso.rotation.y) * blend;
+    rig.torso.rotation.z += (tTorsoZ - rig.torso.rotation.z) * blend;
+
+    rig.head.rotation.x += (tHeadX - rig.head.rotation.x) * blend;
+    rig.head.rotation.y += (0 - rig.head.rotation.y) * blend;
+    rig.head.rotation.z += (tHeadZ - rig.head.rotation.z) * blend;
+
+    rig.armL.rotation.x += (tArmLX - rig.armL.rotation.x) * blend;
+    rig.armL.rotation.y += (0 - rig.armL.rotation.y) * blend;
+    rig.armL.rotation.z += (tArmLZ - rig.armL.rotation.z) * blend;
+
+    rig.armR.rotation.x += (tArmRX - rig.armR.rotation.x) * blend;
+    rig.armR.rotation.y += (0 - rig.armR.rotation.y) * blend;
+    rig.armR.rotation.z += (tArmRZ - rig.armR.rotation.z) * blend;
+
+    rig.legL.rotation.x += (tLegLX - rig.legL.rotation.x) * blend;
+    rig.legL.rotation.y += (0 - rig.legL.rotation.y) * blend;
+    rig.legL.rotation.z += (tLegLZ - rig.legL.rotation.z) * blend;
+
+    rig.legR.rotation.x += (tLegRX - rig.legR.rotation.x) * blend;
+    rig.legR.rotation.y += (0 - rig.legR.rotation.y) * blend;
+    rig.legR.rotation.z += (tLegRZ - rig.legR.rotation.z) * blend;
+    return;
+  }
   const moving = !!opts.moving;
   const sprinting = opts.sprinting !== undefined ? !!opts.sprinting : !!ent.sprinting;
   const grounded = opts.grounded !== undefined ? !!opts.grounded : (ent.grounded !== undefined ? !!ent.grounded : true);
@@ -2260,7 +2378,20 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
     const p = 1 - ent.attackAnimT / dur;
     const strikeCurve = Math.sin(Math.pow(p, 0.65) * Math.PI);
 
-    if (ent.attackStyle === 'shoot') {
+    if (ent.attackStyle === 'kick') {
+      // Мощный пинок правой ногой вперёд в стиле Dark Messiah
+      const kickCurve = Math.sin(Math.pow(p, 0.52) * Math.PI);
+      legRX = -1.68 * kickCurve;
+      legRZ = -0.08 * kickCurve;
+      legLX = 0.22 * kickCurve;
+      torsoX = -0.26 * kickCurve;
+      torsoY = 0.22 * kickCurve;
+      headX = 0.16 * kickCurve;
+      armLX = 0.55 * kickCurve;
+      armLZ = 0.48 * kickCurve;
+      armRX = 0.42 * kickCurve;
+      armRZ = -0.45 * kickCurve;
+    } else if (ent.attackStyle === 'shoot') {
       armRX = -1.55 - 0.28 * strikeCurve;
       torsoX -= 0.06 * strikeCurve;
     } else if (gait === 'monster') {
@@ -2277,6 +2408,48 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
       armRZ = -0.18 * strikeCurve;
       torsoY -= 0.28 * strikeCurve;
       torsoX += 0.12 * strikeCurve;
+    }
+  }
+
+  // Анимация оглушения (Стан): покачивание корпуса и кружение головы
+  if ((ent.stunTimer || 0) > 0 && !ent.activeEmote) {
+    const dizzy = t * 7.5;
+    torsoX += 0.14 + Math.sin(dizzy * 0.5) * 0.06;
+    torsoZ += Math.cos(dizzy) * 0.11;
+    headX += 0.12 + Math.sin(dizzy) * 0.18;
+    headY += Math.cos(dizzy) * 0.24;
+    headZ += Math.sin(dizzy * 0.8) * 0.2;
+    armLX += -0.35 + Math.sin(dizzy) * 0.12;
+    armRX += -0.35 - Math.sin(dizzy) * 0.12;
+    armLZ += 0.28;
+    armRZ -= 0.28;
+  }
+
+  // Анимация пошатывания (Stagger), если удар/пинок не сбил персонажа в рэгдолл
+  if (ent.stagger && ent.stagger.timer > 0) {
+    ent.stagger.timer = Math.max(0, ent.stagger.timer - dt);
+    const dur = Math.max(0.1, ent.stagger.duration || 0.45);
+    const p = 1 - ent.stagger.timer / dur; // 0 -> 1
+    // Резкий откат назад и плавный возврат равновесия с лёгкой отдачей
+    const wave = Math.sin(p * Math.PI) * Math.pow(1 - p, 0.35) * (ent.stagger.strength || 1.0);
+
+    const rot = ent.rot || 0;
+    const dx = ent.stagger.dirX || 0;
+    const dz = ent.stagger.dirZ || 0;
+    const localFwd = dx * Math.sin(rot) + dz * Math.cos(rot);   // +1 толчок вперёд (в спину), -1 назад (в грудь)
+    const localLeft = dx * Math.cos(rot) - dz * Math.sin(rot);  // +1 толчок влево, -1 вправо
+
+    torsoX += localFwd * 0.48 * wave;
+    torsoZ += -localLeft * 0.42 * wave;
+    headX += -localFwd * 0.32 * wave;
+    headZ += localLeft * 0.28 * wave;
+    armLX += (-0.65 + localFwd * 0.25) * wave;
+    armRX += (-0.65 + localFwd * 0.25) * wave;
+    armLZ += 0.45 * wave;
+    armRZ += -0.45 * wave;
+
+    if (ent.stagger.timer <= 0) {
+      ent.stagger = null;
     }
   }
 
@@ -2366,6 +2539,12 @@ export function updateEntityAnimation(ent, dt, opts = {}) {
 }
 function updateEntityPets(ent, dt) {
   if (!ent || !ent.rig || !ent.rig.petEntries || ent.rig.petEntries.length === 0) return;
+  if (ent.isDisabled || ent._deadCooldown > 0 || ent._permanentlyDead) {
+    for (const pe of ent.rig.petEntries) {
+      if (pe.group) pe.group.visible = false;
+    }
+    return;
+  }
 
   const activeEntries = ent.rig.petEntries.filter(pe => {
     const isOn = pe.item.enabled !== false;

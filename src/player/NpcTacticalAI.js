@@ -108,7 +108,8 @@ export function areEntitiesAllied(a, b) {
 
 export function areEntitiesHostile(npc, target) {
   if (!npc || !target || npc === target) return false;
-  if (target._deadCooldown > 0) return false;
+  if (npc.isDisabled || target.isDisabled || target._deadCooldown > 0) return false;
+  if (target._permanentlyDead) return false;
   if (target.isP && S.playerDead) return false;
   return getRelationshipBetweenEntities(npc, target) === 'hostile';
 }
@@ -117,7 +118,7 @@ export function broadcastFactionCallForHelp(victimEnt, attacker, radius = 28) {
   if (!victimEnt || !attacker || victimEnt === attacker) return;
   for (let i = 0; i < S.customNPCs.length; i++) {
     const ally = S.customNPCs[i];
-    if (!ally || ally === victimEnt || ally === attacker || ally._deadCooldown > 0) continue;
+    if (!ally || ally.isDisabled || ally === victimEnt || ally === attacker || ally._deadCooldown > 0 || ally._permanentlyDead) continue;
     if (!isNpcSmart(ally)) continue;
 
     const allyCmb = ally.aiModules?.combat;
@@ -199,13 +200,13 @@ export function acquireBestTargetForNpc(npc) {
   }
   for (let i = 0; i < S.customNPCs.length; i++) {
     const other = S.customNPCs[i];
-    if (other && other !== npc && !(other._deadCooldown > 0)) candidates.push(other);
+    if (other && !other.isDisabled && other !== npc && !(other._deadCooldown > 0) && !other._permanentlyDead) candidates.push(other);
   }
 
   if (smart && cmb.callForHelp !== false) {
     for (let i = 0; i < S.customNPCs.length; i++) {
       const ally = S.customNPCs[i];
-      if (!ally || ally === npc || ally._deadCooldown > 0) continue;
+      if (!ally || ally.isDisabled || ally === npc || ally._deadCooldown > 0) continue;
       if (!areEntitiesAllied(npc, ally)) continue;
       const dAlly = Math.hypot(ally.x - npc.x, ally.z - npc.z);
       if (dAlly <= aggroRad * 1.5 && ally._aggroTarget && !areEntitiesAllied(npc, ally._aggroTarget)) {
@@ -234,6 +235,7 @@ export function acquireBestTargetForNpc(npc) {
   if (npc._aggroTarget) {
     const cur = npc._aggroTarget;
     const isDead =
+      cur.isDisabled ||
       (cur._deadCooldown > 0) ||
       (cur.isP && (S.playerDead || cur.hp <= 0)) ||
       (cur.isRemotePlayer && (!S.remotePlayers[cur.peerId] || !cur.rig?.g?.visible || cur.hp <= 0)) ||
@@ -272,7 +274,7 @@ export function acquireBestTargetForNpc(npc) {
       if (myRole === 'tank') {
         for (let j = 0; j < S.customNPCs.length; j++) {
           const al = S.customNPCs[j];
-          if (al && al !== npc && !(al._deadCooldown > 0) && areEntitiesAllied(npc, al)) {
+          if (al && !al.isDisabled && al !== npc && !(al._deadCooldown > 0) && areEntitiesAllied(npc, al)) {
             if (classifyNpcTacticalRole(al) === 'ranged' && Math.hypot(cand.x - al.x, cand.z - al.z) < 5.2) {
               score += 12.0;
               npc._interceptingForAlly = al;
@@ -920,7 +922,7 @@ export function computeSmartTacticalCombatPlan(npc, activeTarget, attackDist, is
 
   for (let i = 0; i < S.customNPCs.length; i++) {
     const al = S.customNPCs[i];
-    if (!al || al === npc || al._deadCooldown > 0) continue;
+    if (!al || al.isDisabled || al === npc || al._deadCooldown > 0) continue;
     if (!areEntitiesAllied(npc, al)) continue;
 
     const dAl = Math.hypot(al.x - npc.x, al.z - npc.z);
@@ -1020,7 +1022,7 @@ export function computeSmartTacticalCombatPlan(npc, activeTarget, attackDist, is
     let bestDistAlly = 45.0;
     for (let i = 0; i < S.customNPCs.length; i++) {
       const al = S.customNPCs[i];
-      if (!al || al === npc || al._deadCooldown > 0 || !areEntitiesAllied(npc, al)) continue;
+      if (!al || al.isDisabled || al === npc || al._deadCooldown > 0 || !areEntitiesAllied(npc, al)) continue;
       const d = Math.hypot(al.x - npc.x, al.z - npc.z);
       if (d > 12.0 && d < bestDistAlly) {
         bestDistAlly = d;

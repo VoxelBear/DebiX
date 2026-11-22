@@ -401,6 +401,15 @@ export const sfx = {
     tone(185, 58, 0.17, 'square', 0.26 * v, 0, { pitchVar: 0.13, filterFreq: 1100 });
     noiseBurst(0.095, 0.2 * v, 0, { freq: 850, freqEnd: 220, q: 1.3 });
   },
+  kick(v = 1) {
+    tone(145, 42, 0.18, 'sawtooth', 0.28 * v, 0, { pitchVar: 0.1, filterFreq: 720 });
+    tone(95, 36, 0.22, 'sine', 0.3 * v, 0, { pitchVar: 0.08 });
+    noiseBurst(0.12, 0.22 * v, 0, { pink: true, freq: 540, freqEnd: 140, q: 1.1 });
+  },
+  stagger(v = 1) {
+    tone(220, 125, 0.12, 'triangle', 0.16 * v, 0, { pitchVar: 0.12 });
+    noiseBurst(0.07, 0.1 * v, 0, { pink: true, freq: 720, freqEnd: 280, q: 1.4 });
+  },
   zap(v = 1) {
     tone(740, 82, 0.34, 'sawtooth', 0.26 * v, 0, { pitchVar: 0.11, filterFreq: 2800, filterEndFreq: 240 });
     tone(360, 62, 0.32, 'square', 0.18 * v, 0.02, { pitchVar: 0.11, filterFreq: 1600 });
@@ -1156,7 +1165,7 @@ export function updateAudioEngineRuntime(dt) {
     spatialZonesTimer = 0;
     for (let i = 0; i < S.allBlocks.length; i++) {
       const b = S.allBlocks[i];
-      if (!b || b._depletedDisabled || !b.components?.sound?.enabled || !b.soundData) continue;
+      if (!b || b.isDisabled || b._depletedDisabled || !b.components?.sound?.enabled || !b.soundData) continue;
       const snd = b.soundData;
       if (snd.mode !== 'zone_loop') continue;
       snd._timer = (snd._timer || 0) - stepDt;

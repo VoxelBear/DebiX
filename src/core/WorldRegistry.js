@@ -4,6 +4,8 @@ import { scene } from './SceneManager.js';
 import { createBlockMaterial, syncBoxMaterialTiling, setMeshFrontSprite, createHaloSprite } from './TextureFactory.js';
 import { makeTagSprite, updateTag, updateGroupRootHitbox } from './CharacterRig.js';
 import { createDefaultParticleData, clearAllParticles } from './ParticleSystem.js';
+import { createDefaultScriptData, resetAllScriptsRuntime, compileSandboxedScript, ensureScriptContainer } from './ScriptEngine.js';
+import { buildBBModelGroup } from './BBModelLoader.js';
 
 const MAX_ACTIVE_POINT_LIGHTS = 12;
 const pointLightPool = [];
@@ -14,6 +16,48 @@ export function removeBlockHalo(box) {
     scene.remove(box.haloSprite);
     if (box.haloSprite.material) box.haloSprite.material.dispose();
     box.haloSprite = null;
+  }
+}
+
+export function syncSceneVisibilityForMode(mode = S.state) {
+  const isEdit = mode === 'edit';
+
+  for (let i = 0; i < S.allBlocks.length; i++) {
+    const b = S.allBlocks[i];
+    if (!b || !b.m) continue;
+    const isOff = Boolean(b.isDisabled || (!isEdit && b._depletedDisabled));
+    const vis = !isOff && !(isEdit && b.editorHidden);
+    b.m.visible = vis;
+    if (b.bbmodelGroup) b.bbmodelGroup.visible = vis;
+    if (b.cpVisualGroup) b.cpVisualGroup.visible = vis;
+    if (b.haloSprite) b.haloSprite.visible = vis;
+    if (b.emptyPivotHelper) {
+      b.emptyPivotHelper.visible = isEdit && vis && !b.components?.geometry?.enabled;
+    }
+    updateBlockOBB(b);
+  }
+
+  for (let i = 0; i < S.customNPCs.length; i++) {
+    const n = S.customNPCs[i];
+    if (!n) continue;
+    const isDead = !isEdit && (n._deadCooldown > 0 || n._permanentlyDead);
+    const vis = !n.isDisabled && !isDead && !(isEdit && n.editorHidden);
+    if (n.rig?.g) n.rig.g.visible = vis;
+    if (n.tag) n.tag.visible = vis;
+  }
+
+  for (let i = 0; i < S.worldItems.length; i++) {
+    const wi = S.worldItems[i];
+    if (!wi) continue;
+    const vis = !wi.isDisabled && !(isEdit && wi.editorHidden);
+    if (wi.group) wi.group.visible = vis;
+    if (wi.tag) wi.tag.visible = vis;
+  }
+
+  for (let i = 0; i < (S.emptyObjects || []).length; i++) {
+    const emp = S.emptyObjects[i];
+    if (!emp) continue;
+    if (emp.helper) emp.helper.visible = isEdit && !emp.isDisabled && !emp.editorHidden;
   }
 }
 
@@ -67,6 +111,7 @@ function getWedgeGeometry() {
 }
 
 export function createBlockGeometryByShape(shape = 'box') {
+  if (shape === 'bbmodel') return new THREE.BufferGeometry();
   if (shape === 'none') return new THREE.SphereGeometry(0.28, 8, 8);
   if (shape === 'cylinder') return new THREE.CylinderGeometry(0.5, 0.5, 1, 20);
   if (shape === 'sphere') return new THREE.SphereGeometry(0.5, 20, 16);
@@ -207,6 +252,7 @@ export function ensureBlockComponents(box, opts = {}) {
   if (!box.motionData) box.motionData = createDefaultMotionData(box);
   if (!box.signalData) box.signalData = createDefaultSignalData(box);
   if (!box.costData) box.costData = createDefaultCostData(box);
+  if (!box.scriptData) box.scriptData = createDefaultScriptData('block');
 
   if (!box.components) {
     const isRawEmpty = !!opts.isRawEmpty;
@@ -323,10 +369,14 @@ export function ensureBlockComponents(box, opts = {}) {
       spawner: {
         enabled: !isRawEmpty && !isRawPrim && hasSp,
         collapsed: false
+      },
+      script: {
+        enabled: Boolean(box.scriptData && box.scriptData.enabled),
+        collapsed: false
       }
     };
   } else {
-    const keys = ['geometry', 'visual', 'physics', 'interaction', 'motion', 'signal', 'cost', 'item', 'spawner'];
+    const keys = ['geometry', 'visual', 'physics', 'interaction', 'motion', 'signal', 'cost', 'item', 'spawner', 'script'];
     for (const k of keys) {
       if (!box.components[k]) {
         box.components[k] = { enabled: false, collapsed: false };
@@ -456,6 +506,26 @@ export function syncBlockComponentsState(box) {
   const hasGeo = Boolean(comps.geometry && comps.geometry.enabled);
   const hasVis = Boolean(comps.visual && comps.visual.enabled);
   const hasPhys = Boolean(comps.physics && comps.physics.enabled);
+  const isBBModel = hasGeo && box.shape === 'bbmodel' && box.bbmodelData;
+  if (isBBModel) {
+    const sig = (box.bbmodelData.id || box.bbmodelData.name) + '|' + (box.colorHex || '');
+    if (!box.bbmodelGroup || box._bbmodelSig !== sig) {
+      if (box.bbmodelGroup) box.m.remove(box.bbmodelGroup);
+      box.bbmodelGroup = buildBBModelGroup(box.bbmodelData, box.colorHex || '#ffffff');
+      box._bbmodelSig = sig;
+      if (box.bbmodelGroup) {
+        box.bbmodelGroup.traverse(o => {
+          o.userData.editorRef = { kind: 'block', box };
+        });
+        box.m.add(box.bbmodelGroup);
+      }
+    }
+    if (box.bbmodelGroup) box.bbmodelGroup.visible = !box.editorHidden;
+  } else if (box.bbmodelGroup) {
+    box.m.remove(box.bbmodelGroup);
+    box.bbmodelGroup = null;
+    box._bbmodelSig = '';
+  }
 
   const targetShape = hasGeo ? (box.shape || 'box') : 'none';
   if (box._appliedShape !== targetShape) {
@@ -547,10 +617,28 @@ export function syncBlockComponentsState(box) {
     }
   }
 
+  if (isBBModel) {
+    box.m.material = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      colorWrite: false
+    });
+    box.m.castShadow = false;
+    box.m.receiveShadow = false;
+  }
+
   syncLegacyFieldsFromModular(box);
   syncBlockLightVisuals(box);
   syncBlockSpecialVisuals(box);
   updateBlockOBB(box);
+  const isEdit = S.state === 'edit';
+  const vis = !box.isDisabled && !(isEdit && box.editorHidden) && (!(isEdit ? false : box._depletedDisabled));
+  box.m.visible = vis;
+  if (box.bbmodelGroup) box.bbmodelGroup.visible = vis;
+  if (box.cpVisualGroup) box.cpVisualGroup.visible = vis;
+  if (box.haloSprite) box.haloSprite.visible = vis;
+  if (box.emptyPivotHelper) box.emptyPivotHelper.visible = isEdit && vis && !hasGeo;
 }
 
 function ensurePointLightPool() {
@@ -673,7 +761,7 @@ export function updateWorldLights(camPos) {
 
   for (let i = 0; i < S.allBlocks.length; i++) {
     const box = S.allBlocks[i];
-    if (box._depletedDisabled) continue;
+    if (box.isDisabled || box._depletedDisabled) continue;
     const ld = box.lightData;
 
     if (box.haloSprite && box.haloSprite.visible) {
@@ -765,7 +853,7 @@ export function updateWorldLights(camPos) {
   };
 
   for (const wi of S.worldItems) {
-    if (wi && wi.group) collectGroupRealLights(wi.group);
+    if (wi && !wi.isDisabled && wi.group) collectGroupRealLights(wi.group);
   }
   for (const prj of S.activeProjectiles || []) {
     if (prj && (prj.mesh || prj.m || prj.group)) collectGroupRealLights(prj.mesh || prj.m || prj.group);
@@ -783,7 +871,7 @@ export function updateWorldLights(camPos) {
   };
 
   if (S.player) collectEntityRealLights(S.player);
-  for (const npc of S.customNPCs) collectEntityRealLights(npc);
+  for (const npc of S.customNPCs) { if (npc && !npc.isDisabled && !(npc._deadCooldown > 0) && !npc._permanentlyDead) collectEntityRealLights(npc); }
   for (const q of S.queueLine) {
     if (!q.isP) collectEntityRealLights(q);
   }
@@ -874,6 +962,8 @@ export function addSceneBlock(opts) {
     signalData = null,
     costData = null,
     components = null,
+    scriptData = null,
+    bbmodelData = null,
     isRawEmpty = false,
     isRawPrimitive = false,
     label = 'Блок',
@@ -991,6 +1081,8 @@ export function addSceneBlock(opts) {
     motionData: motionData ? JSON.parse(JSON.stringify(motionData)) : null,
     signalData: signalData ? JSON.parse(JSON.stringify(signalData)) : null,
     costData: costData ? JSON.parse(JSON.stringify(costData)) : null,
+    scriptData: scriptData ? JSON.parse(JSON.stringify(scriptData)) : createDefaultScriptData('block'),
+    bbmodelData: bbmodelData ? JSON.parse(JSON.stringify(bbmodelData)) : null,
     components: components ? JSON.parse(JSON.stringify(components)) : null,
     logicRuntime: {
       basePos: null,
@@ -1005,6 +1097,8 @@ export function addSceneBlock(opts) {
     },
     cpVisualGroup: null,
     emptyPivotHelper: null,
+    isDisabled: Boolean(opts.isDisabled),
+    editorHidden: Boolean(opts.editorHidden),
     isCustom
   };
 
@@ -1029,7 +1123,7 @@ export function updateBlockOBB(box) {
   box.h = h;
   box.d = d;
 
-  if ((box.components && !box.components.physics?.enabled) || box._depletedDisabled) {
+  if ((box.components && !box.components.physics?.enabled) || box._depletedDisabled || box.isDisabled) {
     box.hx = w * 0.5;
     box.hy = h * 0.5;
     box.hz = d * 0.5;
@@ -1097,7 +1191,11 @@ export function getLogicBadgeStrings(box) {
 
   const hasInteract = comps?.interaction?.enabled && it && it.trigger !== 'none';
   const hasSelfMotion = comps?.motion?.enabled && box.motionData?.triggerMode === 'self';
-  if (!hasInteract && !hasSelfMotion) return null;
+  if (comps?.script?.enabled && box.scriptData) {
+    ensureScriptContainer(box.scriptData, 'block');
+  }
+  const hasScriptInteract = Boolean(comps?.script?.enabled && box.scriptData?.enabled && box.scriptData?.hasInteractHook);
+  if (!hasInteract && !hasSelfMotion && !hasScriptInteract) return null;
 
   const trig = hasInteract ? it.trigger : 'keyE';
   const trigBadge = trig === 'keyE'
@@ -1597,7 +1695,11 @@ export function resetAllLogicRuntime(reanchorCurrentAsBase = false) {
     box._externalTorqueZ = 0;
     box._depletedDisabled = false;
     box._interactionDisabled = false;
-    box.m.visible = !box.editorHidden;
+    const isEditMode = S.state === 'edit';
+    const vis = !box.isDisabled && !(isEditMode && box.editorHidden);
+    box.m.visible = vis;
+    if (box.bbmodelGroup) box.bbmodelGroup.visible = vis;
+    if (box.haloSprite) box.haloSprite.visible = vis;
     if (box.interactionData && box.interactionData.maxCharges) {
       box.interactionData.chargesLeft = box.interactionData.maxCharges;
     }
@@ -1609,7 +1711,7 @@ export function resetAllLogicRuntime(reanchorCurrentAsBase = false) {
     updateBlockOBB(box);
     if (box.cpVisualGroup) {
       box.cpVisualGroup.position.copy(box.m.position);
-      box.cpVisualGroup.visible = true;
+      box.cpVisualGroup.visible = vis;
     }
   }
   if (Array.isArray(S.physicsConstraints)) {
@@ -1622,6 +1724,7 @@ export function resetAllLogicRuntime(reanchorCurrentAsBase = false) {
   if (S.gmodTool) {
     S.gmodTool.firstHit = null;
   }
+  resetAllScriptsRuntime();
 }
 
 function createColliderShapeGeometry(shape, hx, hy, hz) {

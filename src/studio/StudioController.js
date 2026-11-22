@@ -21,7 +21,8 @@ import {
   removeBlockHalo,
   syncStudioMotionAndSignalHelpers,
   clearStudioMotionHelpers,
-  getBlockLocalPivotOffset
+  getBlockLocalPivotOffset,
+  syncSceneVisibilityForMode
 } from '../core/WorldRegistry.js';
 import {
   spawnCustomNPC,
@@ -677,6 +678,7 @@ export function syncItemStudioPreview() {
       studioMannequinRig.g.rotation.set(0, 0.25, 0);
       studioMannequinRig.g.scale.setScalar(1);
       studioMannequinRig.g.visible = showMannequin;
+      setMannequinBodyVisible(studioMannequinRig, showMannequin);
       if (showMannequin) {
         if (S.player && S.player.preset) {
           syncRigAppearanceFromPreset(studioMannequinRig, S.player.preset);
@@ -933,6 +935,11 @@ export function restoreItemStudioSubjectsToWorld() {
     if (S.worldItems.includes(wi)) {
       if (wi.tag) wi.tag.visible = true;
       rebuildWorldItemVisual(wi, false);
+    } else if (wi._ownerEnt) {
+      if (wi.group && wi.group !== wi._ownerEnt.rig?.g) {
+        scene.remove(wi.group);
+      }
+      attachRigToEntity(wi._ownerEnt);
     }
   }
 
@@ -989,11 +996,22 @@ export function openItemStudio3D(ref = S.selectedRef) {
   if (activeStudioCharEnt && (!ref || ref.ent !== activeStudioCharEnt)) {
     restoreItemStudioSubjectsToWorld();
   }
-  if (activeStudioBlockState && (!ref || ref.kind !== 'block' || ref.box !== activeStudioBlockState.rootBox)) {
-    restoreItemStudioSubjectsToWorld();
+  if (activeStudioBlockState) {
+    let refRootBox = ref && ref.kind === 'block' ? ref.box : null;
+    let guard = 0;
+    while (refRootBox && refRootBox.parentKey && refRootBox.parentKey.startsWith('block:') && guard++ < 64) {
+      const pid = refRootBox.parentKey.slice(6);
+      const pBox = S.allBlocks.find(b => b.id === pid);
+      if (!pBox || pBox === refRootBox) break;
+      refRootBox = pBox;
+    }
+    if (!refRootBox || refRootBox !== activeStudioBlockState.rootBox) {
+      restoreItemStudioSubjectsToWorld();
+    }
   }
 
   S.itemStudioOpen = true;
+  $('studioUI')?.classList.add('in-3d-studio');
   itemStudioStageGroup.visible = true;
   if ($('itemStudioOverlay')) $('itemStudioOverlay').hidden = false;
   if ($('openItemStudioBtn')) $('openItemStudioBtn').classList.add('active');
@@ -1010,6 +1028,7 @@ export function closeItemStudio3D(switchToMapPlacement = false) {
   const prevRef = S.selectedRef;
 
   S.itemStudioOpen = false;
+  $('studioUI')?.classList.remove('in-3d-studio');
   refreshHierarchyUI();
   if (itemStudioStageGroup) itemStudioStageGroup.visible = false;
   if ($('itemStudioOverlay')) $('itemStudioOverlay').hidden = true;
@@ -1065,6 +1084,12 @@ export function closeItemStudio3D(switchToMapPlacement = false) {
     });
     focusOnSelected();
     showBanner('📍 Персонаж на карте мира!', '#00e676');
+    return;
+  }
+
+  if (prevRef && prevRef.kind === 'block' && prevRef.box) {
+    selectEditorObject({ kind: 'block', box: prevRef.box, editMode: 'root', inStudio: false });
+    if (switchToMapPlacement) focusOnSelected();
     return;
   }
 
@@ -1367,21 +1392,15 @@ export function initStudioController() {
         selectEditorObject(S.selectedRef, true);
         return;
       }
-      // Если выбран блок/объект сцены — открываем именно ЕГО (как собранный предмет), а НЕ создаём фантомный меч!
+      // Если выбран блок/объект сцены — открываем саму иерархию этого блока на подиуме 3D STUDIO без создания дубликата!
       if (S.selectedRef && S.selectedRef.kind === 'block' && S.selectedRef.box) {
-        const box = S.selectedRef.box;
-        pushUndoState('Открытие объекта в 3D STUDIO');
-        const compiled = compileSceneHierarchyToItemData(box);
-        const wi = spawnWorldItem(compiled, box.m.position.x, box.m.position.y + 0.4, box.m.position.z);
         selectEditorObject({
-          kind: 'world_item',
-          worldEntry: wi,
-          item: wi.item,
-          editMode: 'part',
-          partIdx: 0,
-          inWorldPlacement: false
-        });
-        showBanner(`🛠️ Объект «${box.label}» открыт на верстаке 3D STUDIO!`, '#56f0ff');
+          kind: 'block',
+          box: S.selectedRef.box,
+          editMode: 'root',
+          inStudio: true
+        }, true);
+        showBanner(`🛠️ Объект «${S.selectedRef.box.label}» открыт на подиуме 3D STUDIO!`, '#56f0ff');
         return;
       }
       // Если ничего не выбрано — открываем Игрока на подиуме 3D STUDIO без создания лишних мечей в мире
@@ -1394,6 +1413,16 @@ export function initStudioController() {
         });
         return;
       }
+    };
+  }
+
+  if ($('openScriptStudioTopBtn')) {
+    $('openScriptStudioTopBtn').onclick = () => {
+      import('../core/ScriptEngine.js').then(({ openScriptStudioModal }) => {
+        openScriptStudioModal(null, 'block', () => {
+          renderInspectorUI();
+        });
+      });
     };
   }
 
@@ -1599,6 +1628,7 @@ export function initStudioController() {
           ent.yaw = rigGroup.rotation.y;
           if (ent.isCustomNPC) {
             ent.homeX = ent.x;
+            ent.homeY = ent.y;
             ent.homeZ = ent.z;
           }
           if (ent.tag) {
@@ -1706,13 +1736,11 @@ export function initStudioController() {
           updateGroupRootHitbox(worldEntry.group);
           mesh.updateMatrixWorld(true);
           selBoxHelper.setFromObject(worldEntry.group);
-          syncItemStudioPreview();
         }
       } else if ((editMode === 'part' || editMode === 'proj_part') && mesh && part) {
         mesh.scale.x = Math.max(0.05, mesh.scale.x);
         mesh.scale.y = Math.max(0.05, mesh.scale.y);
         mesh.scale.z = Math.max(0.05, mesh.scale.z);
-        snapEulerToStep(mesh.rotation);
         part.x = mesh.position.x;
         part.y = mesh.position.y;
         part.z = mesh.position.z;
@@ -1725,10 +1753,8 @@ export function initStudioController() {
         updateGroupRootHitbox(worldEntry.group);
         mesh.updateMatrixWorld(true);
         selBoxHelper.setFromObject(mesh);
-        if (S.itemStudioOpen) syncItemStudioPreview();
         if (S.showColliders) rebuildPhysicsArrays();
       } else if (editMode === 'grip' && mesh) {
-        snapEulerToStep(mesh.rotation);
         item.gripPoint.x = -mesh.position.x;
         item.gripPoint.y = -mesh.position.y;
         item.gripPoint.z = -mesh.position.z;
@@ -1737,7 +1763,6 @@ export function initStudioController() {
         item.gripPoint.rz = mesh.rotation.z;
         mesh.updateMatrixWorld(true);
         selBoxHelper.visible = false;
-        if (S.itemStudioOpen) syncItemStudioPreview();
       } else if (editMode === 'muzzle' && mesh) {
         item.muzzlePoint.x = mesh.position.x;
         item.muzzlePoint.y = mesh.position.y;
@@ -1749,7 +1774,6 @@ export function initStudioController() {
       syncInspectorInputsFromObject();
       syncLibraryItemIfEditing(S.selectedRef);
     } else if (S.selectedRef.kind === 'folder' && S.selectedRef.mesh) {
-      snapEulerToStep(S.selectedRef.mesh.rotation);
       S.selectedRef.mesh.updateMatrixWorld(true);
     } else if (S.selectedRef.kind === 'empty' && S.selectedRef.emptyObj) {
       const emp = S.selectedRef.emptyObj;
@@ -1757,7 +1781,6 @@ export function initStudioController() {
       g.scale.x = Math.max(0.1, g.scale.x);
       g.scale.y = Math.max(0.1, g.scale.y);
       g.scale.z = Math.max(0.1, g.scale.z);
-      snapEulerToStep(g.rotation);
       emp.x = g.position.x;
       emp.y = g.position.y;
       emp.z = g.position.z;
@@ -1771,8 +1794,13 @@ export function initStudioController() {
       syncInspectorInputsFromObject();
     }
 
-    // Трансформируем все вложенные дочерние элементы вслед за родителем (как в Unity)
+    // Сначала трансформируем все вложенные дочерние элементы вслед за родителем
     propagateHierarchyTransform(S.selectedRef);
+
+    // И только после обновления дочерних деталей синхронизируем превью манекена в 3D Студии
+    if (S.itemStudioOpen && S.selectedRef.kind === 'world_item') {
+      syncItemStudioPreview();
+    }
   });
 
   $('openStudioBtn').addEventListener('click', () => toggleStudioMode('edit'));
@@ -1846,6 +1874,7 @@ export function cleanupStudioVisualsForPlay() {
   tControls.detach();
   tControls.visible = false;
   selBoxHelper.visible = false;
+  syncSceneVisibilityForMode('play');
   rebuildPhysicsArrays();
   updateStudioGrid();
 }
@@ -1854,14 +1883,36 @@ export function toggleStudioMode(forceState) {
   const target = forceState || (S.state === 'edit' ? 'play' : 'edit');
   if (target === 'edit') {
     if (S.playerDead) completePlayerRespawn(false);
-    if (S.player) S.player.isFlying = false;
+    if (S.player) {
+      S.player.isFlying = false;
+      S.player.ragdoll = null;
+      if (S.player.rig?.g) S.player.rig.g.rotation.set(0, S.player.rot || 0, 0);
+    }
     for (const n of S.customNPCs) {
+      n.ragdoll = null;
       if (n._deadCooldown > 0 || n._permanentlyDead) {
         n._deadCooldown = 0;
         n._permanentlyDead = false;
         n.hp = n.maxHp || 100;
-        if (n.rig?.g) n.rig.g.visible = true;
-        if (n.tag) n.tag.visible = true;
+        n.x = n.homeX ?? n.x;
+        n.y = n.homeY ?? n.y;
+        n.z = n.homeZ ?? n.z;
+        n.vy = 0;
+        n.vxKnock = 0;
+        n.vzKnock = 0;
+        if (n.rig?.g) {
+          n.rig.g.visible = true;
+          n.rig.g.position.set(n.x, n.y, n.z);
+          n.rig.g.rotation.set(0, n.rot || 0, 0);
+        }
+        if (n.tag) {
+          n.tag.visible = true;
+          n.tag.position.set(n.x, n.y + 3.35, n.z);
+        }
+      } else if (n.rig?.g) {
+        n.rig.g.rotation.set(0, n.rot || 0, 0);
+        if (n.baseScale && n.rig.g.scale) n.rig.g.scale.setScalar(n.baseScale);
+        if (n.baseGait && n.aiModules?.navigation) n.aiModules.navigation.gait = n.baseGait;
       }
     }
     S.state = 'edit';
@@ -1907,12 +1958,18 @@ export function toggleStudioMode(forceState) {
       renderInspectorUI();
     }
     setEmptyObjectsHelperVisible(true);
+    syncSceneVisibilityForMode('edit');
     rebuildPhysicsArrays();
     updateStudioGrid();
     showBanner('🛠️ DebiX Studio 3D! СКМ — панорама, ПКМ+WASD — полёт, Ctrl+Z — контекстная отмена.', '#56f0ff');
   } else {
     S.state = 'play';
     cleanupStudioVisualsForPlay();
+    for (const n of S.customNPCs) {
+      n.baseScale = n.rig?.g?.scale?.x || 1;
+      n.baseGait = n.aiModules?.navigation?.gait || 'normal';
+    }
+    syncSceneVisibilityForMode('play');
     $('studioUI').hidden = true;
     $('paintModal').hidden = true;
     $('topbar').hidden = false;
@@ -1981,8 +2038,15 @@ export function selectEditorObject(ref, keepUndoStack = false) {
 
   const prevWiEntry = S.selectedRef && S.selectedRef.kind === 'world_item' ? S.selectedRef.worldEntry : null;
   const nextWiEntry = ref && ref.kind === 'world_item' ? ref.worldEntry : null;
-  if (prevWiEntry && prevWiEntry !== nextWiEntry && S.worldItems.includes(prevWiEntry)) {
-    rebuildWorldItemVisual(prevWiEntry, false);
+  if (prevWiEntry && prevWiEntry !== nextWiEntry) {
+    if (S.worldItems.includes(prevWiEntry)) {
+      rebuildWorldItemVisual(prevWiEntry, false);
+    } else if (prevWiEntry._ownerEnt) {
+      if (prevWiEntry.group && prevWiEntry.group !== prevWiEntry._ownerEnt.rig?.g) {
+        scene.remove(prevWiEntry.group);
+      }
+      attachRigToEntity(prevWiEntry._ownerEnt);
+    }
   }
 
   // Определяем, должно ли быть открыто изолированное окно 3D STUDIO
@@ -1995,6 +2059,7 @@ export function selectEditorObject(ref, keepUndoStack = false) {
 
   if (!shouldOpen3DStudio && S.itemStudioOpen) {
     S.itemStudioOpen = false;
+    $('studioUI')?.classList.remove('in-3d-studio');
     if (itemStudioStageGroup) itemStudioStageGroup.visible = false;
     if ($('itemStudioOverlay')) $('itemStudioOverlay').hidden = true;
     if ($('openItemStudioBtn')) $('openItemStudioBtn').classList.remove('active');
@@ -2047,6 +2112,9 @@ export function selectEditorObject(ref, keepUndoStack = false) {
   }
   if (ref.kind === 'block') {
     setGizmoSpace('local');
+    if (ref.inStudio) {
+      openItemStudio3D(ref);
+    }
     ref.box.m.updateMatrixWorld(true);
     syncStudioMotionAndSignalHelpers();
 
@@ -2118,8 +2186,9 @@ export function selectEditorObject(ref, keepUndoStack = false) {
     } else {
       if (ent?.rig?.g) ent.rig.g.updateMatrixWorld(true);
       const group = ref.group || ent?.rig?.customCosMeshes?.find(g => g.userData?.cosmeticItem === item);
+      const isCosEnabled = item.enabled !== false;
       if (group) {
-        group.visible = true;
+        group.visible = isCosEnabled;
         group.updateMatrixWorld(true);
       }
       const partMeshes = (group && group.userData?.partMeshes) || [];
@@ -2129,12 +2198,15 @@ export function selectEditorObject(ref, keepUndoStack = false) {
       ref.group = group;
       ref.mesh = mesh;
 
-      if (mesh) {
+      if (mesh && isCosEnabled) {
         mesh.updateMatrixWorld(true);
         setGizmoSpace('local');
         tControls.attach(mesh);
         selBoxHelper.setFromObject(ref.editMode === 'root' ? (group || mesh) : mesh);
         selBoxHelper.visible = true;
+      } else {
+        tControls.detach();
+        selBoxHelper.visible = false;
       }
     }
     $('inspTypeBadge').textContent = item.parentSlot === 'pet' ? '🐾 3D Питомец' : '🎩 3D Аксессуар';
@@ -2151,6 +2223,32 @@ export function selectEditorObject(ref, keepUndoStack = false) {
 
     const rootGroup = worldEntry.group;
     const partsHolder = rootGroup.userData.partsHolder || rootGroup;
+    const inWorld = !shouldOpen3DStudio;
+
+    // Прописываем точный editorRef на каждую деталь предмета и маркеры хвата/дула для клика в 3D Студии
+    (rootGroup.userData.partMeshes || []).forEach((pm, idx) => {
+      const ptRef = {
+        kind: 'world_item',
+        worldEntry,
+        item,
+        editMode: 'part',
+        partIdx: idx,
+        part: item.parts[idx],
+        mesh: pm,
+        inWorldPlacement: inWorld,
+        libIdx: ref.libIdx
+      };
+      pm.userData.editorRef = ptRef;
+      pm.traverse(ch => { ch.userData.editorRef = ptRef; });
+    });
+    if (rootGroup.userData.gripMarker) {
+      const gRef = { kind: 'world_item', worldEntry, item, editMode: 'grip', inWorldPlacement: inWorld, libIdx: ref.libIdx };
+      rootGroup.userData.gripMarker.traverse(ch => { ch.userData.editorRef = gRef; });
+    }
+    if (rootGroup.userData.muzzleMarker) {
+      const mRef = { kind: 'world_item', worldEntry, item, editMode: 'muzzle', inWorldPlacement: inWorld, libIdx: ref.libIdx };
+      rootGroup.userData.muzzleMarker.traverse(ch => { ch.userData.editorRef = mRef; });
+    }
 
     if (ref.editMode === 'proj_part') {
       const projGroup = buildItemGroup(item, { isProjectile: true, showMarkers: false, applyGripOffset: false });
@@ -2159,8 +2257,20 @@ export function selectEditorObject(ref, keepUndoStack = false) {
         (item.muzzlePoint.y || 0) + 0.45,
         (item.muzzlePoint.z ?? -0.8) - 0.55
       );
-      projGroup.traverse(o => {
-        o.userData.editorRef = { kind: 'world_item', worldEntry };
+      (projGroup.userData.partMeshes || []).forEach((pm, idx) => {
+        const pRef = {
+          kind: 'world_item',
+          worldEntry,
+          item,
+          editMode: 'proj_part',
+          partIdx: idx,
+          part: item.projectileParts[idx],
+          mesh: pm,
+          inWorldPlacement: false,
+          libIdx: ref.libIdx
+        };
+        pm.userData.editorRef = pRef;
+        pm.traverse(ch => { ch.userData.editorRef = pRef; });
       });
       rootGroup.add(projGroup);
       ref.projPreviewGroup = projGroup;
@@ -2270,6 +2380,26 @@ function cloneSingleSceneBlockExact(src, customLabel = null, parentKeyOverride =
     particleData: src.particleData ? JSON.parse(JSON.stringify(src.particleData)) : null,
     lightData: src.lightData ? JSON.parse(JSON.stringify(src.lightData)) : null,
     logicData: src.logicData ? JSON.parse(JSON.stringify(src.logicData)) : null,
+    scriptData: src.scriptData ? JSON.parse(JSON.stringify({
+      enabled: Boolean(src.scriptData.enabled),
+      collapsed: Boolean(src.scriptData.collapsed),
+      targetType: src.scriptData.targetType || 'block',
+      name: src.scriptData.name || 'Мой Скрипт',
+      code: src.scriptData.code || '',
+      paramValues: src.scriptData.paramValues || {},
+      showBadge: src.scriptData.showBadge !== false,
+      scripts: Array.isArray(src.scriptData.scripts) ? src.scriptData.scripts.map(s => ({
+        id: 'scr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        enabled: Boolean(s.enabled),
+        targetType: s.targetType || 'block',
+        name: s.name || 'Мой Скрипт',
+        code: s.code || '',
+        paramValues: s.paramValues || {},
+        collapsed: Boolean(s.collapsed),
+        showBadge: s.showBadge !== false
+      })) : undefined
+    })) : null,
+    bbmodelData: src.bbmodelData ? JSON.parse(JSON.stringify(src.bbmodelData)) : null,
     label: nextLabel,
     isCustom: true
   });
@@ -2316,7 +2446,7 @@ export function duplicateSelected() {
     }
 
     rebuildPhysicsArrays();
-    selectEditorObject({ kind: 'block', box: copy });
+    selectEditorObject({ kind: 'block', box: copy, inStudio: S.itemStudioOpen });
     sfx.jump();
   } else if (S.selectedRef.kind === 'world_item') {
     const { worldEntry, item, editMode, part, libIdx } = S.selectedRef;
@@ -2535,11 +2665,16 @@ export function deleteSelected() {
   if (S.selectedRef.kind === 'block') {
     pushUndoState('Удаление блока');
     const box = S.selectedRef.box;
-    if (S.itemStudioOpen) closeItemStudio3D(false);
+    const isSubChildInStudio = S.itemStudioOpen && activeStudioBlockState && activeStudioBlockState.rootBox && activeStudioBlockState.rootBox !== box;
+    if (S.itemStudioOpen && !isSubChildInStudio) closeItemStudio3D(false);
     cascadeDeleteHierarchyChildren(`block:${box.id}`);
     removeSceneNodeByKindAndObj('block', box);
     rebuildPhysicsArrays();
-    selectEditorObject(null);
+    if (isSubChildInStudio && S.allBlocks.includes(activeStudioBlockState.rootBox)) {
+      selectEditorObject({ kind: 'block', box: activeStudioBlockState.rootBox, inStudio: true });
+    } else {
+      selectEditorObject(null);
+    }
     sfx.oof();
   } else if (S.selectedRef.kind === 'world_item') {
     const { worldEntry, item, editMode, partIdx, libIdx } = S.selectedRef;
@@ -2547,6 +2682,14 @@ export function deleteSelected() {
       const targetArr = editMode === 'proj_part' ? item.projectileParts : item.parts;
       if (targetArr.length > 1) {
         pushItemUndoState('Удаление примитива предмета');
+        const removedPart = targetArr[partIdx || 0];
+        if (removedPart && removedPart.id) {
+          for (const pt of targetArr) {
+            if (pt && pt.parentPartId === removedPart.id) {
+              pt.parentPartId = removedPart.parentPartId || null;
+            }
+          }
+        }
         targetArr.splice(partIdx || 0, 1);
         syncLibraryItemIfEditing(S.selectedRef);
         selectEditorObject({
@@ -2555,12 +2698,13 @@ export function deleteSelected() {
           item,
           editMode,
           partIdx: Math.max(0, (partIdx || 0) - 1),
+          inWorldPlacement: !S.itemStudioOpen,
           libIdx
         }, true);
         sfx.oof();
         return;
       }
-    }
+    } 
 
     if (S.itemStudioOpen) {
       closeItemStudio3D(false);

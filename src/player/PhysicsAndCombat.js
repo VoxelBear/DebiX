@@ -51,6 +51,13 @@ import {
   updateEntityStaminaAndSprint,
   decideNpcSprintIntent
 } from './NpcTacticalAI.js';
+import {
+  updateAllScriptsRuntime,
+  runBlockScriptHook,
+  runNpcScriptHook,
+  runItemScriptHook,
+  runWorldScriptHook
+} from '../core/ScriptEngine.js';
 
 const _vLocal = new THREE.Vector3();
 const _vNormal = new THREE.Vector3();
@@ -200,7 +207,7 @@ export function syncPlayCameraToPlayer(player, dt = 0) {
   _nearbySolidMeshes.length = 0;
   for (let i = 0; i < S.allBlocks.length; i++) {
     const b = S.allBlocks[i];
-    if (b.matterState !== 'solid') continue;
+    if (b.isDisabled || b.matterState !== 'solid') continue;
     if (b.logicRuntime && b.logicRuntime.ghostOpen) continue;
     if (
       b.x1 < pivotX - checkR || b.x0 > pivotX + checkR ||
@@ -444,6 +451,14 @@ export function completePlayerRespawn(isFullRestart = false) {
   player.vy = 0;
   player.inLiquid = false;
   player.attackAnimT = 0;
+  player.ragdoll = null;
+  player.kickCooldown = 0;
+  player._ropePullX = 0;
+  player._ropePullZ = 0;
+  player._ropeResistDirX = 0;
+  player._ropeResistDirZ = 0;
+  player._ropeResistStrength = 0;
+  if (player.rig?.g) player.rig.g.rotation.set(0, player.rot || 0, 0);
   player.rig.g.visible = true;
   player.tag.visible = true;
 
@@ -471,7 +486,7 @@ export function completePlayerRespawn(isFullRestart = false) {
 }
 
 function testPlayerOBB(px, py, pz, pr, ph, box) {
-  if (box._depletedDisabled) return null;
+  if (box.isDisabled || box._depletedDisabled) return null;
   const hh = ph * 0.5;
   const pcy = py + hh;
   const pos = box.m.position;
@@ -869,8 +884,18 @@ export function activateBlockMotion(targetBox, command = 'toggle_motion', ignore
       rt.stayTimer = stay;
     }
     try { (sfx.gate || sfx.coil)?.(); } catch (_) {}
-    return true;
+    return false;
+}
+
+window.__debixActivateBlockMotionByTag = (sourceBox, targetTag, action) => {
+  const targets = findTargetBlocksByTag(sourceBox, targetTag);
+  for (const tb of targets) {
+    activateBlockMotion(tb, action || 'toggle_motion');
   }
+};
+window.__debixScriptDealDamage = (target, amount) => {
+  dealDamage(target, amount, null, 4);
+};
   return false;
 }
 
@@ -927,6 +952,10 @@ export function triggerBlockLogic(box, triggerSource = 'keyE', actor = S.player)
   const isPlayer = !!ent.isP;
   // Защита от взаимной рекурсии сигналов (A -> B -> A)
   if (_activeLogicCallStack.has(box)) return false;
+
+  if (triggerSource === 'keyE' || triggerSource === 'hit' || triggerSource === 'touch' || triggerSource === 'signal') {
+    runBlockScriptHook(box, 'onInteract', { actor: ent, triggerSource });
+  }
 
   ensureBlockComponents(box);
   const comps = box.components;
@@ -1240,7 +1269,7 @@ export function findNearestCarryablePhysicsBlock(player, maxDist = 4.2) {
   let bestDist = maxDist;
   for (let i = 0; i < S.allBlocks.length; i++) {
     const b = S.allBlocks[i];
-    if (!b || b._depletedDisabled || b._isCarriedByPlayer) continue;
+    if (!b || b.isDisabled || b._depletedDisabled || b._isCarriedByPlayer) continue;
     if (!b.components?.physics?.enabled || !b.isDynamicPhysics) continue;
     if (b.matterState !== 'solid') continue;
 
@@ -1275,6 +1304,10 @@ export function pickupPhysicsBlock(player, box) {
     dropCarriedPhysicsBlock(player, 1.5);
   }
   player.carriedPhysicsBlock = box;
+  player._carryLastYaw = S.yaw;
+  player._ropePullX = 0;
+  player._ropePullZ = 0;
+  player._ropeResistStrength = 0;
   box._isCarriedByPlayer = true;
   box.physVx = 0;
   box.physVy = 0;
@@ -1290,6 +1323,8 @@ export function dropCarriedPhysicsBlock(player, baseImpulse = 2.0, customMsg = n
   const box = player.carriedPhysicsBlock;
   player.carriedPhysicsBlock = null;
   box._isCarriedByPlayer = false;
+  box._thrownBy = player;
+  box._throwGrace = 0.28;
 
   const held = getActiveHeldItem(player);
   player.holdPose = held ? (S.isAimingRMB && held.canAim ? 'aim' : 'weapon') : null;
@@ -1548,7 +1583,7 @@ function buildWeldedPhysicsClusters() {
   const byId = new Map();
   for (let i = 0; i < all.length; i++) {
     const b = all[i];
-    if (!b || b._depletedDisabled) continue;
+    if (!b || b.isDisabled || b._depletedDisabled) continue;
     byId.set(b.id, b);
     b._physCluster = null;
   }
@@ -1564,11 +1599,11 @@ function buildWeldedPhysicsClusters() {
 
   for (let i = 0; i < all.length; i++) {
     const b = all[i];
-    if (!b || b._depletedDisabled || b.weldToParent === false) continue;
+    if (!b || b.isDisabled || b._depletedDisabled || b.weldToParent === false) continue;
     if (b.parentKey && b.parentKey.startsWith('block:')) {
       const parentId = b.parentKey.slice(6);
       const pBox = byId.get(parentId);
-      if (pBox && !pBox._depletedDisabled) {
+      if (pBox && !pBox.isDisabled && !pBox._depletedDisabled) {
         addEdge(b, pBox);
       }
     }
@@ -1580,7 +1615,7 @@ function buildWeldedPhysicsClusters() {
       if (!c || c.type !== 'weld') continue;
       const bA = byId.get(c.blockAId);
       const bB = byId.get(c.blockBId);
-      if (bA && bB && !bA._depletedDisabled && !bB._depletedDisabled) {
+      if (bA && bB && !bA.isDisabled && !bB.isDisabled && !bA._depletedDisabled && !bB._depletedDisabled) {
         addEdge(bA, bB);
       }
     }
@@ -1591,7 +1626,7 @@ function buildWeldedPhysicsClusters() {
 
   for (let i = 0; i < all.length; i++) {
     const start = all[i];
-    if (!start || start._depletedDisabled || visited.has(start)) continue;
+    if (!start || start.isDisabled || start._depletedDisabled || visited.has(start)) continue;
 
     const comp = [];
     const queue = [start];
@@ -1860,13 +1895,28 @@ export function updateDynamicBlocksPhysics(dt, player) {
   const worldGrav = S.worldSettings.gravity ?? 22;
   const all = S.allBlocks;
 
-  // 1. Переноска физического блока в руках игрока
+  // Сброс сил натяжения верёвок на игрока в начале кадра
+  if (player) {
+    player._ropePullX = 0;
+    player._ropePullZ = 0;
+    player._ropeResistDirX = 0;
+    player._ropeResistDirZ = 0;
+    player._ropeResistStrength = 0;
+  }
+
+  // 1. Переноска физического блока в руках игрока (вращается вместе с игроком как дочерний объект!)
   if (player && player.carriedPhysicsBlock) {
     const cb = player.carriedPhysicsBlock;
-    if (S.playerDead || !cb.isDynamicPhysics || cb._depletedDisabled) {
+    if (S.playerDead || player.ragdoll?.active || !cb.isDynamicPhysics || cb._depletedDisabled) {
       cb._isCarriedByPlayer = false;
       player.carriedPhysicsBlock = null;
     } else {
+      const prevYaw = player._carryLastYaw !== undefined ? player._carryLastYaw : S.yaw;
+      let deltaYaw = S.yaw - prevYaw;
+      while (deltaYaw > Math.PI) deltaYaw -= Math.PI * 2;
+      while (deltaYaw < -Math.PI) deltaYaw += Math.PI * 2;
+      player._carryLastYaw = S.yaw;
+
       const fx = -Math.sin(S.yaw);
       const fz = -Math.cos(S.yaw);
       const holdDist = Math.min(3.2, 1.15 + Math.max(cb.hx, cb.hz));
@@ -1878,14 +1928,24 @@ export function updateDynamicBlocksPhysics(dt, player) {
       const dy = targetY - cb.m.position.y;
       const dz = targetZ - cb.m.position.z;
 
+      const hasYawStep = Math.abs(deltaYaw) > 0.00001;
+      if (hasYawStep) _qStep.setFromAxisAngle(_vWorldUp, deltaYaw);
+
       if (cb._physCluster && !cb._physCluster.isStaticAnchored) {
-        transformWeldedCluster(cb._physCluster, dx, dy, dz, null, null);
+        transformWeldedCluster(cb._physCluster, dx, dy, dz, hasYawStep ? _qStep : null, cb.m.position);
       } else {
         cb.m.position.set(targetX, targetY, targetZ);
-        cb.m.rotation.set(0, S.yaw + Math.PI, 0);
-        cb.m.quaternion.setFromEuler(cb.m.rotation);
+        if (hasYawStep) {
+          cb.m.quaternion.premultiply(_qStep).normalize();
+          cb.m.rotation.setFromQuaternion(cb.m.quaternion);
+        }
         cb.m.updateMatrixWorld();
         updateBlockOBB(cb);
+        if (cb.cpVisualGroup) {
+          cb.cpVisualGroup.position.copy(cb.m.position);
+          cb.cpVisualGroup.rotation.copy(cb.m.rotation);
+        }
+        if (cb.haloSprite) cb.haloSprite.position.copy(cb.m.position);
       }
     }
   }
@@ -2014,7 +2074,7 @@ export function updateDynamicBlocksPhysics(dt, player) {
       if (!c || c.type !== 'rope') continue;
       const bA = byId.get(c.blockAId);
       const bB = byId.get(c.blockBId);
-      if (!bA || !bB || bA._depletedDisabled || bB._depletedDisabled) continue;
+    if (!bA || !bB || bA.isDisabled || bB.isDisabled || bA._depletedDisabled || bB._depletedDisabled) continue;
       const clA = bA._physCluster;
       const clB = bB._physCluster;
       if (!clA && !clB) continue;
@@ -2477,8 +2537,10 @@ export function updateDynamicBlocksPhysics(dt, player) {
         }
       }
 
+      if (b._throwGrace > 0) b._throwGrace = Math.max(0, b._throwGrace - dt);
       const horizSpd = Math.hypot(cl.vx, cl.vz);
-      if (horizSpd > 7.5 && (b._hitEntCd || 0) <= 0) {
+      const spd3D = Math.hypot(cl.vx, cl.vy, cl.vz);
+      if (spd3D > 4.2 && (b._hitEntCd || 0) <= 0) {
         const mBlk = cl.totalInertialMass;
         const targets = [...S.customNPCs];
         if (player && !S.playerDead && !b._riderIsPlayer && player._supportBlock !== b) {
@@ -2487,37 +2549,65 @@ export function updateDynamicBlocksPhysics(dt, player) {
 
         for (let ti = 0; ti < targets.length; ti++) {
           const ent = targets[ti];
-          if (!ent || ent._deadCooldown > 0) continue;
-          if (ent.y >= b.y1 - 0.35) continue;
+          if (!ent || ent.isDisabled || ent._deadCooldown > 0 || ent._permanentlyDead) continue;
+          if (ent === b._thrownBy && (b._throwGrace || 0) > 0) continue;
+
           const er = ent.colliderRadius || 0.42;
           const eh = ent.colliderHeight || 2.5;
-          if (!testPlayerOBB(ent.x, ent.y, ent.z, er + 0.08, eh, b)) continue;
+          const isFallingOnHead = cl.vy < -5.2 && b.y0 >= ent.y + eh * 0.4;
+          if (!isFallingOnHead && ent.y >= b.y1 - 0.35) continue;
+          if (!testPlayerOBB(ent.x, ent.y, ent.z, er + 0.1, eh, b)) continue;
 
           const mEnt = getEntityWeight(ent);
-          const massRatio = mBlk / (mBlk + mEnt * 0.85);
-          const impactMomentum = horizSpd * massRatio;
+          // Сила сбивания с ног зависит от скорости полёта и соотношения весов (тяжёлый медленный или средний быстрый объект роняет цель)
+          const weightFactor = Math.pow(mBlk / Math.max(15, mEnt), 0.62);
+          const impactPower = spd3D * weightFactor;
 
-          if (impactMomentum > 4.5) {
-            b._hitEntCd = 0.5;
-            const nxI = cl.vx / horizSpd;
-            const nzI = cl.vz / horizSpd;
-            const kbForce = clamp(impactMomentum * 1.15, 4, 18);
+          if (impactPower > 2.4) {
+            b._hitEntCd = 0.48;
+            let nxI, nzI;
+            if (horizSpd > 0.6) {
+              nxI = cl.vx / horizSpd;
+              nzI = cl.vz / horizSpd;
+            } else {
+              const ddx = ent.x - b.m.position.x;
+              const ddz = ent.z - b.m.position.z;
+              const ddl = Math.hypot(ddx, ddz) || 1;
+              nxI = ddx / ddl;
+              nzI = ddz / ddl;
+            }
+            const kbForce = clamp(impactPower * 1.45, 4.0, 20.0);
 
-            ent.vxKnock = (ent.vxKnock || 0) + nxI * kbForce;
-            ent.vzKnock = (ent.vzKnock || 0) + nzI * kbForce;
-            ent.vy = clamp((ent.vy || 0) + 3.0, -10, 7.5);
-            ent.grounded = false;
-
-            const slowFactor = clamp(1 - (mEnt / (mBlk + mEnt)) * 0.65, 0.25, 0.9);
-            cl.vx *= slowFactor;
-            cl.vz *= slowFactor;
-
-            if (impactMomentum > 7.5 && ent.hpEnabled) {
-              const dmg = Math.round(clamp((impactMomentum - 6.0) * 3.0, 5, 100));
-              dealDamage(ent, dmg, null, 0);
+            if (impactPower > 4.2 && ent.hpEnabled) {
+              const dmg = Math.round(clamp((impactPower - 3.4) * 4.5, 4, 85));
+              dealDamage(ent, dmg, b._thrownBy || null, 0, { skipAutoRagdoll: true });
             } else {
               sfx.hit?.();
+              spawnDamageParticles(ent);
             }
+
+            if (!(ent._deadCooldown > 0) && !ent._permanentlyDead && !(ent.isP && S.playerDead)) {
+              const knockChance = clamp(((impactPower - 2.4) / 4.8) * rnd(0.85, 1.15), 0, 0.96);
+              if (Math.random() < knockChance) {
+                triggerEntityRagdoll(
+                  ent,
+                  nxI * kbForce,
+                  clamp(3.2 + impactPower * 0.25, 3.0, 6.8),
+                  nzI * kbForce,
+                  clamp(1.4 + impactPower * 0.12, 1.4, 2.8)
+                );
+                applyEntityStun(ent, 0.85);
+              } else {
+                triggerEntityStagger(ent, nxI, nzI, clamp(impactPower / 4.5, 0.5, 1.3), clamp(kbForce * 0.6, 3.0, 9.5));
+                applyEntityStun(ent, 0.65);
+              }
+            }
+
+            // Передача импульса обратно на блок (отскок/торможение)
+            const slowFactor = clamp(1 - (mEnt / (mBlk + mEnt)) * 0.72, 0.2, 0.9);
+            cl.vx *= slowFactor;
+            cl.vz *= slowFactor;
+            if (isFallingOnHead) cl.vy = Math.max(1.5, -cl.vy * 0.25);
             break;
           }
         }
@@ -2617,6 +2707,112 @@ export function updateDynamicBlocksPhysics(dt, player) {
     }
   }
 
+  // 7.5. Физическое натяжение и жёсткий предел верёвок для объекта в руках игрока
+  if (player && !S.playerDead && player.carriedPhysicsBlock && activeRopes.length > 0) {
+    const cb = player.carriedPhysicsBlock;
+    const carriedCl = cb._physCluster;
+    const pWeight = getEntityWeight(player);
+    const carriedMass = pWeight + (carriedCl ? carriedCl.totalInertialMass : getInertialMass(cb.weight));
+
+    for (let iter = 0; iter < 5; iter++) {
+      for (let ri = 0; ri < activeRopes.length; ri++) {
+        const { c, bA, bB, clA, clB } = activeRopes[ri];
+        const aCarried = Boolean(bA === cb || (carriedCl && clA === carriedCl));
+        const bCarried = Boolean(bB === cb || (carriedCl && clB === carriedCl));
+        if (!aCarried && !bCarried) continue;
+        if (aCarried && bCarried) continue;
+
+        const carriedBlk = aCarried ? bA : bB;
+        const otherBlk = aCarried ? bB : bA;
+        const otherCl = aCarried ? clB : clA;
+        const anchorC = aCarried ? c.localAnchorA : c.localAnchorB;
+        const anchorO = aCarried ? c.localAnchorB : c.localAnchorA;
+
+        const pCar = _vTmp1.set(anchorC?.x || 0, anchorC?.y || 0, anchorC?.z || 0);
+        carriedBlk.m.localToWorld(pCar);
+        const pOth = _vTmp2.set(anchorO?.x || 0, anchorO?.y || 0, anchorO?.z || 0);
+        otherBlk.m.localToWorld(pOth);
+
+        const dx = pCar.x - pOth.x;
+        const dy = pCar.y - pOth.y;
+        const dz = pCar.z - pOth.z;
+        const dist = Math.hypot(dx, dy, dz);
+        const maxL = Math.max(0.15, Number(c.maxLength) || 4.0);
+        if (dist <= maxL || dist < 0.0001) continue;
+
+        const spr = clamp(Number(c.springiness) ?? 0.25, 0, 1);
+        const stiffness = 1.0 - spr * 0.85; // 1.0 (жёсткий трос) .. 0.15 (мягкая пружина)
+        const maxElasticStretch = maxL * (0.04 + spr * 0.55);
+        const hardMaxLen = maxL + maxElasticStretch;
+
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const nz = dz / dist;
+
+        const otherMovable = Boolean(otherCl && !otherCl.isStaticAnchored);
+        const otherMass = otherMovable ? Math.max(1, otherCl.totalInertialMass) : Infinity;
+
+        // Доля нагрузки на игрока vs второй объект
+        const playerShare = otherMovable ? (otherMass / (carriedMass + otherMass)) : 1.0;
+        const otherShare = 1.0 - playerShare;
+
+        const stretch = dist - maxL;
+        const tensionRatio = clamp(stretch / Math.max(0.05, maxElasticStretch), 0, 1.4);
+
+        // Накопление сопротивления движению игрока и упругой тяги назад (на 1-й итерации)
+        if (iter === 0) {
+          const resist = clamp(tensionRatio * (0.45 + stiffness * 0.55) * Math.pow(playerShare, 0.55), 0, 0.98);
+          if (resist > (player._ropeResistStrength || 0)) {
+            const hLen = Math.hypot(nx, nz) || 1;
+            player._ropeResistStrength = resist;
+            player._ropeResistDirX = nx / hLen;
+            player._ropeResistDirZ = nz / hLen;
+          }
+          // Упругая сила возврата пружины/троса на игрока и второй блок
+          const pullAccel = stretch * (4.5 + stiffness * 14.0);
+          player._ropePullX = (player._ropePullX || 0) - nx * pullAccel * playerShare;
+          player._ropePullZ = (player._ropePullZ || 0) - nz * pullAccel * playerShare;
+
+          if (otherMovable && otherShare > 0.001) {
+            const othPull = pullAccel * otherShare * dt;
+            otherCl.vx = clamp(otherCl.vx + nx * othPull, -24, 24);
+            otherCl.vy = clamp(otherCl.vy + ny * othPull, -24, 14);
+            otherCl.vz = clamp(otherCl.vz + nz * othPull, -24, 24);
+          }
+        }
+
+        // Жёсткий предел растяжения: верёвка физически не пускает игрока дальше!
+        if (dist > hardMaxLen) {
+          const excess = dist - hardMaxLen;
+          const pBackX = -nx * excess * playerShare;
+          const pBackY = -ny * excess * playerShare;
+          const pBackZ = -nz * excess * playerShare;
+
+          player.x += pBackX;
+          player.z += pBackZ;
+          if (pBackY < -0.001 && !player.grounded) {
+            player.y += pBackY;
+            if (player.vy > 0) player.vy *= 0.5;
+          }
+
+          if (carriedCl && !carriedCl.isStaticAnchored) {
+            transformWeldedCluster(carriedCl, pBackX, pBackY, pBackZ, null, null);
+          } else {
+            cb.m.position.x += pBackX;
+            cb.m.position.y += pBackY;
+            cb.m.position.z += pBackZ;
+            cb.m.updateMatrixWorld();
+            updateBlockOBB(cb);
+          }
+
+          if (otherMovable && otherShare > 0.001) {
+            transformWeldedCluster(otherCl, nx * excess * otherShare, ny * excess * otherShare, nz * excess * otherShare, null, null);
+          }
+        }
+      }
+    }
+  }
+
   for (let ci = 0; ci < clusters.length; ci++) {
     const cl = clusters[ci];
     for (let mi = 0; mi < cl.members.length; mi++) {
@@ -2658,7 +2854,7 @@ export function findNearestWorldItem(player, maxDist = 4.2) {
   let best = null;
   let bestDist = maxDist;
   for (const wi of S.worldItems) {
-    if (wi.pickupCooldown > 0) continue;
+    if (!wi || wi.isDisabled || wi.pickupCooldown > 0) continue;
     const d = Math.hypot(wi.x - player.x, wi.y - (player.y + 1.0), wi.z - player.z);
     if (d < bestDist) {
       bestDist = d;
@@ -2673,14 +2869,15 @@ export function findNearestKeyEBlock(player, maxDist = 5.0) {
   let best = null;
   let bestDist = maxDist;
   for (const b of S.allBlocks) {
-    if (b._depletedDisabled || b._interactionDisabled) continue;
+    if (b.isDisabled || b._depletedDisabled || b._interactionDisabled) continue;
     const comps = b.components;
     const hasInteractE = comps?.interaction?.enabled && b.interactionData?.trigger === 'keyE';
     const hasSelfMotionE = comps?.motion?.enabled && b.motionData?.triggerMode === 'self' && (!comps?.interaction?.enabled || b.interactionData?.trigger === 'keyE');
     const hasModularItem = Boolean(comps?.item?.enabled);
     const hasLegacyLogicE = !comps && b.logicData && b.logicData.trigger === 'keyE';
     const hasSpawnerE = (!comps || comps.spawner?.enabled) && b.spawnerData && b.spawnerData.mode === 'keyE';
-    if (!hasInteractE && !hasSelfMotionE && !hasModularItem && !hasLegacyLogicE && !hasSpawnerE) continue;
+    const hasScriptE = Boolean(comps?.script?.enabled && b.scriptData?.enabled && b.scriptData?.hasInteractHook);
+    if (!hasInteractE && !hasSelfMotionE && !hasModularItem && !hasLegacyLogicE && !hasSpawnerE && !hasScriptE) continue;
 
     const cx = b.m.position.x;
     const cy = b.m.position.y;
@@ -2703,6 +2900,7 @@ export function findNearestKeyEBlock(player, maxDist = 5.0) {
 
 export function updateBlocksLogicRuntime(dt, player) {
   for (const b of S.allBlocks) {
+    if (b.isDisabled) continue;
     const rt = ensureBoxRuntime(b);
     const comps = b.components;
 
@@ -2899,10 +3097,82 @@ export function updateBlocksLogicRuntime(dt, player) {
 
 /* ---------- УРОН, БРОНЯ, РОaaНЯНИЕ КОНТЕЙНЕРОВ И БОЕВАЯ СИСТЕМА ПРЕДМЕТОВ ---------- */
 
-export function dealDamage(target, amount, attacker = null, customKnockback = 8) {
-  if (!target || !target.hpEnabled || amount <= 0) return false;
+const MAX_NPC_DROPPED_ITEMS = 45;
+const NPC_DROP_DESPAWN_SEC = 60;
+
+function spawnOptimizedDroppedItem(itemData, x, y, z, vx = 0, vy = 3.2, vz = 0) {
+  if (!itemData) return null;
+  const nameKey = itemData.name || '';
+  const typeKey = itemData.useType || 'melee';
+  let sameClusterCount = 0;
+  let oldestSameInCluster = null;
+
+  // 1. Слияние одинаковых расходуемых/стрелковых/метательных предметов в радиусе 2.4м
+  for (let i = 0; i < S.worldItems.length; i++) {
+    const wi = S.worldItems[i];
+    if (!wi || wi.isDisabled || !wi._isNpcDrop) continue;
+    const d = Math.hypot(wi.x - x, wi.z - z);
+    if (d <= 2.4 && wi.item?.name === nameKey && wi.item?.useType === typeKey) {
+      if (typeKey === 'throwable') {
+        wi.item.stackCount = (wi.item.stackCount || 1) + (itemData.stackCount || 1);
+        wi._dropAge = 0;
+        if (wi.tag) {
+          updateTag(wi.tag, `${wi.item.icon || '💣'} Подобрать [E]`, `${wi.item.name} (x${wi.item.stackCount})`, 'Стак лута');
+        }
+        return wi;
+      }
+      if (typeKey === 'ranged' && !wi.item.infiniteAmmo) {
+        wi.item.reserveAmmo = (wi.item.reserveAmmo || 0) + (itemData.ammo || itemData.magSize || 12);
+        wi._dropAge = 0;
+        if (wi.tag) {
+          updateTag(wi.tag, `${wi.item.icon || '🔫'} Подобрать [E]`, wi.item.name, `Боезапас: ${wi.item.ammo}/${wi.item.reserveAmmo}`);
+        }
+        return wi;
+      }
+      sameClusterCount++;
+      if (!oldestSameInCluster || (wi._dropAge || 0) > (oldestSameInCluster._dropAge || 0)) {
+        oldestSameInCluster = wi;
+      }
+    }
+  }
+
+  // Не плодим больше 2 одинаковых мечей/предметов в одной куче — обновляем самый старый
+  if (sameClusterCount >= 2 && oldestSameInCluster) {
+    oldestSameInCluster._dropAge = 0;
+    oldestSameInCluster._physSleep = false;
+    oldestSameInCluster.vy = 2.6;
+    return oldestSameInCluster;
+  }
+
+  // 2. Глобальный лимит выпавших предметов в мире (удаляем самый старый/дальний дроп)
+  const droppedList = S.worldItems.filter(w => w && w._isNpcDrop);
+  if (droppedList.length >= MAX_NPC_DROPPED_ITEMS) {
+    droppedList.sort((a, b) => (b._dropAge || 0) - (a._dropAge || 0));
+    const victim = droppedList[0];
+    const vIdx = S.worldItems.indexOf(victim);
+    if (vIdx >= 0) {
+      if (victim.group) scene.remove(victim.group);
+      if (victim.tag) scene.remove(victim.tag);
+      S.worldItems.splice(vIdx, 1);
+      syncWorldItemDeleteToNetwork(victim.id);
+    }
+  }
+
+  const wi = spawnWorldItem(itemData, x, y, z, vx, vy, vz);
+  if (wi) {
+    wi._isNpcDrop = true;
+    wi._dropAge = 0;
+    wi._dropMaxAge = NPC_DROP_DESPAWN_SEC;
+    wi._physSleep = false;
+    syncWorldItemUpsertToNetwork(wi, false);
+  }
+  return wi;
+}
+
+export function dealDamage(target, amount, attacker = null, customKnockback = 8, opts = null) {
+  if (!target || target.isDisabled || !target.hpEnabled || amount <= 0) return false;
   if (target.isP && S.playerDead) return false;
-  if (target._deadCooldown > 0) return false;
+  if (target._deadCooldown > 0 || target._permanentlyDead) return false;
 
   // Если атакуемая цель — удалённый игрок, сразу обновляем его полоску HP локально и отправляем пакет урона ему!
   if (target.isRemotePlayer) {
@@ -2979,6 +3249,9 @@ export function dealDamage(target, amount, attacker = null, customKnockback = 8)
   target.hpBarTimer = 3.5;
   target._lastCombatTime = S.time || 0;
   if (attacker) attacker._lastCombatTime = S.time || 0;
+  if (target.isCustomNPC) {
+    runNpcScriptHook(target, 'onDamaged', { amount, attacker });
+  }
   sfx.hit();
   spawnDamageParticles(target);
 
@@ -3010,6 +3283,34 @@ export function dealDamage(target, amount, attacker = null, customKnockback = 8)
 
   const isFatal = target.hp <= 0;
 
+  if (!isFatal && !opts?.skipAutoRagdoll && !target.isRemotePlayer) {
+    let impDirX = opts?.impDirX ?? 0;
+    let impDirZ = opts?.impDirZ ?? 0;
+    if (impDirX === 0 && impDirZ === 0 && attacker) {
+      const adx = target.x - attacker.x;
+      const adz = target.z - attacker.z;
+      const al = Math.hypot(adx, adz) || 1;
+      impDirX = adx / al;
+      impDirZ = adz / al;
+    }
+    const hasDir = Math.hypot(impDirX, impDirZ) > 0.05;
+    if (evaluateRagdollChance(target, amount, Boolean(opts?.isKick))) {
+      const kbMag = clamp(Math.max(5.5, Number(customKnockback) || 8), 5.5, 20);
+      const dxR = hasDir ? impDirX : -Math.sin(target.rot || 0);
+      const dzR = hasDir ? impDirZ : -Math.cos(target.rot || 0);
+      triggerEntityRagdoll(target, dxR * kbMag, clamp(3.4 + kbMag * 0.16, 3.2, 6.8), dzR * kbMag, 1.8);
+    } else if (hasDir && customKnockback >= 4) {
+      // Лёгкое пошатывание при сильном ударе, если рэгдолл не сработал
+      triggerEntityStagger(target, impDirX, impDirZ, clamp(amount / Math.max(1, target.maxHp || 100) * 1.4, 0.35, 1.0), 0);
+    }
+  }
+
+  if (target.isCustomNPC && isFatal) {
+    runNpcScriptHook(target, 'onDeath', { attacker });
+  } else if (target.isP && isFatal) {
+    runWorldScriptHook('onPlayerDeath', {});
+  }
+
   // Если мы авторитет NPC и в комнате есть другие игроки — рассылаем визуальный отклик попадания / смерти NPC
   if (target.isCustomNPC && isLocalNpcAuthority() && Object.keys(S.remotePlayers || {}).length > 0) {
     broadcastMultiplayerPacket({
@@ -3033,15 +3334,13 @@ export function dealDamage(target, amount, attacker = null, customKnockback = 8)
       sfx.oof();
       spawnDeathShatter(target);
 
-      let respawnDelaySec = 1.4;
+      let respawnDelaySec = 3.5;
       let isPermanentDeath = false;
       if (target.isCustomNPC) {
         const mods = ensureNpcModules(target);
-        if (mods.dialogue?.permanentDeath) {
-          isPermanentDeath = true;
-        }
+        isPermanentDeath = Boolean(target.permanentDeath || mods.dialogue?.permanentDeath);
+        respawnDelaySec = Math.max(0.5, Number(mods.dialogue?.respawnTime) || 3.5);
         if (mods.dialogue?.enabled) {
-          respawnDelaySec = Math.max(0.5, Number(mods.dialogue.respawnTime) || 3.5);
           const dropCoins = Math.max(0, Number(mods.dialogue.dropCoins) || 0);
           if (dropCoins > 0 && attacker) {
             if (attacker.isP) {
@@ -3059,21 +3358,25 @@ export function dealDamage(target, amount, attacker = null, customKnockback = 8)
               });
             }
           }
-          if (mods.dialogue.dropEquippedItem && target.equippedItem) {
-            const droppedWi = spawnWorldItem(target.equippedItem, target.x, target.y + 1.2, target.z, rnd(-2, 2), 3.5, rnd(-2, 2));
-            if (droppedWi) syncWorldItemUpsertToNetwork(droppedWi, false);
-          }
+        // NPC всегда выбрасывает экипированный предмет после смерти (если явно не снята галочка dropEquippedItem)
+        if (mods.dialogue?.dropEquippedItem !== false && target.equippedItem) {
+          spawnOptimizedDroppedItem(target.equippedItem, target.x, target.y + 1.2, target.z, rnd(-2.2, 2.2), 3.8, rnd(-2.2, 2.2));
+        }
         }
       }
 
-      target.hp = isPermanentDeath ? 0 : target.maxHp;
+      target.hp = 0;
       target.hpBarTimer = 0;
-      target._deadCooldown = isPermanentDeath ? 999999 : respawnDelaySec;
-      target._permanentlyDead = isPermanentDead;
+      target.ragdoll = null;
+      target._permanentlyDead = isPermanentDeath;
+      target._deadCooldown = isPermanentDeath ? Infinity : respawnDelaySec;
       target._aggroTarget = null;
       target._aggroTimer = 0;
-      target.rig.g.visible = false;
-      target.tag.visible = false;
+      target.vxKnock = 0;
+      target.vzKnock = 0;
+      target.vy = 0;
+      if (target.rig?.g) target.rig.g.visible = false;
+      if (target.tag) target.tag.visible = false;
 
       if (S.gameMode && S.gameMode.onEntityKnockout) {
         S.gameMode.onEntityKnockout(target, attacker);
@@ -3083,25 +3386,17 @@ export function dealDamage(target, amount, attacker = null, customKnockback = 8)
         return true;
       }
 
-      setTimeout(() => {
-        if (!target || !target.rig || target._permanentlyDead) return;
-        target._deadCooldown = 0;
-        if (target.isCustomNPC) {
-          target.x = target.homeX ?? target.x;
-          target.y = target.homeY ?? target.y;
-          target.z = target.homeZ ?? target.z;
-          target.vy = 0;
-          target.vxKnock = 0;
-          target.vzKnock = 0;
-          target.tx = target.x;
-          target.tz = target.z;
-          target.chat = 'Уф, меня собрали заново... 💫';
-          target.chatT = 3.5;
-        }
-        target.rig.g.visible = true;
-        target.tag.visible = true;
-        refreshEntityTagWithHP(target);
-      }, Math.round(respawnDelaySec * 1000));
+      // Для кастомных NPC респавн обрабатывается строго по dt в updateCustomNPCsRuntime
+      if (!target.isCustomNPC) {
+        setTimeout(() => {
+          if (!target || !target.rig || target._permanentlyDead) return;
+          target._deadCooldown = 0;
+          target.hp = target.maxHp || 100;
+          target.rig.g.visible = true;
+          if (target.tag) target.tag.visible = true;
+          refreshEntityTagWithHP(target);
+        }, Math.round(respawnDelaySec * 1000));
+      }
     }
     if (target.isP) updateShopUI();
   }
@@ -3467,6 +3762,652 @@ export function releaseChargedThrow() {
   renderHotbarUI();
 }
 
+/* ---------- ФИЗИКА РЭГДОЛА (ИГРОК И NPC) И ПИНОК DARK MESSIAH [Q] ---------- */
+
+/* ---------- ПЛАВАЮЩИЙ ШАНС РЭГДОЛА, ПОШАТЫВАНИЕ И ТОЧНАЯ ФИЗИКА ПАДЕНИЯ ---------- */
+
+export function evaluateRagdollChance(target, damageAmount, isKick = false) {
+  if (!target || damageAmount <= 0) return false;
+  const maxHp = Math.max(1, Number(target.maxHp) || 100);
+  // Базовый шанс равен доле урона от HP (1/100 -> ~1%, 80/100 -> ~80%) с плавающим разбросом ±15%
+  const baseRatio = Math.max(0, Number(damageAmount) || 0) / maxHp;
+  let floatingChance = baseRatio * rnd(0.85, 1.15);
+  if (isKick) {
+    floatingChance *= 1.5;
+  }
+  return Math.random() < clamp(floatingChance, 0, 0.98);
+}
+
+export function triggerEntityStagger(ent, dirX = 0, dirZ = 0, strength = 1.0, pushSpeed = 5.5) {
+  if (!ent || ent.isDisabled || ent._deadCooldown > 0 || ent._permanentlyDead) return false;
+  if (ent.isP && S.playerDead) return false;
+  if (ent.ragdoll && ent.ragdoll.active) return false;
+
+  const hLen = Math.hypot(dirX, dirZ) || 1;
+  const nx = dirX / hLen;
+  const nz = dirZ / hLen;
+
+  ent.stagger = {
+    timer: 0.46,
+    duration: 0.46,
+    dirX: nx,
+    dirZ: nz,
+    strength: clamp(strength, 0.4, 1.6)
+  };
+  ent.vxKnock = (ent.vxKnock || 0) + nx * pushSpeed;
+  ent.vzKnock = (ent.vzKnock || 0) + nz * pushSpeed;
+  if (ent.isCustomNPC) {
+    ent.attackCooldown = Math.max(ent.attackCooldown || 0, 0.48);
+  }
+  sfx.stagger?.();
+  return true;
+}
+
+export function applyEntityStun(ent, duration = 1.25) {
+  if (!ent || ent.isDisabled || ent._deadCooldown > 0 || ent._permanentlyDead) return false;
+  if (ent.isP && S.playerDead) return false;
+  if (ent.isRemotePlayer) return false;
+
+  const d = clamp(Number(duration) || 1.2, 0.25, 5.0);
+  ent.stunTimer = Math.max(ent.stunTimer || 0, d);
+  ent.attackCooldown = Math.max(ent.attackCooldown || 0, d * 0.85);
+  if (ent.isP) {
+    S.isChargingThrow = false;
+    S.throwChargeT = 0;
+    if (S.isReloadingHold) cancelReloadHold(false);
+  } else {
+    ent.reloadTimer = 0;
+  }
+  return true;
+}
+
+export function registerPlayerRagdollStruggle(power = 1.0) {
+  const p = S.player;
+  if (!p || S.playerDead || !p.ragdoll || !p.ragdoll.active) return false;
+  const rd = p.ragdoll;
+  const now = performance.now() * 0.001;
+  // Защита от дребезга и автоповтора — засчитываются живые нажатия клавиш и клики
+  if (now - (rd._lastStruggleAt || 0) < 0.085) return false;
+  rd._lastStruggleAt = now;
+  rd.struggleCount = (rd.struggleCount || 0) + 1;
+
+  const cut = 0.26 * clamp(power, 0.5, 1.5);
+  rd.timer = Math.max(0, rd.timer - cut);
+  rd.maxTime = Math.max(rd.elapsed + 0.35, rd.maxTime - cut * 0.85);
+
+  // Визуальный рывок тела и конечностей при попытке подняться
+  rd.vWobble = clamp((rd.vWobble || 0) + (rd.struggleCount % 2 === 0 ? 1 : -1) * 3.8, -6.5, 6.5);
+  if (rd.limbs) {
+    rd.limbs.armL.vrx -= 5.2;
+    rd.limbs.armR.vrx -= 5.2;
+    rd.limbs.legL.vrx += 4.0;
+    rd.limbs.legR.vrx -= 4.0;
+  }
+  if (rd.grounded) {
+    rd.vx *= 0.72;
+    rd.vz *= 0.72;
+  }
+  sfx.gizmoTick?.(0.6);
+  return true;
+}
+
+// Проверка прямой видимости между атакующим и целью (защита от ударов сквозь глухие стены)
+function isMeleeLineOfSightClear(originX, originY, originZ, targetX, targetY, targetZ) {
+  const dx = targetX - originX;
+  const dy = targetY - originY;
+  const dz = targetZ - originZ;
+  const dist = Math.hypot(dx, dy, dz);
+  if (dist < 0.45) return true;
+
+  _vTmp1.set(originX, originY, originZ);
+  _vTmp2.set(dx / dist, dy / dist, dz / dist);
+  _aimRaycaster.set(_vTmp1, _vTmp2);
+  _aimRaycaster.near = 0.15;
+  _aimRaycaster.far = dist - 0.2;
+
+  const minX = Math.min(originX, targetX) - 0.5;
+  const maxX = Math.max(originX, targetX) + 0.5;
+  const minY = Math.min(originY, targetY) - 0.5;
+  const maxY = Math.max(originY, targetY) + 0.5;
+  const minZ = Math.min(originZ, targetZ) - 0.5;
+  const maxZ = Math.max(originZ, targetZ) + 0.5;
+
+  _nearbySolidMeshes.length = 0;
+  for (let i = 0; i < S.allBlocks.length; i++) {
+    const b = S.allBlocks[i];
+    if (!b || b.isDisabled || b._depletedDisabled || b._isCarriedByPlayer) continue;
+    if (b.matterState !== 'solid' || (b.logicRuntime && b.logicRuntime.ghostOpen)) continue;
+    if (b.components && !b.components.physics?.enabled) continue;
+    if (b.x1 < minX || b.x0 > maxX || b.y1 < minY || b.y0 > maxY || b.z1 < minZ || b.z0 > maxZ) continue;
+    if (b.m) _nearbySolidMeshes.push(b.m);
+  }
+  if (_nearbySolidMeshes.length === 0) return true;
+  return _aimRaycaster.intersectObjects(_nearbySolidMeshes, false).length === 0;
+}
+
+const _rdFallAxis = new THREE.Vector3();
+const _rdQuatYaw = new THREE.Quaternion();
+const _rdQuatTip = new THREE.Quaternion();
+const _rdQuatWobble = new THREE.Quaternion();
+
+export function triggerEntityRagdoll(ent, impX = 0, impY = 4.5, impZ = 0, duration = 2.0) {
+  if (!ent || ent.isDisabled || ent._deadCooldown > 0 || ent._permanentlyDead) return false;
+  if (ent.isP && S.playerDead) return false;
+  if (ent.isRemotePlayer) return false;
+
+  if (ent.isP) {
+    ent.isFlying = false;
+    S.isChargingThrow = false;
+    S.throwChargeT = 0;
+    if (S.isReloadingHold) cancelReloadHold(false);
+    if (ent.carriedPhysicsBlock) dropCarriedPhysicsBlock(ent, 2.2);
+    if (ent.carriedItem) dropHeldOrCarriedItem(ent, 3.0);
+  }
+
+  const spdXZ = Math.hypot(impX, impZ);
+  let dirX, dirZ;
+  if (spdXZ > 0.08) {
+    dirX = impX / spdXZ;
+    dirZ = impZ / spdXZ;
+  } else {
+    // Если удар строго вертикальный (падение сверху) — валим по текущему направлению лица
+    dirX = Math.sin(ent.rot || 0);
+    dirZ = Math.cos(ent.rot || 0);
+  }
+
+  const wasActive = Boolean(ent.ragdoll && ent.ragdoll.active);
+  const rndLimb = (scale = 6) => ({
+    rx: rnd(-0.55, 0.55),
+    rz: rnd(-0.45, 0.45),
+    vrx: rnd(-scale, scale),
+    vrz: rnd(-scale, scale)
+  });
+
+  if (wasActive) {
+    const rd = ent.ragdoll;
+    rd.vx = clamp(rd.vx + impX, -28, 28);
+    rd.vy = clamp(Math.max(rd.vy, impY), -25, 16);
+    rd.vz = clamp(rd.vz + impZ, -28, 28);
+    rd.timer = Math.max(rd.timer, duration);
+    rd.maxTime = Math.max(rd.maxTime, rd.elapsed + duration + 1.5);
+    // Плавный доворот оси падения к новому импульсу
+    rd.fallDirX = dirX;
+    rd.fallDirZ = dirZ;
+    rd.vFallAngle = clamp(rd.vFallAngle + rnd(2.5, 5.0), -10, 10);
+    rd.vWobble += rnd(-3.2, 3.2);
+  } else {
+    ent.stagger = null;
+    ent.ragdoll = {
+      active: true,
+      timer: clamp(duration, 0.9, 5.0),
+      maxTime: clamp(duration + 1.8, 2.2, 6.5),
+      elapsed: 0,
+      recoverTimer: 0,
+      vx: clamp((ent.vxKnock || 0) * 0.35 + impX, -28, 28),
+      vy: clamp(Math.max(ent.vy || 0, impY), -25, 16),
+      vz: clamp((ent.vzKnock || 0) * 0.35 + impZ, -28, 28),
+      // Направление падения в мире (голова падает строго по направлению толчка!)
+      fallDirX: dirX,
+      fallDirZ: dirZ,
+      fallAngle: 0,
+      vFallAngle: clamp(4.6 + spdXZ * 0.32, 3.8, 10.0),
+      wobble: 0,
+      vWobble: rnd(-2.2, 2.2),
+      vYaw: rnd(-1.4, 1.4),
+      grounded: false,
+      bounces: 0,
+      limbs: {
+        torso: { rx: 0, rz: 0, vrx: rnd(-2.5, 2.5), vrz: rnd(-2.5, 2.5) },
+        head: rndLimb(6),
+        armL: rndLimb(8),
+        armR: rndLimb(8),
+        legL: rndLimb(7),
+        legR: rndLimb(7)
+      }
+    };
+  }
+
+  ent.vxKnock = 0;
+  ent.vzKnock = 0;
+  ent.grounded = false;
+  ent._supportBlock = null;
+  ent.activeEmote = null;
+  return true;
+}
+
+function applyRagdollRigPose(ent, rd) {
+  if (!ent?.rig?.g || !rd) return;
+  const fLen = Math.hypot(rd.fallDirX, rd.fallDirZ) || 1;
+  const dx = rd.fallDirX / fLen;
+  const dz = rd.fallDirZ / fLen;
+  // Мировая ось опрокидывания: up (0,1,0) × fallDir (dx,0,dz) = (dz, 0, -dx)
+  _rdFallAxis.set(dz, 0, -dx).normalize();
+  _rdQuatTip.setFromAxisAngle(_rdFallAxis, rd.fallAngle);
+  _rdQuatWobble.setFromAxisAngle(_vTmp3.set(dx, 0, dz), rd.wobble || 0);
+  _rdQuatYaw.setFromAxisAngle(_vWorldUp, ent.rot || 0);
+
+  ent.rig.g.quaternion.copy(_rdQuatTip).multiply(_rdQuatWobble).multiply(_rdQuatYaw).normalize();
+  ent.rig.g.rotation.setFromQuaternion(ent.rig.g.quaternion);
+
+  const sinA = Math.sin(clamp(rd.fallAngle, 0, Math.PI * 0.55));
+  const layLift = sinA * 0.34;
+  // Центрируем лежащее тело вокруг коллайдера, чтобы голова не уходила в стену
+  const centerShift = sinA * 0.92;
+  ent.rig.g.position.set(
+    ent.x - dx * centerShift,
+    ent.y + layLift,
+    ent.z - dz * centerShift
+  );
+  if (ent.tag) {
+    ent.tag.position.set(ent.x, ent.y + (3.35 - sinA * 1.45), ent.z);
+  }
+}
+
+export function updateEntityRagdollPhysics(ent, dt) {
+  const rd = ent?.ragdoll;
+  if (!rd) return false;
+
+  // Фаза плавного вставания на ноги из точного направления падения
+  if (!rd.active) {
+    if (rd.recoverTimer > 0) {
+      rd.recoverTimer = Math.max(0, rd.recoverTimer - dt);
+      const t = 1 - Math.exp(-16 * dt);
+      rd.fallAngle += (0 - rd.fallAngle) * t;
+      rd.wobble += (0 - rd.wobble) * t;
+      applyRagdollRigPose(ent, rd);
+      if (rd.recoverTimer <= 0) {
+        ent.ragdoll = null;
+        if (ent.rig?.g) {
+          ent.rig.g.position.set(ent.x, ent.y, ent.z);
+          ent.rig.g.rotation.set(0, ent.rot || 0, 0);
+          ent.rig.g.quaternion.setFromEuler(ent.rig.g.rotation);
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
+  rd.elapsed += dt;
+  rd.timer -= dt;
+
+  const grav = S.worldSettings.gravity ?? 22;
+  const pr = 0.54;
+  const ph = 0.92;
+
+  let inLiq = false;
+  for (let i = 0; i < S.allBlocks.length; i++) {
+    const b = S.allBlocks[i];
+    if (!b || b.isDisabled || b._depletedDisabled || b.matterState !== 'liquid') continue;
+    if (testPlayerOBB(ent.x, ent.y, ent.z, pr, ph, b)) {
+      inLiq = true;
+      if (b.damageOnContact > 0 && (ent._hazardDamageCd || 0) <= 0) {
+        ent._hazardDamageCd = 0.55;
+        dealDamage(ent, b.damageOnContact, null, 2, { skipAutoRagdoll: true });
+      }
+      if (b.teleportToCheckpoint) {
+        if (ent.isP) oofRespawn('🌊 Водоворот поглотил тебя!');
+        else dealDamage(ent, (ent.maxHp || 100) * 10, null, 0, { skipAutoRagdoll: true });
+        return true;
+      }
+      break;
+    }
+  }
+  ent.inLiquid = inLiq;
+
+  if (inLiq) {
+    rd.vy = clamp(rd.vy - grav * 0.22 * dt, -5, 4);
+    const wDamp = Math.exp(-4.5 * dt);
+    rd.vx *= wDamp;
+    rd.vz *= wDamp;
+    rd.timer -= dt * 0.7;
+  } else {
+    rd.vy = Math.max(-34, rd.vy - grav * dt);
+    const airDamp = Math.pow(0.75, dt);
+    rd.vx *= airDamp;
+    rd.vz *= airDamp;
+  }
+
+  const prevVy = rd.vy;
+  ent.x += rd.vx * dt;
+  ent.y += rd.vy * dt;
+  ent.z += rd.vz * dt;
+  rd.grounded = false;
+
+  for (let i = 0; i < S.allBlocks.length; i++) {
+    const b = S.allBlocks[i];
+    if (!b || b.isDisabled || b._depletedDisabled || b._isCarriedByPlayer || b.matterState === 'liquid') continue;
+    if (b.logicRuntime && b.logicRuntime.ghostOpen) continue;
+    if (b.components && !b.components.physics?.enabled) continue;
+
+    const hit = testPlayerOBB(ent.x, ent.y, ent.z, pr, ph, b);
+    if (!hit) continue;
+
+    if ((b.components?.interaction?.enabled && b.interactionData?.trigger === 'touch') || (b.logicData && b.logicData.trigger === 'touch')) {
+      triggerBlockLogic(b, 'touch', ent);
+    }
+    if (b.matterState === 'gas') {
+      if (b.bounciness > 0) rd.vy = b.bounciness;
+      if (b.teleportToCheckpoint) {
+        if (ent.isP) oofRespawn('☁️ Газовая ловушка уничтожила тебя!');
+        else dealDamage(ent, (ent.maxHp || 100) * 10, null, 0, { skipAutoRagdoll: true });
+        return true;
+      }
+      continue;
+    }
+
+    if (b.matterState === 'solid') {
+      if (b.damageOnContact > 0 && (ent._hazardDamageCd || 0) <= 0) {
+        ent._hazardDamageCd = 0.5;
+        dealDamage(ent, b.damageOnContact, null, 2, { skipAutoRagdoll: true });
+        if (ent._deadCooldown > 0 || (ent.isP && S.playerDead)) return true;
+      }
+      if (b.teleportToCheckpoint) {
+        if (ent.isP) oofRespawn('💥 Тебя отбросило в смертельную ловушку!');
+        else dealDamage(ent, (ent.maxHp || 100) * 10, null, 0, { skipAutoRagdoll: true });
+        return true;
+      }
+
+      if (hit.ny > 0.45) {
+        // Контакт с полом
+        ent.y += hit.pen / Math.max(0.45, hit.ny);
+        const impactY = Math.abs(prevVy);
+        if (impactY > 5.0 && rd.bounces < 3) {
+          rd.vy = impactY * (b.bounciness > 0 ? 0.65 : 0.25);
+          rd.bounces++;
+          rd.vWobble += rnd(-2.5, 2.5);
+          for (const k of Object.keys(rd.limbs)) {
+            rd.limbs[k].vrx += rnd(-4.5, 4.5);
+            rd.limbs[k].vrz += rnd(-4.5, 4.5);
+          }
+          sfx.hit?.();
+          if (impactY > 14.5 && ent.hpEnabled) {
+            const fallDmg = Math.round((impactY - 12.5) * 3.8);
+            if (fallDmg > 0) dealDamage(ent, fallDmg, null, 0, { skipAutoRagdoll: true });
+          }
+        } else {
+          rd.vy = b.bounciness > 0 ? b.bounciness * 0.7 : 0;
+          rd.grounded = true;
+          const floorFriction = Math.exp(-7.5 * dt);
+          rd.vx *= floorFriction;
+          rd.vz *= floorFriction;
+        }
+        if (b.conveyorVx) ent.x += b.axisX.x * b.conveyorVx * dt;
+        if (b.conveyorVz) ent.z += b.axisZ.z * b.conveyorVz * dt;
+      } else if (hit.ny < -0.45) {
+        ent.y += hit.ny * hit.pen;
+        if (rd.vy > 0) rd.vy = -rd.vy * 0.3;
+      } else {
+        // Удар об стену / колонну / ящик
+        const hLen = Math.hypot(hit.nx, hit.nz) || 1;
+        const nx = hit.nx / hLen;
+        const nz = hit.nz / hLen;
+        ent.x += nx * hit.pen;
+        ent.z += nz * hit.pen;
+
+        const closing = -(rd.vx * nx + rd.vz * nz);
+        if (closing > 1.2) {
+          if (b.isDynamicPhysics) {
+            // Летящее тело сносит физические ящики (эффект домино!)
+            const entW = getEntityWeight(ent);
+            const pushK = clamp(entW / 55, 0.5, 2.5);
+            applyImpulseToDynamicBlock(
+              b,
+              -nx * closing * 0.9 * pushK,
+              Math.max(1.5, closing * 0.25),
+              -nz * closing * 0.9 * pushK,
+              new THREE.Vector3(ent.x - nx * pr, ent.y + 0.5, ent.z - nz * pr)
+            );
+            rd.vx *= 0.65;
+            rd.vz *= 0.65;
+          } else {
+            // Жёсткий отскок от стены + урон при сильном ударе (Dark Messiah!)
+            rd.vx += nx * closing * 1.35;
+            rd.vz += nz * closing * 1.35;
+            rd.vWobble += rnd(-3, 3);
+            if (closing > 8.0) {
+              sfx.hit?.();
+              spawnDamageParticles(ent);
+              if (ent.hpEnabled) {
+                const wallDmg = Math.round(clamp((closing - 6.5) * 2.8, 5, 45));
+                dealDamage(ent, wallDmg, null, 0, { skipAutoRagdoll: true });
+                if (ent._deadCooldown > 0 || (ent.isP && S.playerDead)) return true;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Цепная реакция: летящий в рэгдоле персонаж сбивает других NPC с ног по направлению полёта
+  const flySpd = Math.hypot(rd.vx, rd.vz);
+  if (flySpd > 6.5) {
+    for (let ni = 0; ni < S.customNPCs.length; ni++) {
+      const other = S.customNPCs[ni];
+      if (!other || other.isDisabled || other === ent || other._deadCooldown > 0 || other._permanentlyDead || other.ragdoll?.active) continue;
+      if (Math.hypot(other.x - ent.x, other.z - ent.z) < 1.1 && Math.abs(other.y - ent.y) < 1.8) {
+        triggerEntityRagdoll(other, rd.vx * 0.72, 3.6, rd.vz * 0.72, 1.8);
+        rd.vx *= 0.55;
+        rd.vz *= 0.55;
+        sfx.hit?.();
+      }
+    }
+  }
+
+  // Падение в бездну
+  if (ent.y < -18) {
+    if (ent.isP && !S.playerDead) {
+      oofRespawn('☁️ Ты улетел в бездну!');
+    } else if (!ent.isP && !(ent._deadCooldown > 0)) {
+      dealDamage(ent, (ent.maxHp || 100) * 10, null, 0, { skipAutoRagdoll: true });
+    }
+    return true;
+  }
+
+  // Пружинно-демпферное падение строго вдоль fallDir до PI/2 (лежа на полу)
+  const targetAngle = Math.PI * 0.5;
+  if (rd.grounded) {
+    rd.vFallAngle += (targetAngle - rd.fallAngle) * 36 * dt;
+    rd.vFallAngle *= Math.exp(-10 * dt);
+    rd.vWobble += (0 - rd.wobble) * 18 * dt;
+    rd.vWobble *= Math.exp(-9 * dt);
+    rd.vYaw *= Math.exp(-8 * dt);
+  } else {
+    rd.vFallAngle += (targetAngle - rd.fallAngle) * 6 * dt;
+    rd.vFallAngle *= Math.exp(-2.2 * dt);
+    rd.vWobble *= Math.exp(-2.0 * dt);
+    rd.vYaw *= Math.exp(-2.0 * dt);
+  }
+
+  rd.fallAngle = clamp(rd.fallAngle + rd.vFallAngle * dt, 0.05, Math.PI * 0.62);
+  rd.wobble = clamp(rd.wobble + rd.vWobble * dt, -0.5, 0.5);
+  ent.rot = (ent.rot || 0) + rd.vYaw * dt;
+
+  const limbs = rd.limbs;
+  for (const key of Object.keys(limbs)) {
+    const lm = limbs[key];
+    const restX = rd.grounded ? (key.startsWith('arm') ? -0.35 : 0.08) : 0;
+    const restZ = key === 'armL' ? 0.55 : (key === 'armR' ? -0.55 : (key === 'legL' ? 0.18 : (key === 'legR' ? -0.18 : 0)));
+    const stiff = rd.grounded ? 14 : 6;
+    const damp = rd.grounded ? 6.5 : 2.5;
+    lm.vrx += ((restX - lm.rx) * stiff - lm.vrx * damp) * dt;
+    lm.vrz += ((restZ - lm.rz) * stiff - lm.vrz * damp) * dt;
+    lm.rx = clamp(lm.rx + lm.vrx * dt, -2.1, 2.1);
+    lm.rz = clamp(lm.rz + lm.vrz * dt, -1.5, 1.5);
+  }
+
+  applyRagdollRigPose(ent, rd);
+
+  const struggleBonus = ent.isP && (rd.struggleCount || 0) >= 3;
+  const maxSettleSpd = struggleBonus ? 3.5 : 1.6;
+  const settled = rd.grounded && Math.hypot(rd.vx, rd.vz) < maxSettleSpd;
+  const minGracePassed = !ent.isP || rd.elapsed >= 0.38;
+  if ((rd.timer <= 0 && minGracePassed && (settled || inLiq)) || rd.elapsed >= rd.maxTime) {
+    rd.active = false;
+    rd.recoverTimer = struggleBonus ? 0.24 : 0.34;
+    ent.vy = 0;
+    ent.grounded = rd.grounded;
+  }
+  return true;
+}
+
+export function performPlayerKick() {
+  const player = S.player;
+  if (S.state !== 'play' || !player || S.playerDead || player.isFlying) return false;
+  if (player.ragdoll?.active) return false;
+  if ((player.kickCooldown || 0) > 0) return false;
+
+  // Небольшой расход стамины (если система стамины включена)
+  const drainStamina = S.worldSettings.allowSprint !== false && S.worldSettings.staminaDrainOnSprint !== false;
+  if (drainStamina) {
+    if ((player.stamina ?? 100) < 10) {
+      sfx.oof?.();
+      showBanner('⚡ Не хватает стамины для пинка!', '#ffce3a');
+      return false;
+    }
+    player.stamina = Math.max(0, (player.stamina ?? 100) - 12);
+    player._staminaRegenDelay = 0.7;
+    updateShopUI();
+  }
+
+  player.kickCooldown = 0.72;
+  player.attackCooldown = Math.max(player.attackCooldown || 0, 0.32);
+  player.rot = S.yaw + Math.PI;
+  if (player.rig?.g) player.rig.g.rotation.y = player.rot;
+
+  triggerEntityAttack(player, 'kick');
+  sfx.swing?.() || sfx.slap?.();
+
+  const fx = -Math.sin(S.yaw);
+  const fz = -Math.cos(S.yaw);
+  const kickReach = 3.6;
+  const kickDamage = 22;
+  const pWeight = getEntityWeight(player);
+  let hitAnything = false;
+
+  // 1. Пинок по NPC и удалённым игрокам (шанс рэгдола = плавающий % от урона/HP * 1.5, иначе пошатывание!)
+  const extraTargets = (S.gameMode && S.gameMode.getExtraTargets) ? S.gameMode.getExtraTargets() : [];
+  const allTargets = [...S.customNPCs, ...Object.values(S.remotePlayers || {}), ...extraTargets];
+
+  for (const t of allTargets) {
+    if (!t || t === player || t.isDisabled || t._deadCooldown > 0 || t._permanentlyDead) continue;
+    const toX = t.x - player.x;
+    const toZ = t.z - player.z;
+    const dist = Math.hypot(toX, toZ);
+    if (dist <= kickReach && Math.abs(t.y - player.y) < 2.6) {
+      const dot = dist > 0.1 ? (toX / dist) * fx + (toZ / dist) * fz : 1;
+      if (dot > 0.25 || dist <= 1.3) {
+        hitAnything = true;
+        // Вектор импульса от точки удара (игрок -> цель)
+        const dirLen = dist > 0.05 ? dist : 1;
+        const impDirX = dist > 0.05 ? (toX / dirLen) : fx;
+        const impDirZ = dist > 0.05 ? (toZ / dirLen) : fz;
+
+        const tWeight = getEntityWeight(t);
+        const weightRatio = clamp(pWeight / Math.max(20, tWeight), 0.45, 2.2);
+        const kickHoriz = 14.5 * weightRatio;
+        const kickUp = 5.2 * Math.sqrt(weightRatio);
+
+        if (t.isRemotePlayer) {
+          dealDamage(t, kickDamage, player, kickHoriz, { skipAutoRagdoll: true });
+        } else {
+          if (t.hpEnabled) {
+            dealDamage(t, kickDamage, player, 0, { skipAutoRagdoll: true });
+          } else {
+            sfx.kick?.() || sfx.hit?.();
+            spawnDamageParticles(t);
+          }
+
+          if (!(t._deadCooldown > 0) && !t._permanentlyDead) {
+            // Если уже лежит в рэгдоле — всегда поддаём импульс, иначе бросаем плавающий шанс с модификатором x1.5
+            const shouldRagdoll = Boolean(t.ragdoll?.active) || evaluateRagdollChance(t, kickDamage, true);
+            if (shouldRagdoll) {
+              triggerEntityRagdoll(t, impDirX * kickHoriz, kickUp, impDirZ * kickHoriz, 2.1);
+              // Короткий оглушающий стан сохраняется на момент подъёма после падения
+              applyEntityStun(t, 2.35);
+              if (t.isCustomNPC) {
+                t.chat = 'ААА! Не пинайся!! 🦵💥';
+                t.chatT = 2.6;
+                refreshEntityTagWithHP(t);
+              }
+            } else {
+              // Противник устоял на ногах, но пошатнулся и получил оглушение (Стан 1.35с)
+              triggerEntityStagger(t, impDirX, impDirZ, 1.2, clamp(6.8 * weightRatio, 3.5, 10));
+              applyEntityStun(t, 1.35);
+              if (t.isCustomNPC) {
+                t.chat = '😵 Оглушён пинком!';
+                t.chatT = 1.8;
+                refreshEntityTagWithHP(t);
+              }
+              emitParticleBurst(t.x, t.y + 2.55, t.z, 6, {
+                preset: 'star',
+                color: '#ffce3a',
+                sizeStart: 0.28,
+                sizeEnd: 0.05,
+                speed: 2.2,
+                spread: 1.2,
+                gravity: 0.4,
+                lifetime: 0.65
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Пинок по физическим блокам и объектам с hit-триггерами
+  const blocksSnap = S.allBlocks.slice();
+  for (let bi = 0; bi < blocksSnap.length; bi++) {
+    const b = blocksSnap[bi];
+    if (!b || b.isDisabled || b._depletedDisabled || !b.m || b._isCarriedByPlayer) continue;
+    const bx0 = b.x0 > -90000 ? b.x0 : b.m.position.x - (b.w || 1) * 0.5;
+    const bx1 = b.x1 > -90000 ? b.x1 : b.m.position.x + (b.w || 1) * 0.5;
+    const bz0 = b.z0 > -90000 ? b.z0 : b.m.position.z - (b.d || 1) * 0.5;
+    const bz1 = b.z1 > -90000 ? b.z1 : b.m.position.z + (b.d || 1) * 0.5;
+    const dx = Math.max(bx0 - player.x, 0, player.x - bx1);
+    const dz = Math.max(bz0 - player.z, 0, player.z - bz1);
+    const dist = Math.hypot(dx, dz);
+    if (dist < kickReach && Math.abs(player.y + 1.0 - b.m.position.y) < (b.hy || 1) + 2.2) {
+      const toBX = b.m.position.x - player.x;
+      const toBZ = b.m.position.z - player.z;
+      const bLen = Math.hypot(toBX, toBZ) || 1;
+      if ((toBX / bLen) * fx + (toBZ / bLen) * fz < 0.2 && dist > 1.2) continue;
+
+      if ((!b.components || b.components.spawner?.enabled) && b.spawnerData?.mode === 'hit') {
+        triggerBlockSpawner(b);
+        hitAnything = true;
+      }
+      if ((b.components?.interaction?.enabled && b.interactionData?.trigger === 'hit') || b.logicData?.trigger === 'hit') {
+        triggerBlockLogic(b, 'hit', player);
+        hitAnything = true;
+      }
+      if (b.isDynamicPhysics && b.matterState !== 'liquid') {
+        const hitPt = new THREE.Vector3(player.x + fx * Math.min(dist + 0.4, 1.8), player.y + 0.9, player.z + fz * Math.min(dist + 0.4, 1.8));
+        const kickPower = 22.0 * clamp(pWeight / 70, 0.5, 2.5);
+        applyImpulseToDynamicBlock(b, fx * kickPower, 4.8, fz * kickPower, hitPt, false);
+        hitAnything = true;
+      }
+    }
+  }
+
+  if (hitAnything) {
+    sfx.kick?.() || sfx.hit?.();
+    emitParticleBurst(player.x + fx * 1.4, player.y + 0.95, player.z + fz * 1.4, 8, {
+      preset: 'hit',
+      color: '#ffce3a',
+      sizeStart: 0.35,
+      sizeEnd: 0.05,
+      speed: 4.5,
+      spread: 1.0,
+      gravity: -8,
+      lifetime: 0.45
+    });
+  }
+  return true;
+}
+
 export function performPlayerMeleeAttack(isSpecialKey = false) {
   const player = S.player;
   if (S.state !== 'play' || !player || S.playerDead) return;
@@ -3495,6 +4436,9 @@ export function performPlayerMeleeAttack(isSpecialKey = false) {
   }
 
   const item = !isSpecialKey ? getActiveHeldItem(player) : null;
+  if (item && item.scriptData?.enabled) {
+    runItemScriptHook(item, 'onUse', { holder: player });
+  }
 
   // 2. Использование расходуемого предмета (Аптечка / Еда / Зелье)
   if (item && item.useType === 'consumable') {
@@ -3569,74 +4513,119 @@ export function performPlayerMeleeAttack(isSpecialKey = false) {
     return;
   }
 
-  // 5. Ближний бой (Кулак или Меч / Топор / Дубинка)
-  const reach = item && item.useType === 'melee' ? (Number(item.range) || 4.4) : 3.6;
-  const hitRadius = item && item.useType === 'melee' ? (Number(item.radius) || 2.2) : 1.8;
+  // 5. Направленный ближний бой (3D-конус перед игроком + проверка стен + разворот по взгляду)
+  if ((player.stunTimer || 0) > 0 || player.ragdoll?.active) return;
+
+  const isMeleeItem = Boolean(item && item.useType === 'melee');
+  const reach = isMeleeItem ? (Number(item.range) || 4.4) : 3.4;
+  const hitRadius = isMeleeItem ? (Number(item.radius) || 2.2) : 1.5;
   const equipBonus = Number(item?.equipStats?.damageBonus) || 0;
-  const dmg = item && item.useType === 'melee'
+  const dmg = isMeleeItem
     ? Math.max(0, Number(item.damage) + equipBonus)
     : (player.meleeDamage || 25) + equipBonus;
-  const kb = item && item.useType === 'melee' ? (Number(item.knockback) || 10) : 8;
+  const kb = isMeleeItem ? (Number(item.knockback) || 10) : 8;
+
+  // Разворачиваем персонажа по направлению удара (взгляда камеры)
+  player.rot = S.yaw + Math.PI;
+  if (player.rig?.g) player.rig.g.rotation.y = player.rot;
 
   triggerEntityAttack(player, isSpecialKey ? 'push' : 'punch');
-  if (item && item.useType === 'melee') sfx.swing();
+  if (isMeleeItem) sfx.swing();
   else sfx.slap();
   player.attackCooldown = item ? Math.max(0.15, Number(item.cooldown) || 0.35) : 0.3;
 
   const fx = -Math.sin(S.yaw);
   const fz = -Math.cos(S.yaw);
+  const cp = Math.cos(S.pitch);
+  const aimY = Math.sin(S.pitch);
+  const eyeY = player.y + 1.45;
 
+  // Ширина переднего сектора: для кулака ~92° (dot >= 0.69), для широкого меча ~110°–130° (но никогда за спиной!)
+  const minFrontDot = isMeleeItem
+    ? clamp(0.72 - (hitRadius - 1.4) * 0.16, 0.38, 0.72)
+    : 0.68;
+
+  // 5.1. Удар по блокам строго перед игроком (в передней полусфере)
   const blocksSnap = S.allBlocks.slice();
   for (let bi = 0; bi < blocksSnap.length; bi++) {
     const b = blocksSnap[bi];
-    if (!b || b._depletedDisabled || !b.m) continue;
+    if (!b || b.isDisabled || b._depletedDisabled || !b.m || b._isCarriedByPlayer) continue;
     const bx0 = b.x0 > -90000 ? b.x0 : b.m.position.x - (b.w || 1) * 0.5;
     const bx1 = b.x1 > -90000 ? b.x1 : b.m.position.x + (b.w || 1) * 0.5;
     const bz0 = b.z0 > -90000 ? b.z0 : b.m.position.z - (b.d || 1) * 0.5;
     const bz1 = b.z1 > -90000 ? b.z1 : b.m.position.z + (b.d || 1) * 0.5;
-    const dx = Math.max(bx0 - player.x, 0, player.x - bx1);
-    const dz = Math.max(bz0 - player.z, 0, player.z - bz1);
-    if (Math.hypot(dx, dz) < reach && Math.abs(player.y + 1.0 - b.m.position.y) < (b.hy || 1) + 2.5) {
+
+    const closestX = clamp(player.x, bx0, bx1);
+    const closestZ = clamp(player.z, bz0, bz1);
+    const dx = closestX - player.x;
+    const dz = closestZ - player.z;
+    const dist = Math.hypot(dx, dz);
+
+    if (dist < reach && Math.abs(eyeY + aimY * Math.min(dist, 2.2) - b.m.position.y) < (b.hy || 1) + 2.0) {
+      const bDot = dist > 0.08 ? (dx / dist) * fx + (dz / dist) * fz : ((b.m.position.x - player.x) * fx + (b.m.position.z - player.z) * fz);
+      if (bDot < 0.35) continue;
+
       if ((!b.components || b.components.spawner?.enabled) && b.spawnerData && b.spawnerData.mode === 'hit') {
         triggerBlockSpawner(b);
       }
       if ((b.components?.interaction?.enabled && b.interactionData?.trigger === 'hit') || (b.logicData && b.logicData.trigger === 'hit')) {
-        triggerBlockLogic(b, 'hit');
+        triggerBlockLogic(b, 'hit', player);
       }
       if (b.isDynamicPhysics && b.matterState !== 'liquid') {
-        applyImpulseToDynamicBlock(b, fx * kb * 1.15, 2.2, fz * kb * 1.15);
+        const hitPt = new THREE.Vector3(closestX, clamp(eyeY, b.y0 + 0.1, b.y1 - 0.1), closestZ);
+        applyImpulseToDynamicBlock(b, fx * kb * 1.15, 2.2, fz * kb * 1.15, hitPt, false);
       }
     }
   }
 
+  // 5.2. Удар по NPC / игрокам строго в направленном 3D-конусе + проверка отсутствия стены
   const extraTargets = (S.gameMode && S.gameMode.getExtraTargets) ? S.gameMode.getExtraTargets() : [];
   const allTargets = [...S.customNPCs, ...Object.values(S.remotePlayers || {}), ...extraTargets];
 
   let hitAnyone = false;
   for (const t of allTargets) {
-    if (t._deadCooldown > 0) continue;
+    if (!t || t === player || t.isDisabled || t._deadCooldown > 0 || t._permanentlyDead) continue;
+
     const toX = t.x - player.x;
     const toZ = t.z - player.z;
-    const dist = Math.hypot(toX, toZ);
-    if (dist <= reach && Math.abs(t.y - player.y) < 2.8) {
-      const dot = dist > 0.1 ? (toX / dist) * fx + (toZ / dist) * fz : 1;
-      if (dot > -0.25 || dist <= hitRadius) {
-        hitAnyone = true;
-        if (dmg > 0) {
-          if (t.hpEnabled) {
-            dealDamage(t, dmg, player, kb);
-          } else {
-            t.chat = 'У меня отключён урон (Бессмертие)! 🛡️';
-            t.chatT = 3.0;
-            refreshEntityTagWithHP(t);
-          }
-        } else {
-          // Нелетальное / игрушечное оружие (урон = 0, но отталкивает)
-          t.vxKnock = (toX / (dist || 1)) * kb;
-          t.vzKnock = (toZ / (dist || 1)) * kb;
-          sfx.jump();
+    const distXZ = Math.hypot(toX, toZ);
+    const tCenterY = t.y + (t.ragdoll?.active ? 0.55 : 1.3);
+    const expectedHitY = eyeY + aimY * Math.min(distXZ, reach * 0.75);
+    const vertDiff = Math.abs(tCenterY - expectedHitY);
+
+    if (distXZ > reach || vertDiff > 2.2) continue;
+
+    const dirX = distXZ > 0.05 ? toX / distXZ : fx;
+    const dirZ = distXZ > 0.05 ? toZ / distXZ : fz;
+    const dot = dirX * fx + dirZ * fz;
+
+    // В упор (< 0.85м) допускается чуть более широкий угол, но спина (dot <= 0.15) полностью исключена
+    const inFrontArc = dot >= minFrontDot || (distXZ <= 0.85 && dot > 0.15);
+    if (!inFrontArc) continue;
+
+    // Не бьём сквозь глухие стены
+    if (!isMeleeLineOfSightClear(player.x, eyeY, player.z, t.x, tCenterY, t.z)) continue;
+
+    hitAnyone = true;
+    const centerFocusMult = dot > 0.88 ? 1.1 : 1.0;
+    const finalKb = kb * centerFocusMult;
+
+    if (dmg > 0) {
+      if (t.hpEnabled) {
+        dealDamage(t, dmg, player, finalKb, { impDirX: dirX, impDirZ: dirZ });
+        if (item && item.scriptData?.enabled) {
+          runItemScriptHook(item, 'onHit', { holder: player, target: t, damage: dmg });
         }
+      } else {
+        t.chat = 'У меня отключён урон (Бессмертие)! 🛡️';
+        t.chatT = 3.0;
+        refreshEntityTagWithHP(t);
       }
+    } else {
+      t.vxKnock = dirX * finalKb;
+      t.vzKnock = dirZ * finalKb;
+      triggerEntityStagger(t, dirX, dirZ, 0.75, 0);
+      sfx.jump();
     }
   }
 
@@ -3731,8 +4720,14 @@ function detonateProjectile(proj, hitX, hitY, hitZ, directTarget = null, directH
       if (d <= proj.blastRadius) {
         const falloff = 1 - (d / (proj.blastRadius * 1.25));
         const dmg = Math.round(proj.damage * Math.max(0.35, falloff));
+        const bdx = t.x - hitX;
+        const bdz = t.z - hitZ;
+        const bh = Math.hypot(bdx, bdz) || 1;
         if (dmg > 0) {
-          dealDamage(t, dmg, proj.owner, proj.knockback * 1.25);
+          dealDamage(t, dmg, proj.owner, proj.knockback * 1.25, {
+            impDirX: bdx / bh,
+            impDirZ: bdz / bh
+          });
         } else {
           const dx = t.x - hitX;
           const dz = t.z - hitZ;
@@ -3743,8 +4738,12 @@ function detonateProjectile(proj, hitX, hitY, hitZ, directTarget = null, directH
       }
     }
   } else if (directTarget) {
+    const pHoriz = Math.hypot(proj.vx, proj.vz) || 1;
     if (proj.damage > 0) {
-      dealDamage(directTarget, proj.damage, proj.owner, proj.knockback);
+      dealDamage(directTarget, proj.damage, proj.owner, proj.knockback, {
+        impDirX: proj.vx / pHoriz,
+        impDirZ: proj.vz / pHoriz
+      });
     } else {
       directTarget.vxKnock = (proj.vx / 25) * proj.knockback;
       directTarget.vzKnock = (proj.vz / 25) * proj.knockback;
@@ -3867,7 +4866,39 @@ function updateProjectilesAndWorldItems(dt) {
   const grav = S.worldSettings.gravity || 22;
   for (let i = S.worldItems.length - 1; i >= 0; i--) {
     const wi = S.worldItems[i];
+    if (!wi || wi.isDisabled) continue;
+
+    // Таймер исчезновения дропа NPC + LOD скрытие далёких 3D-тегов
+    if (wi._isNpcDrop) {
+      wi._dropAge = (wi._dropAge || 0) + dt;
+      const maxAge = wi._dropMaxAge || NPC_DROP_DESPAWN_SEC;
+      if (wi._dropAge >= maxAge) {
+        if (wi.group) scene.remove(wi.group);
+        if (wi.tag) scene.remove(wi.tag);
+        S.worldItems.splice(i, 1);
+        syncWorldItemDeleteToNetwork(wi.id);
+        continue;
+      }
+      if (wi._dropAge > maxAge - 5 && wi.group) {
+        wi.group.visible = Math.floor(wi._dropAge * 8) % 2 === 0;
+      }
+    }
+
+    if (wi.tag && S.player) {
+      const distToP = Math.hypot(wi.x - S.player.x, wi.z - S.player.z);
+      wi.tag.visible = distToP <= 14.0;
+    }
+
     if (wi.pickupCooldown > 0) wi.pickupCooldown = Math.max(0, wi.pickupCooldown - dt);
+
+    // Спящий режим для неподвижно лежащих предметов (пропускаем OBB-коллизии по всем блокам сцены!)
+    if (wi._physSleep) {
+      if (wi.item.holdMode === 'held' && wi.group) {
+        wi.rotY += dt * 1.4;
+        wi.group.rotation.y = wi.rotY;
+      }
+      continue;
+    }
 
     const prevVy = wi.vy;
     wi.vy = Math.max(-28, wi.vy - grav * dt);
@@ -3877,6 +4908,66 @@ function updateProjectilesAndWorldItems(dt) {
 
     wi.vx *= Math.pow(0.08, dt);
     wi.vz *= Math.pow(0.08, dt);
+
+    if (wi._throwGrace > 0) wi._throwGrace = Math.max(0, wi._throwGrace - dt);
+    if (wi._hitEntCd > 0) wi._hitEntCd = Math.max(0, wi._hitEntCd - dt);
+
+    const wiSpd3D = Math.hypot(wi.vx, wi.vy, wi.vz);
+    if (!wi.grounded && wiSpd3D > 4.2 && (wi._hitEntCd || 0) <= 0) {
+      const itemWeight = clamp(
+        Number(wi.item?.weight) || (wi.item?.holdMode === 'carried' ? 24 : 5),
+        1,
+        500
+      );
+      const hitList = [...S.customNPCs];
+      if (S.player && !S.playerDead) hitList.push(S.player);
+
+      for (let ti = 0; ti < hitList.length; ti++) {
+        const ent = hitList[ti];
+        if (!ent || ent.isDisabled || ent._deadCooldown > 0 || ent._permanentlyDead) continue;
+        if (ent === wi._thrownBy && (wi._throwGrace || 0) > 0) continue;
+
+        const er = (ent.colliderRadius || 0.42) + rad + 0.15;
+        const eh = ent.colliderHeight || 2.5;
+        if (Math.hypot(ent.x - wi.x, ent.z - wi.z) > er) continue;
+        if (wi.y + h < ent.y || wi.y > ent.y + eh) continue;
+
+        const mEnt = getEntityWeight(ent);
+        const impactPower = wiSpd3D * Math.pow(itemWeight / Math.max(15, mEnt), 0.62);
+        if (impactPower > 2.2) {
+          wi._hitEntCd = 0.45;
+          const hSpd = Math.hypot(wi.vx, wi.vz) || 1;
+          const nxI = wi.vx / hSpd;
+          const nzI = wi.vz / hSpd;
+          const kbForce = clamp(impactPower * 1.35, 3.5, 16.0);
+
+          if (impactPower > 4.0 && ent.hpEnabled) {
+            const dmg = Math.round(clamp((impactPower - 3.2) * 4.0, 4, 55));
+            dealDamage(ent, dmg, wi._thrownBy || null, 0, { skipAutoRagdoll: true });
+          } else {
+            sfx.hit?.();
+            spawnDamageParticles(ent);
+          }
+
+          if (!(ent._deadCooldown > 0) && !ent._permanentlyDead && !(ent.isP && S.playerDead)) {
+            const dropChance = clamp(((impactPower - 2.2) / 4.5) * rnd(0.85, 1.15), 0, 0.94);
+            if (Math.random() < dropChance) {
+              triggerEntityRagdoll(ent, nxI * kbForce, clamp(3.0 + impactPower * 0.2, 2.8, 5.8), nzI * kbForce, 1.7);
+              applyEntityStun(ent, 0.7);
+            } else {
+              triggerEntityStagger(ent, nxI, nzI, clamp(impactPower / 4.2, 0.45, 1.2), clamp(kbForce * 0.55, 2.8, 8.0));
+              applyEntityStun(ent, 0.55);
+            }
+          }
+
+          // Отскок брошенного контейнера/предмета после попадания
+          wi.vx *= -0.35;
+          wi.vz *= -0.35;
+          wi.vy = Math.max(2.0, wi.vy * 0.4);
+          break;
+        }
+      }
+    }
 
     const rad = wi.item.holdMode === 'carried' ? 0.65 : 0.35;
     const h = wi.item.holdMode === 'carried' ? 1.1 : 0.55;
@@ -3948,6 +5039,13 @@ function updateProjectilesAndWorldItems(dt) {
     }
     wi.group.position.set(wi.x, wi.y + (wi.item.holdMode === 'held' ? 0.35 : 0.55), wi.z);
     if (wi.tag) wi.tag.position.set(wi.x, wi.y + 1.65, wi.z);
+
+    if (wi.grounded && Math.abs(wi.vx) < 0.04 && Math.abs(wi.vz) < 0.04 && Math.abs(wi.vy) < 0.04) {
+      wi.vx = 0;
+      wi.vy = 0;
+      wi.vz = 0;
+      wi._physSleep = true;
+    }
   }
 }
 
@@ -4235,11 +5333,17 @@ export function update(dt) {
   updateAudioEngineRuntime(dt);
   updateMultiplayerRuntime(dt);
 
+  // Обновление глобального скрипта мира, скриптов блоков и ИИ NPC
+  if (!S.studioMode || S.studioPlaytest) {
+    updateAllScriptsRuntime(dt, S.player);
+  }
 
   const p = S.player;
   if (!p) return;
 
   if (p.attackCooldown > 0) p.attackCooldown = Math.max(0, p.attackCooldown - dt);
+  if (p.kickCooldown > 0) p.kickCooldown = Math.max(0, p.kickCooldown - dt);
+  if (p.stunTimer > 0) p.stunTimer = Math.max(0, p.stunTimer - dt);
 
   const activeHeld = getActiveHeldItem(p);
 
@@ -4338,6 +5442,30 @@ export function update(dt) {
     return;
   }
 
+  // Если живой игрок сейчас в рэгдоле — симулируем физику падения до подъёма на ноги
+  if (p.ragdoll && (p.ragdoll.active || p.ragdoll.recoverTimer > 0)) {
+    const stillInRagdoll = updateEntityRagdollPhysics(p, dt);
+    updateDynamicBlocksPhysics(dt, p);
+    updateEntityAnimation(p, dt, { moving: false, grounded: false, inLiquid: !!p.inLiquid });
+    if (p.hpBarTimer > 0) {
+      p.hpBarTimer -= dt;
+      if (p.hpBarTimer <= 0) refreshEntityTagWithHP(p);
+    }
+    updateCustomNPCsRuntime(dt, p);
+    if (S.gameMode && S.gameMode.onUpdate) S.gameMode.onUpdate(dt, 0);
+    if (stillInRagdoll) {
+      const hintEl = $('hint');
+      if (hintEl && p.ragdoll?.active) {
+        const rdHint = '⚡ НОКАУТ! Быстро жми [WASD / Пробел / ЛКМ], чтобы быстрее встать!';
+        if (hintEl.textContent !== rdHint) {
+          hintEl.textContent = rdHint;
+          hintEl.hidden = false;
+        }
+      }
+      return;
+    }
+  }
+
   const pr = p.colliderRadius || 0.42;
   const ph = p.colliderHeight || 2.5;
 
@@ -4396,6 +5524,7 @@ export function update(dt) {
   const equipSpdBonus = Number(activeHeld?.equipStats?.speedBonus) || 0;
   const carryPenalty = (p.carriedItem ? 0.78 : 1.0) * carryPhysPenalty;
   const spdBoost = (p.hasSpeed || (S.activeSlot === 1 && p.hasSpeed)) ? 1.55 : 1.0;
+  const stunMoveMult = (p.stunTimer || 0) > 0 ? 0.25 : 1.0;
   const playerWantsSprint = !!(S.keys.ShiftLeft || S.keys.ShiftRight) && !S.isAimingRMB && !S.isChargingThrow;
   const prevStamInt = Math.ceil(p.stamina ?? 100);
   const prevExh = !!p.staminaExhausted;
@@ -4403,7 +5532,7 @@ export function update(dt) {
   if (Math.ceil(p.stamina ?? 100) !== prevStamInt || !!p.staminaExhausted !== prevExh) {
     updateShopUI();
   }
-  const spd = ((p.walkSpeed || 7.6) + equipSpdBonus) * spdBoost * sprintMult * carryPenalty * (inLiquid ? 0.65 : 1.0);
+  const spd = ((p.walkSpeed || 7.6) + equipSpdBonus) * spdBoost * sprintMult * carryPenalty * stunMoveMult * (inLiquid ? 0.65 : 1.0);
   const fx = -Math.sin(S.yaw);
   const fz = -Math.cos(S.yaw);
   const rx = -fz;
@@ -4456,12 +5585,31 @@ export function update(dt) {
     p.grounded = false;
   } else {
     if (len > 0.1) {
-      vx += (fx * f + rx * s) * spd;
-      vz += (fz * f + rz * s) * spd;
+      let moveVx = (fx * f + rx * s) * spd;
+      let moveVz = (fz * f + rz * s) * spd;
+
+      // Если игрок несёт привязанный верёвкой объект — чем сильнее натяжение, тем тяжелее идти от якоря
+      if (p.carriedPhysicsBlock && (p._ropeResistStrength || 0) > 0.01) {
+        const outDot = moveVx * (p._ropeResistDirX || 0) + moveVz * (p._ropeResistDirZ || 0);
+        if (outDot > 0) {
+          const cut = outDot * clamp(p._ropeResistStrength, 0, 0.98);
+          moveVx -= (p._ropeResistDirX || 0) * cut;
+          moveVz -= (p._ropeResistDirZ || 0) * cut;
+        }
+      }
+
+      vx += moveVx;
+      vz += moveVz;
       p.rot = lockFaceToCamera ? S.yaw + Math.PI : Math.atan2(vx, vz);
-      p.step += spd * dt;
+      p.step += Math.hypot(moveVx, moveVz) * dt;
     } else if (lockFaceToCamera) {
       p.rot = S.yaw + Math.PI;
+    }
+
+    // Упругая оттяжка игрока натянутой верёвкой
+    if (p.carriedPhysicsBlock && (p._ropePullX || p._ropePullZ)) {
+      vx += clamp((p._ropePullX || 0) * dt * 1.4, -10, 10);
+      vz += clamp((p._ropePullZ || 0) * dt * 1.4, -10, 10);
     }
 
     p.x += vx * dt;
@@ -4548,6 +5696,9 @@ export function update(dt) {
 
     if ((b.components?.interaction?.enabled && b.interactionData?.trigger === 'touch') || (b.logicData && b.logicData.trigger === 'touch')) {
       triggerBlockLogic(b, 'touch', p);
+      if (b.components?.script?.enabled && b.scriptData?.enabled) {
+        runBlockScriptHook(b, 'onCollide', { entity: p });
+      }
       if (b.logicRuntime && b.logicRuntime.ghostOpen) continue;
     }
 
@@ -4591,6 +5742,7 @@ export function update(dt) {
             // Мягко опускаем стопы на миллиметры вслед за наклонной гранью без отрыва от палубы
             p.y += realPen / Math.max(0.42, hit.ny);
           }
+          const landingVy = p.vy;
           p.vy = blockVertVel > 0.05 ? blockVertVel : 0;
           p.grounded = true;
           p._groundedAnimTimer = 0.2;
@@ -4603,6 +5755,11 @@ export function update(dt) {
             const slideSpeed = (slopeSin - 0.46) * 8.5;
             p.x += hit.nx * slideSpeed * dt;
             p.z += hit.nz * slideSpeed * dt;
+          }
+
+          if (landingVy < -17.5 && !b.bounciness && !p.inLiquid) {
+            const fallImp = Math.min(8, Math.abs(landingVy) * 0.25);
+            triggerEntityRagdoll(p, -Math.sin(S.yaw) * fallImp, 2.2, -Math.cos(S.yaw) * fallImp, 1.5);
           }
 
           if (b.conveyorVz) {
@@ -4944,7 +6101,7 @@ export function findNearestDialogueNPC(player, maxDist = 4.4) {
   let bestDist = maxDist;
   for (let i = 0; i < S.customNPCs.length; i++) {
     const npc = S.customNPCs[i];
-    if (!npc || npc._deadCooldown > 0) continue;
+    if (!npc || npc.isDisabled || npc._deadCooldown > 0 || npc._permanentlyDead) continue;
     const mods = npc.aiModules;
     if (!mods?.dialogue?.enabled || !mods.dialogue.interactKeyE) continue;
     const d = Math.hypot(npc.x - player.x, (npc.y - player.y) * 0.7, npc.z - player.z);
@@ -4982,7 +6139,10 @@ function findNearestPlayerForNpc(npc, maxRadius = Infinity) {
 }
 
 export function triggerNpcDialogue(player, npc) {
-  if (!npc) return;
+  if (!npc || npc._deadCooldown > 0) return;
+  if (npc.aiModules?.customScript?.enabled) {
+    runNpcScriptHook(npc, 'onDialogue', { player });
+  }
   const mods = ensureNpcModules(npc);
   const lines = (mods.dialogue?.lines && mods.dialogue.lines.length > 0)
     ? mods.dialogue.lines
@@ -5019,7 +6179,7 @@ function gatherNpcNearbyBlocks(x, y, z, radiusXZ = 12.0, radiusY = 14.0) {
   const all = S.allBlocks;
   for (let i = 0; i < all.length; i++) {
     const b = all[i];
-    if (!b || b._depletedDisabled) continue;
+    if (!b || b.isDisabled || b._depletedDisabled) continue;
     if (b.logicRuntime && b.logicRuntime.ghostOpen) continue;
     if (b.x1 < minX || b.x0 > maxX || b.z1 < minZ || b.z0 > maxZ || b.y1 < minY || b.y0 > maxY) {
       continue;
@@ -5358,7 +6518,64 @@ export function updateCustomNPCsRuntime(dt, player) {
 
   for (let idx = 0; idx < S.customNPCs.length; idx++) {
     const npc = S.customNPCs[idx];
-    if (!npc || npc._deadCooldown > 0) continue;
+    if (!npc) continue;
+    if (npc.isDisabled) {
+      if (npc.rig?.g && npc.rig.g.visible) npc.rig.g.visible = false;
+      if (npc.tag && npc.tag.visible) npc.tag.visible = false;
+      continue;
+    }
+
+    // 0. Обработка окончательной смерти и кадрового таймера возрождения NPC
+    if (npc._permanentlyDead) {
+      if (npc.rig?.g && npc.rig.g.visible) npc.rig.g.visible = false;
+      if (npc.tag && npc.tag.visible) npc.tag.visible = false;
+      continue;
+    }
+    if (npc._deadCooldown > 0) {
+      if (npc.rig?.g && npc.rig.g.visible) npc.rig.g.visible = false;
+      if (npc.tag && npc.tag.visible) npc.tag.visible = false;
+      if (isAuthority) {
+        npc._deadCooldown -= dt;
+        if (npc._deadCooldown <= 0) {
+          npc._deadCooldown = 0;
+          npc.hp = npc.maxHp || 100;
+          npc.stamina = npc.maxStamina || 100;
+          npc.staminaExhausted = false;
+          npc.ragdoll = null;
+          npc.x = npc.homeX ?? npc.x;
+          npc.y = npc.homeY ?? npc.y;
+          npc.z = npc.homeZ ?? npc.z;
+          npc.vy = 0;
+          npc.vxKnock = 0;
+          npc.vzKnock = 0;
+          npc.tx = npc.x;
+          npc.tz = npc.z;
+          npc._aggroTarget = null;
+          npc._aggroTimer = 0;
+          npc.chat = 'Уф, меня собрали заново... 💫';
+          npc.chatT = 3.5;
+          if (npc.rig?.g) {
+            npc.rig.g.position.set(npc.x, npc.y, npc.z);
+            npc.rig.g.rotation.set(0, npc.rot || 0, 0);
+            npc.rig.g.visible = true;
+          }
+          if (npc.tag) {
+            npc.tag.position.set(npc.x, npc.y + 3.35, npc.z);
+            npc.tag.visible = true;
+          }
+          refreshEntityTagWithHP(npc);
+          syncNpcUpsertToNetwork(npc, false);
+        }
+      }
+      continue;
+    }
+
+    // 0.5. Если NPC сейчас в рэгдоле — симулируем физику падения вместо ИИ-ходьбы
+    if (isAuthority && npc.ragdoll && (npc.ragdoll.active || npc.ragdoll.recoverTimer > 0)) {
+      const busyRagdoll = updateEntityRagdollPhysics(npc, dt);
+      updateEntityAnimation(npc, dt, { moving: false, grounded: false, inLiquid: !!npc.inLiquid });
+      if (busyRagdoll) continue;
+    }
 
     const mods = ensureNpcModules(npc);
 
@@ -5414,7 +6631,7 @@ export function updateCustomNPCsRuntime(dt, player) {
       const hoverYOffset = applyEntityGaitStyle(npc, dt, isMoving);
       if (npc.rig?.g) {
         npc.rig.g.position.set(npc.x, npc.y + hoverYOffset, npc.z);
-        npc.rig.g.rotation.y = npc.rot;
+        npc.rig.g.rotation.set(0, npc.rot, 0);
       }
       if (npc.tag) {
         npc.tag.position.set(npc.x, npc.y + hoverYOffset + 3.35, npc.z);
@@ -5436,6 +6653,7 @@ export function updateCustomNPCsRuntime(dt, player) {
       npc.chatT -= dt;
     }
     if (npc.attackCooldown > 0) npc.attackCooldown = Math.max(0, npc.attackCooldown - dt);
+    if (npc.stunTimer > 0) npc.stunTimer = Math.max(0, npc.stunTimer - dt);
     if (npc._hazardDamageCd > 0) npc._hazardDamageCd = Math.max(0, npc._hazardDamageCd - dt);
     if (npc._interactCd > 0) npc._interactCd = Math.max(0, npc._interactCd - dt);
     if (npc._edgeAvoidTimer > 0) npc._edgeAvoidTimer = Math.max(0, npc._edgeAvoidTimer - dt);
@@ -5547,7 +6765,21 @@ export function updateCustomNPCsRuntime(dt, player) {
       }
     }
 
-    if (npc._hesitateTimer > 0 && !activeTarget) {
+    if ((npc.stunTimer || 0) > 0) {
+      moving = false;
+      if (Math.random() < dt * 5.0) {
+        emitParticleBurst(npc.x, npc.y + 2.55, npc.z, 1, {
+          preset: 'star',
+          color: '#ffce3a',
+          sizeStart: 0.24,
+          sizeEnd: 0.04,
+          speed: 1.4,
+          spread: 1.0,
+          gravity: 0.3,
+          lifetime: 0.55
+        });
+      }
+    } else if (npc._hesitateTimer > 0 && !activeTarget) {
       npc._hesitateTimer -= dt;
     } else if (nearbyFreeItem && !activeTarget) {
       npc.tx = nearbyFreeItem.x;
@@ -5820,6 +7052,9 @@ export function updateCustomNPCsRuntime(dt, player) {
           if (physMod.hazardDamage) {
             if ((b.components?.interaction?.enabled && b.interactionData?.trigger === 'touch') || (b.logicData && b.logicData.trigger === 'touch')) {
               triggerBlockLogic(b, 'touch', npc);
+              if (b.components?.script?.enabled && b.scriptData?.enabled) {
+                runBlockScriptHook(b, 'onCollide', { entity: npc });
+              }
             }
             if (npc._hazardDamageCd <= 0) {
               if (b.damageOnContact > 0) {
@@ -5985,6 +7220,9 @@ export function updateCustomNPCsRuntime(dt, player) {
 
         if ((b.components?.interaction?.enabled && b.interactionData?.trigger === 'touch') || (b.logicData && b.logicData.trigger === 'touch')) {
           triggerBlockLogic(b, 'touch', npc);
+          if (b.components?.script?.enabled && b.scriptData?.enabled) {
+            runBlockScriptHook(b, 'onCollide', { entity: npc });
+          }
           if (npc._deadCooldown > 0) break;
           if (b.logicRuntime && b.logicRuntime.ghostOpen) continue;
         }
@@ -6021,6 +7259,9 @@ export function updateCustomNPCsRuntime(dt, player) {
                 const fallDmg = Math.round((impactSpeed - (fallThresh - 1.5)) * 5.0);
                 if (fallDmg > 0) {
                   dealDamage(npc, fallDmg, null, 2);
+                  if (!(npc._deadCooldown > 0) && !npc._permanentlyDead) {
+                    triggerEntityRagdoll(npc, Math.sin(npc.rot || 0) * 3.5, 2.0, Math.cos(npc.rot || 0) * 3.5, 1.6);
+                  }
                   if (npc._deadCooldown > 0) break;
                 }
               }

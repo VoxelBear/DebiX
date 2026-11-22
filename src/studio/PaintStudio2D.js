@@ -35,6 +35,273 @@ let currentStrokePoints = [];
 const MAX_PAINT_UNDO = 30;
 const paintUndoStack = [];
 
+// Глобальная палитра последних 10 цветов (сохраняется между сессиями)
+const RECENT_COLORS_STORAGE_KEY = 'debix_recent_colors_v1';
+const MAX_RECENT_COLORS = 10;
+let _objectPaletteScanToken = 0;
+
+function normalizeHexColor(val) {
+  if (val === null || val === undefined) return null;
+  if (typeof val === 'number' && Number.isFinite(val)) {
+    return '#' + (val & 0xffffff).toString(16).padStart(6, '0').toLowerCase();
+  }
+  const str = String(val).trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(str)) return str;
+  if (/^#[0-9a-f]{3}$/.test(str)) {
+    return '#' + str[1] + str[1] + str[2] + str[2] + str[3] + str[3];
+  }
+  return null;
+}
+
+function ensureRecentColorsArray() {
+  if (!Array.isArray(S.recentColors)) {
+    let loaded = [];
+    try {
+      const raw = localStorage.getItem(RECENT_COLORS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          loaded = parsed.map(normalizeHexColor).filter(Boolean).slice(0, MAX_RECENT_COLORS);
+        }
+      }
+    } catch (_) {}
+    S.recentColors = loaded;
+  }
+  return S.recentColors;
+}
+
+export function recordRecentColor(rawColor) {
+  const hex = normalizeHexColor(rawColor);
+  if (!hex) return;
+  const list = ensureRecentColorsArray();
+  const idx = list.indexOf(hex);
+  if (idx === 0) return;
+  if (idx > 0) list.splice(idx, 1);
+  list.unshift(hex);
+  if (list.length > MAX_RECENT_COLORS) list.length = MAX_RECENT_COLORS;
+  try {
+    localStorage.setItem(RECENT_COLORS_STORAGE_KEY, JSON.stringify(list));
+  } catch (_) {}
+  renderRecentColorsPalette();
+}
+
+function renderRecentColorsPalette() {
+  const box = $('paintRecentSwatches');
+  if (!box) return;
+  const list = ensureRecentColorsArray();
+  if (list.length === 0) {
+    box.innerHTML = '<span class="paint-palette-empty">Пока нет использованных цветов</span>';
+    return;
+  }
+  box.innerHTML = list
+    .map(c => `<div class="swatch" style="background:${c}" data-col="${c}" title="${c.toUpperCase()}"></div>`)
+    .join('');
+  box.querySelectorAll('.swatch').forEach(sw => {
+    sw.onclick = () => {
+      $('paintColor').value = sw.dataset.col;
+      if (activePaintTool === 'eraser') setPaintTool('brush');
+    };
+  });
+}
+
+// Сканирует доминирующие цвета из DataURL-принта (отсеивая полупрозрачность и шум сглаживания)
+function extractDistinctColorsFromDataURL(dataURL, maxColors = 8) {
+  return new Promise(resolve => {
+    if (!dataURL || typeof dataURL !== 'string') {
+      resolve([]);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const sz = 32;
+        const cvTmp = document.createElement('canvas');
+        cvTmp.width = sz;
+        cvTmp.height = sz;
+        const ctxTmp = cvTmp.getContext('2d', { willReadFrequently: true });
+        ctxTmp.imageSmoothingEnabled = false;
+        ctxTmp.drawImage(img, 0, 0, sz, sz);
+        const data = ctxTmp.getImageData(0, 0, sz, sz).data;
+        const counts = new Map();
+        for (let i = 0; i < data.length; i += 4) {
+          if (data[i + 3] < 140) continue;
+          // Мягкое квантование по 8 для объединения микро-оттенков антиалиасинга
+          const r = Math.min(255, Math.round(data[i] / 8) * 8);
+          const g = Math.min(255, Math.round(data[i + 1] / 8) * 8);
+          const b = Math.min(255, Math.round(data[i + 2] / 8) * 8);
+          const key = (r << 16) | (g << 8) | b;
+          counts.set(key, (counts.get(key) || 0) + 1);
+        }
+        const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+        const picked = [];
+        for (const [key] of sorted) {
+          const r = (key >> 16) & 255;
+          const g = (key >> 8) & 255;
+          const b = key & 255;
+          let tooClose = false;
+          for (const p of picked) {
+            const dr = p.r - r;
+            const dg = p.g - g;
+            const db = p.b - b;
+            if (dr * dr + dg * dg + db * db < 784) { // ~28 по RGB
+              tooClose = true;
+              break;
+            }
+          }
+          if (!tooClose) {
+            picked.push({
+              r, g, b,
+              hex: '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('')
+            });
+            if (picked.length >= maxColors) break;
+          }
+        }
+        resolve(picked.map(p => p.hex));
+      } catch (_) {
+        resolve([]);
+      }
+    };
+    img.onerror = () => resolve([]);
+    img.src = dataURL;
+  });
+}
+
+function renderObjectPaletteSwatches(colors, titleText) {
+  const wrap = $('paintObjectPaletteWrap');
+  const lbl = $('paintObjectPaletteLbl');
+  const box = $('paintObjectSwatches');
+  if (!wrap || !box) return;
+  if (lbl && titleText) lbl.textContent = titleText;
+  if (!colors || colors.length === 0) {
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+  box.innerHTML = colors
+    .map(c => `<div class="swatch" style="background:${c}" data-col="${c}" title="${c.toUpperCase()}"></div>`)
+    .join('');
+  box.querySelectorAll('.swatch').forEach(sw => {
+    sw.onclick = () => {
+      $('paintColor').value = sw.dataset.col;
+      if (activePaintTool === 'eraser') setPaintTool('brush');
+      recordRecentColor(sw.dataset.col);
+    };
+  });
+}
+
+export function refreshObjectColorPalette(target = null) {
+  const token = ++_objectPaletteScanToken;
+  const ref = S.selectedRef;
+  const colorSet = new Set();
+  const printURLs = [];
+  let label = '🎯 Палитра объекта';
+
+  const addCol = v => {
+    const h = normalizeHexColor(v);
+    if (h) colorSet.add(h);
+  };
+  const addUrl = u => {
+    if (u && typeof u === 'string' && !printURLs.includes(u)) printURLs.push(u);
+  };
+
+  const collectCharPalette = ent => {
+    if (!ent || !ent.preset) return;
+    const pr = ent.preset;
+    label = `🎯 Палитра: ${ent.name || (ent.isP ? 'Игрок' : 'NPC')}`;
+    const cHead = pr.head ?? 0xf5cd30;
+    const cTorso = pr.torso ?? 0x00a2ff;
+    addCol(cHead);
+    addCol(cTorso);
+    addCol(pr.armL ?? pr.arms ?? cHead);
+    addCol(pr.armR ?? pr.arms ?? cHead);
+    addCol(pr.legL ?? pr.legs ?? 0x2ecc71);
+    addCol(pr.legR ?? pr.legs ?? 0x2ecc71);
+
+    // Встроенные активные аксессуары
+    if (pr.hair) addCol(typeof pr.hair === 'boolean' ? '#7a421d' : pr.hair);
+    if (pr.hat) addCol(typeof pr.hat === 'boolean' ? '#111111' : pr.hat);
+    if (pr.crown) addCol('#ffd700');
+    if (pr.glasses) addCol('#111111');
+    if (pr.backpack) addCol('#e67e22');
+    if (pr.sword) addCol('#56f0ff');
+    if (pr.halo) addCol('#ffe64c');
+    if (pr.wings) addCol('#fff7cc');
+
+    // Принты всех частей тела
+    if (pr.faceDataURL) addUrl(pr.faceDataURL);
+    if (pr.limbTex) {
+      for (const k of ['head', 'torso', 'armL', 'armR', 'legL', 'legR']) {
+        if (pr.limbTex[k]) addUrl(pr.limbTex[k]);
+      }
+    }
+
+    // Все активные 3D-аксессуары и питомцы персонажа
+    if (Array.isArray(pr.customCosmetics)) {
+      for (const cos of pr.customCosmetics) {
+        if (!cos || cos.enabled === false) continue;
+        if (Array.isArray(cos.parts)) {
+          for (const pt of cos.parts) {
+            if (!pt) continue;
+            addCol(pt.color);
+            if (pt.realLight || pt.pseudoLight) addCol(pt.lightColor);
+            if (pt.texDataURL) addUrl(pt.texDataURL);
+          }
+        }
+      }
+    }
+  };
+
+  if (ref && (ref.kind === 'char' || ref.kind === 'cosmetic')) {
+    collectCharPalette(ref.ent || S.player);
+  } else if (ref && ref.kind === 'world_item' && ref.item) {
+    const itm = ref.item;
+    label = `🎯 Палитра предмета: ${itm.name || 'Предмет'}`;
+    for (const arr of [itm.parts, itm.projectileParts]) {
+      if (!Array.isArray(arr)) continue;
+      for (const pt of arr) {
+        if (!pt) continue;
+        addCol(pt.color);
+        if (pt.realLight || pt.pseudoLight) addCol(pt.lightColor);
+        if (pt.texDataURL) addUrl(pt.texDataURL);
+      }
+    }
+    if (itm.lightData && (itm.lightData.realLight || itm.lightData.pseudoLight)) {
+      addCol(itm.lightData.color);
+    }
+  } else if (ref && ref.kind === 'block' && ref.box) {
+    const box = ref.box;
+    label = `🎯 Палитра объекта: ${box.label || 'Блок'}`;
+    addCol(box.colorHex);
+    if (box.lightData && box.lightData.mode && box.lightData.mode !== 'none') addCol(box.lightData.color);
+    if (box.particleData?.enabled) addCol(box.particleData.color);
+    if (box.customTexDataURL) addUrl(box.customTexDataURL);
+    // Дочерние части составного объекта
+    const rootKey = `block:${box.id}`;
+    for (const ch of S.allBlocks) {
+      if (ch && ch.parentKey === rootKey) {
+        addCol(ch.colorHex);
+        if (ch.customTexDataURL) addUrl(ch.customTexDataURL);
+      }
+    }
+  } else if (S.player && ['face', 'head', 'torso', 'armL', 'armR', 'legL', 'legR'].includes(target)) {
+    collectCharPalette(S.player);
+  }
+
+  // Первичный мгновенный рендер (цвета геометрии/конечностей/аксессуаров)
+  renderObjectPaletteSwatches(Array.from(colorSet).slice(0, 24), label);
+
+  // Догружаем уникальные цвета со всех принтов объекта
+  if (printURLs.length > 0) {
+    Promise.all(printURLs.map(u => extractDistinctColorsFromDataURL(u, 6))).then(results => {
+      if (token !== _objectPaletteScanToken) return;
+      for (const arr of results) {
+        for (const h of arr) addCol(h);
+      }
+      renderObjectPaletteSwatches(Array.from(colorSet).slice(0, 24), label);
+    });
+  }
+}
+
 function getCanvasRes() {
   return paintCv ? paintCv.width : 128;
 }
@@ -148,6 +415,7 @@ export function pickColorFromCanvas(x, y) {
   $('paintColor').value = hex;
   $('paintAlpha').value = alphaPct;
   $('paintAlphaTxt').textContent = alphaPct + '%';
+  recordRecentColor(hex);
   setPaintTool('brush');
   showBanner(`💧 Пипетка выбрала цвет ${hex.toUpperCase()} (Альфа: ${alphaPct}%)`, '#56f0ff');
 }
@@ -234,6 +502,8 @@ export function openPaintModal(defaultTarget = 'face') {
   $('paintModal').hidden = false;
   $('paintTargetSelect').value = defaultTarget;
   loadTargetTextureIntoCanvas(defaultTarget);
+  renderRecentColorsPalette();
+  refreshObjectColorPalette(defaultTarget);
 }
 
 function getActiveParticleDataForPainter() {
@@ -719,6 +989,19 @@ export function initPaintStudio2D() {
     };
   });
 
+  renderRecentColorsPalette();
+
+  // Глобальный перехватчик всех цветовых пикеров в игре/Инспекторе для истории последних 10 цветов
+  if (!window.__debixColorHistoryBound) {
+    window.__debixColorHistoryBound = true;
+    document.addEventListener('change', ev => {
+      const el = ev.target;
+      if (el && el.tagName === 'INPUT' && el.type === 'color' && el.value) {
+        recordRecentColor(el.value);
+      }
+    });
+  }
+
   // Добавляем кнопки 16x16 шаблонов партиклов в блок шаблонов
   const presetRow = document.querySelector('[data-fpreset]')?.parentElement;
   if (presetRow && !presetRow.querySelector('[data-ppreset]')) {
@@ -814,7 +1097,10 @@ export function initPaintStudio2D() {
   if ($('btnRes128')) $('btnRes128').onclick = () => setCanvasResolution(128);
   if ($('btnRes256')) $('btnRes256').onclick = () => setCanvasResolution(256);
 
-  $('paintTargetSelect').onchange = e => loadTargetTextureIntoCanvas(e.target.value);
+  $('paintTargetSelect').onchange = e => {
+    loadTargetTextureIntoCanvas(e.target.value);
+    refreshObjectColorPalette(e.target.value);
+  };
   $('openFacePaintBtn').onclick = () => {
     if (S.selectedRef && S.selectedRef.kind === 'block') openPaintModal('block');
     else if (S.selectedRef && (S.selectedRef.kind === 'cosmetic' || S.selectedRef.kind === 'world_item')) openPaintModal('cosmetic');
@@ -844,6 +1130,9 @@ export function initPaintStudio2D() {
       return;
     }
     pushPaintUndoSnapshot();
+    if (activePaintTool === 'brush' || activePaintTool === 'bucket') {
+      recordRecentColor($('paintColor').value);
+    }
     if (activePaintTool === 'bucket') {
       const [r, g, b, a] = hexToRgba($('paintColor').value, +$('paintAlpha').value);
       floodFillCanvas(cx, cy, r, g, b, a);

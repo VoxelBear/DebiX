@@ -1,3 +1,4 @@
+// src/core/SceneManager.js
 import { $, coarse, S } from './State.js';
 
 export const cv = $('c');
@@ -65,6 +66,12 @@ export const celestialGroup = new THREE.Group();
 skyDome.add(celestialGroup);
 
 let sunShellMesh = null;
+let sunShellSignature = '';
+let moonShellMesh = null;
+let moonShellSignature = '';
+let customBodiesGroup = new THREE.Group();
+celestialGroup.add(customBodiesGroup);
+let customBodiesSignature = '';
 
 function buildCelestialShapeGeo(shape = 'sphere', size = 12) {
   const r = Math.max(0.5, Number(size) || 12);
@@ -73,6 +80,17 @@ function buildCelestialShapeGeo(shape = 'sphere', size = 12) {
   if (shape === 'cylinder') return new THREE.CylinderGeometry(r, r, r * 1.4, 20);
   if (shape === 'torus') return new THREE.TorusGeometry(r, r * 0.28, 12, 32);
   return new THREE.SphereGeometry(r, 24, 18);
+}
+
+function disposeObject3D(obj) {
+  if (!obj) return;
+  obj.traverse(ch => {
+    if (ch.geometry) ch.geometry.dispose();
+    if (ch.material) {
+      if (Array.isArray(ch.material)) ch.material.forEach(m => m.dispose());
+      else ch.material.dispose();
+    }
+  });
 }
 
 export function syncSunAndCelestialBodies() {
@@ -95,38 +113,103 @@ export function syncSunAndCelestialBodies() {
   const ss = ws.sunSettings;
 
   // 1. Обновляем глобальный источник света (DirectionalLight + HemisphereLight)
-  sun.visible = ss.enabled !== false;
+  const sunEnabled = ss.enabled !== false;
+  sun.visible = sunEnabled;
   sun.color.set(ss.color || '#fff6dd');
-  sun.intensity = ss.enabled === false ? 0 : (Number(ss.intensity) ?? 1.25);
+  sun.intensity = !sunEnabled ? 0 : (Number(ss.intensity) ?? 1.25);
   sun.position.set(Number(ss.x) ?? 45, Number(ss.y) ?? 85, Number(ss.z) ?? 35);
   hemi.intensity = Number(ss.hemiIntensity) ?? 0.9;
+  if (ss.hemiSkyColor) hemi.color.set(ss.hemiSkyColor);
+  if (ss.hemiGroundColor) hemi.groundColor.set(ss.hemiGroundColor);
 
-  // 2. Пересобираем небесные тела и физическую оболочку солнца внутри skyDome
-  while (celestialGroup.children.length > 0) {
-    const ch = celestialGroup.children[0];
-    celestialGroup.remove(ch);
+  // 2. Физическая 3D-оболочка Солнца (без пересоздания геометрии каждый кадр)
+  const wantSunShell = sunEnabled && ss.shellShape && ss.shellShape !== 'none';
+  const nextSunSig = wantSunShell
+    ? `${ss.shellShape}|${Number(ss.shellSize) || 14}|${ss.shellGlow !== false}`
+    : 'none';
+
+  if (nextSunSig !== sunShellSignature) {
+    if (sunShellMesh) {
+      celestialGroup.remove(sunShellMesh);
+      disposeObject3D(sunShellMesh);
+      sunShellMesh = null;
+    }
+    sunShellSignature = nextSunSig;
+    if (wantSunShell) {
+      const sGeo = buildCelestialShapeGeo(ss.shellShape, Number(ss.shellSize) || 14);
+      const sMat = ss.shellGlow !== false
+        ? new THREE.MeshBasicMaterial({ color: ss.shellColor || ss.color || '#ffea79', fog: false })
+        : new THREE.MeshStandardMaterial({ color: ss.shellColor || ss.color || '#ffea79', roughness: 0.4, metalness: 0.1, fog: false });
+      sunShellMesh = new THREE.Mesh(sGeo, sMat);
+      sunShellMesh.userData.noCollider = true;
+      celestialGroup.add(sunShellMesh);
+    }
   }
-  sunShellMesh = null;
 
-  if (ss.enabled !== false && ss.shellShape && ss.shellShape !== 'none') {
-    const sGeo = buildCelestialShapeGeo(ss.shellShape, Number(ss.shellSize) || 14);
-    const sMat = ss.shellGlow !== false
-      ? new THREE.MeshBasicMaterial({ color: ss.shellColor || ss.color || '#ffea79', fog: false })
-      : new THREE.MeshStandardMaterial({ color: ss.shellColor || ss.color || '#ffea79', roughness: 0.4, metalness: 0.1, fog: false });
-    sunShellMesh = new THREE.Mesh(sGeo, sMat);
-    // Размещаем оболочку на небосводе по направлению вектора света
+  if (sunShellMesh && wantSunShell) {
+    sunShellMesh.visible = true;
+    if (sunShellMesh.material && sunShellMesh.material.color) {
+      sunShellMesh.material.color.set(ss.shellColor || ss.color || '#ffea79');
+    }
     const dir = new THREE.Vector3(Number(ss.x) ?? 45, Number(ss.y) ?? 85, Number(ss.z) ?? 35);
-    if (dir.lengthSq() < 1) dir.set(45, 85, 35);
+    if (dir.lengthSq() < 0.001) dir.set(45, 85, 35);
     dir.normalize().multiplyScalar(380);
     sunShellMesh.position.copy(dir);
-    sunShellMesh.userData.noCollider = true;
-    celestialGroup.add(sunShellMesh);
+  } else if (sunShellMesh) {
+    sunShellMesh.visible = false;
   }
 
-  // 3. Дополнительные небесные тела (планеты, звёзды, спутники)
-  if (Array.isArray(ws.celestialBodies)) {
-    for (let i = 0; i < ws.celestialBodies.length; i++) {
-      const cb = ws.celestialBodies[i];
+  // 3. Встроенная 3D-оболочка Луны (управляется скриптами смены суток или настройками мира)
+  const ms = ws.moonSettings;
+  const wantMoon = Boolean(ms && ms.enabled);
+  const nextMoonSig = wantMoon
+    ? `${ms.shape || 'sphere'}|${Number(ms.size) || 13}|${ms.glow !== false}`
+    : 'none';
+
+  if (nextMoonSig !== moonShellSignature) {
+    if (moonShellMesh) {
+      celestialGroup.remove(moonShellMesh);
+      disposeObject3D(moonShellMesh);
+      moonShellMesh = null;
+    }
+    moonShellSignature = nextMoonSig;
+    if (wantMoon) {
+      const mGeo = buildCelestialShapeGeo(ms.shape || 'sphere', Number(ms.size) || 13);
+      const mMat = ms.glow !== false
+        ? new THREE.MeshBasicMaterial({ color: ms.color || '#dbeafe', fog: false })
+        : new THREE.MeshStandardMaterial({ color: ms.color || '#dbeafe', roughness: 0.5, metalness: 0.1, fog: false });
+      moonShellMesh = new THREE.Mesh(mGeo, mMat);
+      moonShellMesh.userData.noCollider = true;
+      celestialGroup.add(moonShellMesh);
+    }
+  }
+
+  if (moonShellMesh && wantMoon) {
+    moonShellMesh.visible = true;
+    if (moonShellMesh.material && moonShellMesh.material.color) {
+      moonShellMesh.material.color.set(ms.color || '#dbeafe');
+    }
+    const mDir = new THREE.Vector3(Number(ms.x) ?? -45, Number(ms.y) ?? 75, Number(ms.z) ?? -35);
+    if (mDir.lengthSq() < 0.001) mDir.set(-45, 75, -35);
+    mDir.normalize().multiplyScalar(375);
+    moonShellMesh.position.copy(mDir);
+  } else if (moonShellMesh) {
+    moonShellMesh.visible = false;
+  }
+
+  // 4. Дополнительные небесные тела (планеты, звёзды, спутники)
+  const bodiesArr = Array.isArray(ws.celestialBodies) ? ws.celestialBodies : [];
+  const nextBodiesSig = JSON.stringify(bodiesArr);
+  if (nextBodiesSig !== customBodiesSignature) {
+    customBodiesSignature = nextBodiesSig;
+    while (customBodiesGroup.children.length > 0) {
+      const ch = customBodiesGroup.children[0];
+      customBodiesGroup.remove(ch);
+      disposeObject3D(ch);
+    }
+
+    for (let i = 0; i < bodiesArr.length; i++) {
+      const cb = bodiesArr[i];
       if (!cb || cb.enabled === false) continue;
       const sz = Math.max(1, Number(cb.size) || 16);
       const geo = buildCelestialShapeGeo(cb.shape || 'sphere', sz);
@@ -163,7 +246,7 @@ export function syncSunAndCelestialBodies() {
         mesh.add(ringMesh);
       }
 
-      celestialGroup.add(mesh);
+      customBodiesGroup.add(mesh);
     }
   }
 }
@@ -171,14 +254,14 @@ export function syncSunAndCelestialBodies() {
 export function updateSkybox(syncNetwork = true) {
   const ws = S.worldSettings;
   const grad = skyCtx.createLinearGradient(0, 0, 0, 256);
-  grad.addColorStop(0.0, ws.skyTop);
-  grad.addColorStop(0.52, ws.skyMid);
-  grad.addColorStop(1.0, ws.skyBot);
+  grad.addColorStop(0.0, ws.skyTop || '#1565c0');
+  grad.addColorStop(0.52, ws.skyMid || '#62b6ff');
+  grad.addColorStop(1.0, ws.skyBot || '#dff4ff');
   skyCtx.fillStyle = grad;
   skyCtx.fillRect(0, 0, 64, 256);
   skyTex.needsUpdate = true;
-  scene.fog.color.set(ws.fogColor);
-  scene.fog.density = ws.fogDensity;
+  scene.fog.color.set(ws.fogColor || '#88ccff');
+  scene.fog.density = ws.fogDensity ?? 0.0038;
 
   syncSunAndCelestialBodies();
 
