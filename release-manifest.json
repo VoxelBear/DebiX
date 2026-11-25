@@ -1,13 +1,13 @@
 {
   "app": "DebiX",
-  "version": "0.0.6",
-  "commitSha": "6ca698f1bad291930761b4424fd64849d7881cb6",
-  "timestamp": 1795364825200,
-  "notes": "дебичи",
+  "version": "0.0.7",
+  "commitSha": "d30cbaef74615431330d4ab98602ef77468ffdd5",
+  "timestamp": 1795624905718,
+  "notes": "Осадки, атмосферные явления, их влияние на игрока и мир",
   "files": {
     "index.html": {
-      "sha256": "c757a346148f2d4c78127d3984da8ffedd7033956d8a70b18a9e4ba725ee9fb1",
-      "size": 25268
+      "sha256": "6ff35e4355d0b4841e92504c39b4ed4dc5ca532891197c1b6b249bb0fbe0e770",
+      "size": 25309
     },
     "lan-server.js": {
       "sha256": "0b13fe26078b69f83b8a65b7baa4112d814a81d877a9d4ed35eb31a9f33d20e6",
@@ -26,28 +26,28 @@
       "size": 4370
     },
     "css/hud.css": {
-      "sha256": "a37b08a7a25be4b83b76a9af671a6e829015605b18d07a72c89bf40adf5542ca",
-      "size": 10184
+      "sha256": "aac691ec9e2f98436a9a1498181e765ca303b10d44629456df824cd5369e379a",
+      "size": 11653
     },
     "css/studio.css": {
       "sha256": "19d41f757fea1a2b445da05afb22b1b9733277ca5c6f8d2979459f96dec471ad",
       "size": 28918
     },
     "src/core/AudioEngine.js": {
-      "sha256": "dfddd6cc349dae2b6d6991429c78fbb57dcd9b8612489274223618d88fba849f",
-      "size": 51371
+      "sha256": "f738d9c2fdccacb88b40a2bac37a7110dfdfb53a2b89a70783038ca2c9c9d2b3",
+      "size": 55922
     },
     "src/core/BBModelLoader.js": {
       "sha256": "e0068abae652eeafb61f1c58f607396a1e0f9141f1c3c44783712c64d20eb6a8",
       "size": 17424
     },
     "src/core/CharacterRig.js": {
-      "sha256": "552b774311c9c93715d0c9539bf2e627d37bd7d25f2def1277df85f3610148c1",
-      "size": 116118
+      "sha256": "e1b7d157305c3e05fe27f86ab8cddc15ca826171fcf7ad9341c66eeec54cdf77",
+      "size": 116146
     },
     "src/core/EntityManager.js": {
-      "sha256": "03d6786d60da19253f2607de012ead3b8a80d2c3c528ee17815375b1f426b97f",
-      "size": 28020
+      "sha256": "4d7798e0abf79251a9cebab8c409e0ef693e6d91e7bd09b65e55af4716a8acdd",
+      "size": 29128
     },
     "src/core/MultiplayerManager.js": {
       "sha256": "6095d8efa4e56295d44f4dc719e3e867f16dd5ce8397c97e5d663dd99c14dd0c",
@@ -62,24 +62,40 @@
       "size": 9570
     },
     "src/core/ScriptEngine.js": {
-      "sha256": "cd245e264a2d9b82b0bf545eafe1d1f5c4b34b8b923e5d7d9844380912c4827c",
-      "size": 94503
+      "sha256": "f622aee8875aa659e836d0e7334209a5602a5b0035acc63f6c910a7d89cc071d",
+      "size": 98958
     },
     "src/core/Serializer.js": {
-      "sha256": "a114a2e12df3f82210d8327a1720d84922d9a3f1bdd53e0e24cec706b724fe8c",
-      "size": 54790
+      "sha256": "a4bc383bf3fa6503c2c1c95e667523d6f664533292e31b5413bda33c67714bb5",
+      "size": 56875
     },
     "src/core/State.js": {
-      "sha256": "53f2dd70503084f7831fd3fb5aae2db3eb925e5e2a58f7b35e24ca01d8ee1db5",
-      "size": 8138
+      "sha256": "8243ee069aa082ed84399abd96686380972c1385a6cc8e09edc546d2d7b1548f",
+      "size": 8867
+    },
+    "src/core/StatusEffects.js": {
+      "sha256": "1113e3462771358d27124d2b020fde7d6daba2ac9b0249821b28895bb4795f96",
+      "size": 47844
+    },
+    "src/core/SurfaceWeatherLayer.js": {
+      "sha256": "2754ddabb9ab17e16138c92501467ce874a256a707d744c3293267d0508c2d13",
+      "size": 27537
+    },
+    "src/core/SurfaceWeatherVisuals.js": {
+      "sha256": "409b584852382d0e056e056725ce35d40152adfd8e3786a34f5822f9195ece1e",
+      "size": 44436
     },
     "src/core/TextureFactory.js": {
       "sha256": "47df6a52451392711d006bfa30f2c3e0ea9cb4ae627acc7b4bcba32dc56c5afd",
       "size": 17245
     },
+    "src/core/WeatherAndClouds.js": {
+      "sha256": "ba326ce2d2cf3888b8d0a1f9e1d97219505dfe34c6230785c260d369511c0c74",
+      "size": 38542
+    },
     "src/core/WorldRegistry.js": {
-      "sha256": "d086581c6ccb2e86ce173c82524b6a284264d91a7d9f510854682b8355f62d8d",
-      "size": 63790
+      "sha256": "d98fea0322dcd78fb8b3c93e21598ab4364f70130bca7dbe3672691b78ce1810",
+      "size": 64886
     },
     "src/games/HeavenQueueGame.js": {
       "sha256": "3ce43a321418b1054c4900aec451042a514fbb73d23b90e34a9c1a9045352b60",
@@ -98,33 +114,33 @@
       "size": 44909
     },
     "src/player/PhysicsAndCombat.js": {
-      "sha256": "250da74431670fdb3d3883045b878d69bedc7e134630ae43e13c32ba745e508f",
-      "size": 286557
+      "sha256": "9efe172d4c5935a3cf48d057fd5fc59333e275f24edca970ae0a60d6a462ddb7",
+      "size": 293740
     },
     "src/player/PlayerController.js": {
-      "sha256": "e26b756e9d9ff166e08142ee47b2057b1d6bcb0f46bc97b64d3bba4a929420ec",
-      "size": 46064
+      "sha256": "f6511a14d34f513dd5626867269aa14445e4e2a095c44d3974424bb2e4a278f9",
+      "size": 47355
     },
     "src/studio/HierarchyAndSpawn.js": {
       "sha256": "07e5678e0f45f47a920fc0ae9c8ed043ef07665ba1b9796334d170e55def4958",
       "size": 181398
     },
     "src/studio/InspectorPanel.js": {
-      "sha256": "7596a11f768c73d17491a79762fdcf7165b291d8cae7efa82fa2e77536596fe8",
-      "size": 323361
+      "sha256": "aa0119aa5411406f1a82356ba6defb5acb5aa9180f43b102f4b2271570397858",
+      "size": 339098
     },
     "src/studio/PaintStudio2D.js": {
       "sha256": "6ae5c93e0bf956d868105d141d003210d43d9c28740d4bdf658b6f369dc12f44",
       "size": 49095
     },
     "src/studio/StudioController.js": {
-      "sha256": "70bc37358dc30ba0cdfe0381b4efc3c24a1610185541ac8729dcba11858f0dfc",
-      "size": 108165
+      "sha256": "c1280f4b17e298a431c71bd243ab85a39fc4b67d8ef50681c023d7a90a4ad95f",
+      "size": 108444
     },
     "src/studio/StudioGrid.js": {
       "sha256": "7013ca0b6fb4adc21eca7af0addeab3a824b9bc503e72f296f2668516de46eb4",
       "size": 17171
     }
   },
-  "signature": "tr7h/g8k97y5GmlsMwf+luCtW7oBuyaCYcO8DX+o62X3m91/C+fADjhfXJ/AfTNW//j92Z4dGsDnSYWn6ipNDQ=="
+  "signature": "vX7dw7FvSjkLHbos4YbYKkHqS5WwaJ4tnM72m+SaPAJ009RHJV/6FJY6BECejD4gbeWDNVye6az860rQtfz4Bw=="
 }
