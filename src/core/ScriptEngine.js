@@ -14,6 +14,23 @@ import {
   refreshEntityTagWithHP,
   updateShopUI
 } from './EntityManager.js';
+import {
+  applyStatusEffect,
+  applyWetness,
+  clearTargetStatusEffects,
+  getEffectStacks,
+  getEffectiveWorldTemperatureKey,
+  getWetness,
+  getWetnessLiquidType,
+  isEntityFrozen,
+  isEntitySoaked,
+  WORLD_TEMPERATURE_PROFILES
+} from './StatusEffects.js';
+import {
+  WEATHER_PROFILES,
+  isPointExposedToSky,
+  normalizeWeatherSubstance
+} from './WeatherAndClouds.js';
 
 const MAX_LOOP_ITERATIONS_PER_CALL = 5000;
 const MAX_FRAME_BUDGET_MS = 3.5;
@@ -1017,6 +1034,16 @@ function createBlockFacade(box, scriptData = null, compiled = null) {
     },
     damage() {},
 
+    applyEffect(type, stacks = 1) {
+      return applyStatusEffect(box, String(type || ''), safeNum(stacks, 1, 1, 10));
+    },
+    getEffectStacks(type) {
+      return getEffectStacks(box, String(type || ''));
+    },
+    clearEffects() {
+      clearTargetStatusEffects(box);
+    },
+
     sendSignal(targetTag, action = 'toggle_motion') {
       if (!targetTag || typeof window.__debixActivateBlockMotionByTag !== 'function') return;
       window.__debixActivateBlockMotionByTag(box, String(targetTag), String(action));
@@ -1100,6 +1127,31 @@ function createEntityFacade(ent, scriptData = null, compiled = null) {
       const dmg = safeNum(amount, 0, 0, 5000);
       if (dmg <= 0 || typeof window.__debixScriptDealDamage !== 'function') return;
       window.__debixScriptDealDamage(ent, dmg);
+    },
+
+    applyEffect(type, stacks = 1) {
+      return applyStatusEffect(ent, String(type || ''), safeNum(stacks, 1, 1, 10));
+    },
+    getEffectStacks(type) {
+      return getEffectStacks(ent, String(type || ''));
+    },
+    clearEffects() {
+      clearTargetStatusEffects(ent);
+    },
+    isFrozen() {
+      return isEntityFrozen(ent);
+    },
+    getWetness() {
+      return getWetness(ent);
+    },
+    getWetLiquidType() {
+      return getWetnessLiquidType(ent);
+    },
+    isSoaked() {
+      return isEntitySoaked(ent);
+    },
+    applyWetness(amount = 15, liquidType = 'water') {
+      return applyWetness(ent, safeNum(amount, 15, 0, 100), String(liquidType || 'water'));
     },
 
     getWalkSpeed() { return ent.walkSpeed || (ent.isP ? 7.6 : 5.4); },
@@ -1211,6 +1263,64 @@ function createEngineApiBridge(sourceLabel, dt = 0.016) {
     world: Object.freeze({
       getGravity() { return S.worldSettings.gravity ?? 22; },
       setGravity(g) { S.worldSettings.gravity = safeNum(g, 22, 0, 100); },
+
+      getTemperature() {
+        return S.worldSettings.worldTemperature || 'normal';
+      },
+      getEffectiveTemperature() {
+        return getEffectiveWorldTemperatureKey();
+      },
+      setTemperature(tempKey) {
+        const k = String(tempKey || 'normal');
+        if (WORLD_TEMPERATURE_PROFILES[k]) {
+          S.worldSettings.worldTemperature = k;
+          if (S.weatherRuntime) {
+            S.weatherRuntime.tempOffset = 0;
+            S.weatherRuntime.effectiveTemp = k;
+          }
+        }
+      },
+      getWeather() {
+        return normalizeWeatherSubstance(S.worldSettings.weatherSettings?.type);
+      },
+      getWeatherPhase() {
+        return S.weatherRuntime?.phase || 'none';
+      },
+      setWeather(type, intensity = null) {
+        if (!S.worldSettings.weatherSettings) {
+          S.worldSettings.weatherSettings = {
+            type: 'none',
+            intensity: 0.75,
+            affectTemperature: true,
+            accumulateSurface: true,
+            growLiquids: true
+          };
+        }
+        const t = normalizeWeatherSubstance(String(type || 'none'));
+        if (WEATHER_PROFILES[t]) S.worldSettings.weatherSettings.type = t;
+        if (intensity !== null) {
+          S.worldSettings.weatherSettings.intensity = safeNum(intensity, 0.75, 0.1, 1.0);
+        }
+      },
+      setClouds(opts = {}) {
+        if (!opts || typeof opts !== 'object') return;
+        if (!S.worldSettings.cloudsSettings) {
+          S.worldSettings.cloudsSettings = {
+            enabled: true, color: '#ffffff', coverage: 0.35, height: 72, dynamicCoverage: false, dynamicSpeed: 0.04
+          };
+        }
+        const cs = S.worldSettings.cloudsSettings;
+        if (opts.enabled !== undefined) cs.enabled = Boolean(opts.enabled);
+        if (opts.color) cs.color = String(opts.color);
+        if (opts.coverage !== undefined) cs.coverage = safeNum(opts.coverage, cs.coverage, 0, 1);
+        if (opts.height !== undefined) cs.height = safeNum(opts.height, cs.height, 16, 260);
+        if (opts.dynamicCoverage !== undefined) cs.dynamicCoverage = Boolean(opts.dynamicCoverage);
+        if (opts.dynamicSpeed !== undefined) cs.dynamicSpeed = safeNum(opts.dynamicSpeed, cs.dynamicSpeed, 0.005, 0.5);
+      },
+      isExposedToSky(pos) {
+        if (!pos) return true;
+        return isPointExposedToSky(safeNum(pos.x, 0), safeNum(pos.y, 0), safeNum(pos.z, 0));
+      },
 
       setSkyColors(topHex, midHex, botHex, fogHex) {
         if (topHex) S.worldSettings.skyTop = String(topHex);
@@ -2021,6 +2131,10 @@ const API_CHEATSHEET_ITEMS = [
   { label: '🎆 Всплеск 3D-частиц', snippet: "const p = self.getPosition();\napi.world.spawnParticles(p.x, p.y + 1, p.z, 15, { color: '#56f0ff', speed: 5 });" },
   { label: '🔊 Проиграть звук', snippet: "api.audio.playSfx('coil', self.getPosition());" },
   { label: '📢 Показать баннер', snippet: "api.ui.showBanner('Скрипт сработал!', '#ffce3a');" },
+  { label: '🧪 Наложить эффект', snippet: "if (api.player) api.player.applyEffect('freeze', 3); // 'poison' | 'burn' | 'freeze'" },
+  { label: '🌦️ Осадки и Облака', snippet: "api.world.setWeather('water', 0.85); // none|water|blood|acid|lava\napi.world.setClouds({ coverage: 0.9, color: '#64748b' });" },
+  { label: '💧 Влажность игрока', snippet: "if (api.player) api.player.applyWetness(35, 'water');" },
+  { label: '🌡️ Температура мира', snippet: "api.world.setTemperature('freezing'); // freezing|cold|cool|normal|warm|hot|hell" },
   { label: '📝 Вывод в консоль', snippet: "api.log('Текущее время:', api.time.toFixed(1));" }
 ];
 

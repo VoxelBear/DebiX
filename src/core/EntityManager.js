@@ -11,6 +11,7 @@ import {
   buildItemGroup,
   updateGroupRootHitbox
 } from './CharacterRig.js';
+import { createDefaultStatusEffectsState, getEffectStacks } from './StatusEffects.js';
 
 export function attachRigToEntity(ent) {
   ent.rig.g.traverse(o => {
@@ -83,7 +84,13 @@ export function spawnWorldItem(itemData, x = 0, y = 2, z = 0, vx = 0, vy = 0, vz
     scaleY,
     scaleZ,
     grounded: false,
-    pickupCooldown: 0.35
+    pickupCooldown: 0.35,
+    effectSource: opts.effectSource || data.effectSource || 'none',
+    isFlammable: Boolean(opts.isFlammable ?? data.isFlammable),
+    takesFireDamage: Boolean(opts.takesFireDamage ?? data.takesFireDamage),
+    statusEffects: data.statusEffects
+      ? JSON.parse(JSON.stringify(data.statusEffects))
+      : createDefaultStatusEffectsState()
   };
 
   group.traverse(o => {
@@ -405,9 +412,14 @@ export function renderHotbarUI() {
       } else if (!item.infiniteDurability) {
         badge = `${Math.ceil((item.durability / Math.max(1, item.maxDurability)) * 100)}%`;
       }
+      const fxIcons =
+        (getEffectStacks(item, 'freeze') > 0 ? '❄️' : '') +
+        (getEffectStacks(item, 'burn') > 0 ? '🔥' : '') +
+        (getEffectStacks(item, 'poison') > 0 ? '☠️' : '');
+      const frozenStyle = getEffectStacks(item, 'freeze') > 0 ? 'border-color:#56f0ff;box-shadow:inset 0 0 12px rgba(86,240,255,0.45);' : '';
       html += `
-        <div class="slot ${isAct ? 'active' : ''}" data-slot="${i}" title="${item.name}">
-          <span class="num">${i + 1}</span>
+        <div class="slot ${isAct ? 'active' : ''}" data-slot="${i}" title="${item.name}" style="${frozenStyle}">
+          <span class="num">${i + 1}${fxIcons ? ' ' + fxIcons : ''}</span>
           <span class="ico">${item.icon || '🗡️'}</span>
           <span style="max-width:58px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.name}</span>
           ${badge ? `<small style="font-size:9px;color:#ffce3a">${badge}</small>` : ''}
@@ -518,6 +530,8 @@ export function spawnPlayer(opts = {}) {
     attackCooldown: 0,
     kickCooldown: 0,
     ragdoll: null,
+    statusEffects: createDefaultStatusEffectsState(),
+    effectSource: opts.effectSource || 'none',
     reloadTimer: 0,
     colliderRadius: 0.42,
     colliderHeight: 2.5,
@@ -729,6 +743,8 @@ export function spawnCustomNPC(opts = {}) {
     _permanentlyDead: false,
     _deadCooldown: 0,
     ragdoll: null,
+    statusEffects: opts.statusEffects ? JSON.parse(JSON.stringify(opts.statusEffects)) : createDefaultStatusEffectsState(),
+    effectSource: opts.effectSource || 'none',
     hp: opts.hp ?? 100,
     maxHp: opts.maxHp ?? 100,
     hpBarTimer: 0,

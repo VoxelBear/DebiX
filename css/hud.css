@@ -280,3 +280,44 @@
   transition:background .15s;
 }
 .emotes-stop-btn:hover{background:rgba(255,62,62,.4)}
+
+/* HUD активных статусных эффектов игрока и температуры мира */
+#statusEffectsHUD{
+  position:fixed;
+  top:calc(56px + env(safe-area-inset-top,0px));
+  left:50%;
+  transform:translateX(-50%);
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:center;
+  gap:6px;
+  pointer-events:none;
+  z-index:16;
+  max-width:86vw;
+}
+.se-pill{
+  background:rgba(16,20,30,.9);
+  border:2px solid rgba(255,255,255,.28);
+  border-radius:10px;
+  padding:4px 10px;
+  font:800 11.5px var(--f);
+  color:#fff;
+  display:flex;
+  align-items:center;
+  gap:5px;
+  backdrop-filter:blur(6px);
+  box-shadow:0 4px 14px rgba(0,0,0,.45);
+}
+.se-pill b{
+  background:rgba(0,0,0,.45);
+  padding:1px 6px;
+  border-radius:6px;
+  font-size:11px;
+}
+.se-poison{border-color:#4ade80;color:#bbf7d0;box-shadow:0 0 12px rgba(74,222,128,.35)}
+.se-burn{border-color:#ff6b2b;color:#fed7aa;box-shadow:0 0 14px rgba(255,107,43,.45);animation:pulse .55s infinite alternate}
+.se-freeze{border-color:#38bdf8;color:#bae6fd;box-shadow:0 0 14px rgba(56,189,248,.45)}
+.se-wet{border-color:#38bdf8;color:#e0f2fe;background:rgba(12,42,68,.9);box-shadow:0 0 12px rgba(56,189,248,.38)}
+.se-wet-blood{border-color:#dc2626;color:#fecaca;background:rgba(68,14,18,.9);box-shadow:0 0 12px rgba(220,38,38,.42)}
+.se-wet-acid{border-color:#4ade80;color:#dcfce7;background:rgba(14,54,28,.9);box-shadow:0 0 12px rgba(74,222,128,.4)}
+.se-temp{border-color:#fbbf24;color:#fef3c7;opacity:.92}

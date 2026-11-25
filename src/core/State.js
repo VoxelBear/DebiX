@@ -78,6 +78,22 @@ export const S = {
       shellGlow: true
     },
     celestialBodies: [], // Небесные тела на скайбоксе: планеты, звёзды, луны
+    worldTemperature: 'normal', // 'freezing' | 'cold' | 'cool' | 'normal' | 'warm' | 'hot' | 'hell'
+    cloudsSettings: {
+      enabled: true,
+      color: '#ffffff',
+      coverage: 0.35,
+      height: 72,
+      dynamicCoverage: false,
+      dynamicSpeed: 0.04
+    },
+    weatherSettings: {
+      type: 'none', // 'none' | 'water' | 'blood' | 'acid' | 'lava'
+      intensity: 0.75,
+      affectTemperature: true,
+      accumulateSurface: true,
+      growLiquids: true
+    },
     gravity: 22,
     respawnMode: 'timer', // 'instant' | 'timer' | 'spectator'
     respawnDelay: 3.5,    // Секунд до респавна в режиме 'timer'
@@ -190,7 +206,19 @@ export const S = {
   btnJump: false,
   joy: { id: null, ox: 0, oy: 0, vx: 0, vy: 0 },
   look: { id: null, lx: 0, ly: 0 },
-  contactDamageCooldown: 0
+  contactDamageCooldown: 0,
+  weatherRuntime: {
+    substance: 'none',
+    phase: 'none',
+    phaseLabel: '☀️ Ясно',
+    tempOffset: 0,
+    effectiveTemp: 'normal',
+    hasHail: false,
+    hasMist: false,
+    mistColor: '#ffffff',
+    mistDensity: 0,
+    duration: 0
+  }
 };
 
 export function showBanner(txt, col = '#ffce3a') {

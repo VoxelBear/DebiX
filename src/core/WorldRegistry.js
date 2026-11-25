@@ -6,6 +6,16 @@ import { makeTagSprite, updateTag, updateGroupRootHitbox } from './CharacterRig.
 import { createDefaultParticleData, clearAllParticles } from './ParticleSystem.js';
 import { createDefaultScriptData, resetAllScriptsRuntime, compileSandboxedScript, ensureScriptContainer } from './ScriptEngine.js';
 import { buildBBModelGroup } from './BBModelLoader.js';
+import {
+  createDefaultStatusEffectsState,
+  collectBurningLightCandidates,
+  clearAllStatusEffectVisuals,
+  resetAllStatusEffectsRuntime
+} from './StatusEffects.js';
+import {
+  clearSurfaceWeatherLayer,
+  resetSurfaceWeatherLayer
+} from './SurfaceWeatherLayer.js';
 
 const MAX_ACTIVE_POINT_LIGHTS = 12;
 const pointLightPool = [];
@@ -878,6 +888,7 @@ export function updateWorldLights(camPos) {
   if (S.archangelEnt) collectEntityRealLights(S.archangelEnt);
   if (S.workbenchPreviewGroup) collectGroupRealLights(S.workbenchPreviewGroup);
   if (S.studioMannequinRig) collectEntityRealLights(S.studioMannequinRig);
+  collectBurningLightCandidates(pushRealLightCandidate);
 
   if (pointCandidates.length > MAX_ACTIVE_POINT_LIGHTS) {
     pointCandidates.sort((a, b) => a.distSq - b.distSq);
@@ -901,6 +912,8 @@ export function updateWorldLights(camPos) {
 
 export function clearWorld() {
   clearAllParticles();
+  clearAllStatusEffectVisuals();
+  clearSurfaceWeatherLayer();
   clearStudioMotionHelpers();
   for (const pl of pointLightPool) {
     pl.intensity = 0;
@@ -946,6 +959,12 @@ export function addSceneBlock(opts) {
     liquidPhysicsEnabled = true,
     liquidBuoyancy = 45,
     liquidDrag = 3.5,
+    liquidTemp = 'neutral',
+    effectSource = 'none',
+    isFlammable = false,
+    takesFireDamage = false,
+    maxFireHp = 100,
+    statusEffects = null,
     bounciness = 0,
     conveyorVz = 0,
     conveyorVx = 0,
@@ -1045,6 +1064,13 @@ export function addSceneBlock(opts) {
     liquidPhysicsEnabled: liquidPhysicsEnabled !== false,
     liquidBuoyancy: clamp(Number(liquidBuoyancy) || 85, 1, 5000),
     liquidDrag: clamp(Number(liquidDrag) || 3.5, 0.1, 30),
+    liquidTemp: liquidTemp || 'neutral',
+    effectSource: effectSource || 'none',
+    isFlammable: Boolean(isFlammable),
+    takesFireDamage: Boolean(takesFireDamage),
+    maxFireHp: Math.max(10, Number(maxFireHp) || 100),
+    fireHp: Math.max(10, Number(maxFireHp) || 100),
+    statusEffects: statusEffects ? JSON.parse(JSON.stringify(statusEffects)) : createDefaultStatusEffectsState(),
     physVx: 0,
     physVy: 0,
     physVz: 0,
@@ -1695,6 +1721,9 @@ export function resetAllLogicRuntime(reanchorCurrentAsBase = false) {
     box._externalTorqueZ = 0;
     box._depletedDisabled = false;
     box._interactionDisabled = false;
+    delete box._weatherBaseH;
+    delete box._weatherBaseY0;
+    box._weatherRunoffAccum = 0;
     const isEditMode = S.state === 'edit';
     const vis = !box.isDisabled && !(isEditMode && box.editorHidden);
     box.m.visible = vis;
@@ -1724,6 +1753,8 @@ export function resetAllLogicRuntime(reanchorCurrentAsBase = false) {
   if (S.gmodTool) {
     S.gmodTool.firstHit = null;
   }
+  resetSurfaceWeatherLayer(false);
+  resetAllStatusEffectsRuntime();
   resetAllScriptsRuntime();
 }
 

@@ -58,6 +58,23 @@ import {
   runItemScriptHook,
   runWorldScriptHook
 } from '../core/ScriptEngine.js';
+import {
+  registerStatusEffectsHooks,
+  updateStatusEffectsRuntime,
+  transferEffectsOnContact,
+  interactTargetWithLiquid,
+  clearTargetStatusEffects,
+  isEntityFrozen,
+  isItemFrozen,
+  isBlockSlippery,
+  getWetWeightMultiplier,
+  getWetStaminaDrainMultiplier,
+  isEntitySoaked
+} from '../core/StatusEffects.js';
+import {
+  registerSurfaceWeatherHooks,
+  sampleSurfaceWeatherAt
+} from '../core/SurfaceWeatherLayer.js';
 
 const _vLocal = new THREE.Vector3();
 const _vNormal = new THREE.Vector3();
@@ -452,6 +469,9 @@ export function completePlayerRespawn(isFullRestart = false) {
   player.inLiquid = false;
   player.attackAnimT = 0;
   player.ragdoll = null;
+  clearTargetStatusEffects(player);
+  player._iceSlideVx = 0;
+  player._iceSlideVz = 0;
   player.kickCooldown = 0;
   player._ropePullX = 0;
   player._ropePullZ = 0;
@@ -884,7 +904,9 @@ export function activateBlockMotion(targetBox, command = 'toggle_motion', ignore
       rt.stayTimer = stay;
     }
     try { (sfx.gate || sfx.coil)?.(); } catch (_) {}
-    return false;
+    return true;
+  }
+  return false;
 }
 
 window.__debixActivateBlockMotionByTag = (sourceBox, targetTag, action) => {
@@ -896,8 +918,14 @@ window.__debixActivateBlockMotionByTag = (sourceBox, targetTag, action) => {
 window.__debixScriptDealDamage = (target, amount) => {
   dealDamage(target, amount, null, 4);
 };
-  return false;
-}
+registerStatusEffectsHooks({
+  dealDamage: (target, amount, attacker, kb, opts) => dealDamage(target, amount, attacker, kb, opts),
+  updateBlockOBB: box => updateBlockOBB(box),
+  triggerStagger: (target, dirX, dirZ, strength) => triggerEntityStagger(target, dirX, dirZ, strength, 4.2)
+});
+registerSurfaceWeatherHooks({
+  updateBlockOBB: box => updateBlockOBB(box)
+});
 
 function applyBlockConsumableDepletion(box) {
   const it = box.interactionData;
@@ -1946,6 +1974,7 @@ export function updateDynamicBlocksPhysics(dt, player) {
           cb.cpVisualGroup.rotation.copy(cb.m.rotation);
         }
         if (cb.haloSprite) cb.haloSprite.position.copy(cb.m.position);
+      transferEffectsOnContact(cb, player, dt, true, 1.0);
       }
     }
   }
@@ -2230,6 +2259,7 @@ export function updateDynamicBlocksPhysics(dt, player) {
         ) {
           inLiq = true;
           anyInLiquid = true;
+          interactTargetWithLiquid(mb, liq, dt);
           maxLiqDrag = Math.max(maxLiqDrag, clamp(Number(liq.liquidDrag) || 4.2, 1.5, 25));
 
           const subH = clamp(liq.y1 - mb.y0, 0, mb.h);
@@ -2472,6 +2502,8 @@ export function updateDynamicBlocksPhysics(dt, player) {
 
         if (!colHit || colHit.pen <= 0) continue;
 
+        transferEffectsOnContact(b, other, dt, true, 0.85);
+
         const otherCl = other._physCluster;
         const otherMovable = Boolean(other.isDynamicPhysics && (!otherCl || !otherCl.isStaticAnchored));
 
@@ -2498,8 +2530,10 @@ export function updateDynamicBlocksPhysics(dt, player) {
             b.physGrounded = true;
             anyGrounded = true;
 
-            cl.vx *= Math.pow(0.015, dt);
-            cl.vz *= Math.pow(0.015, dt);
+            const iceSlip = isBlockSlippery(b) || isBlockSlippery(other);
+            const floorFric = iceSlip ? 0.72 : 0.015;
+            cl.vx *= Math.pow(floorFric, dt);
+            cl.vz *= Math.pow(floorFric, dt);
           } else {
             transformWeldedCluster(cl, 0, -colHit.pen, 0, null, null);
             if (cl.vy > 0) cl.vy = 0;
@@ -2565,6 +2599,7 @@ export function updateDynamicBlocksPhysics(dt, player) {
 
           if (impactPower > 2.4) {
             b._hitEntCd = 0.48;
+            transferEffectsOnContact(b, ent, 0, true, 1.1);
             let nxI, nzI;
             if (horizSpd > 0.6) {
               nxI = cl.vx / horizSpd;
@@ -2612,6 +2647,7 @@ export function updateDynamicBlocksPhysics(dt, player) {
           }
         }
       }
+
       if (b._hitEntCd > 0) b._hitEntCd = Math.max(0, b._hitEntCd - dt);
     }
 
@@ -3232,7 +3268,7 @@ export function dealDamage(target, amount, attacker = null, customKnockback = 8,
       dropHeldOrCarriedItem(target, 3.8, `💥 Ты получил урон и выронил «${target.carriedItem.name}»!`);
     }
     const held = getActiveHeldItem(target);
-    if (held) {
+    if (held && !isItemFrozen(held)) {
       if (held.equipStats && held.equipStats.invulnerable) {
         sfx.shieldBlock();
         showBanner(`🛡️ «${held.name}» полностью заблокировал урон!`, '#56f0ff');
@@ -3392,6 +3428,7 @@ export function dealDamage(target, amount, attacker = null, customKnockback = 8,
           if (!target || !target.rig || target._permanentlyDead) return;
           target._deadCooldown = 0;
           target.hp = target.maxHp || 100;
+          target.rig.g.rotation.set(0, target.rot || 0, 0);
           target.rig.g.visible = true;
           if (target.tag) target.tag.visible = true;
           refreshEntityTagWithHP(target);
@@ -3433,7 +3470,7 @@ export function computeMuzzleAndAim(player, item) {
   if (player.rig && player.rig.activeItemGroup) {
     if (player.isP) {
       player.rot = S.yaw + Math.PI;
-      player.rig.g.rotation.y = player.rot;
+      player.rig.g.rotation.set(0, player.rot, 0);
     }
     player.rig.g.updateMatrixWorld(true);
     const holder = player.rig.activeItemGroup.userData.partsHolder || player.rig.activeItemGroup;
@@ -3703,6 +3740,10 @@ export function reloadActiveWeapon() {
   if (!player || S.state !== 'play' || S.playerDead) return false;
   const item = getActiveHeldItem(player);
   if (!item || item.useType !== 'ranged') return false;
+  if (isItemFrozen(item)) {
+    showBanner(`❄️ Предмет «${item.name}» заморожен и не работает!`, '#56f0ff');
+    return false;
+  }
   if (item.infiniteAmmo || item.ammo >= item.magSize) return false;
   if ((item.reserveAmmo ?? 0) <= 0) {
     sfx.oof();
@@ -3733,6 +3774,7 @@ export function releaseChargedThrow() {
   if (!player || S.state !== 'play' || S.playerDead) return;
   const item = getActiveHeldItem(player);
   if (!item || item.useType !== 'throwable') return;
+  if (isEntityFrozen(player) || isItemFrozen(item)) return;
 
   const maxChg = Math.max(0.25, Number(item.maxChargeTime) || 1.1);
   const ratio = clamp(S.throwChargeT / maxChg, 0.0, 1.0);
@@ -3744,7 +3786,7 @@ export function releaseChargedThrow() {
   const speedMult = finalSpd / maxSpd;
 
   player.rot = S.yaw + Math.PI;
-  if (player.rig) player.rig.g.rotation.y = player.rot;
+  if (player.rig) player.rig.g.rotation.set(0, player.rot, 0);
 
   triggerEntityAttack(player, 'punch');
   sfx.slap();
@@ -4025,6 +4067,12 @@ export function updateEntityRagdollPhysics(ent, dt) {
       }
       return true;
     }
+    ent.ragdoll = null;
+    if (ent.rig?.g) {
+      ent.rig.g.position.set(ent.x, ent.y, ent.z);
+      ent.rig.g.rotation.set(0, ent.rot || 0, 0);
+      ent.rig.g.quaternion.setFromEuler(ent.rig.g.rotation);
+    }
     return false;
   }
 
@@ -4256,6 +4304,7 @@ export function performPlayerKick() {
   const player = S.player;
   if (S.state !== 'play' || !player || S.playerDead || player.isFlying) return false;
   if (player.ragdoll?.active) return false;
+  if (isEntityFrozen(player)) return false;
   if ((player.kickCooldown || 0) > 0) return false;
 
   // Небольшой расход стамины (если система стамины включена)
@@ -4274,7 +4323,7 @@ export function performPlayerKick() {
   player.kickCooldown = 0.72;
   player.attackCooldown = Math.max(player.attackCooldown || 0, 0.32);
   player.rot = S.yaw + Math.PI;
-  if (player.rig?.g) player.rig.g.rotation.y = player.rot;
+  if (player.rig?.g) player.rig.g.rotation.set(0, player.rot, 0);
 
   triggerEntityAttack(player, 'kick');
   sfx.swing?.() || sfx.slap?.();
@@ -4299,6 +4348,7 @@ export function performPlayerKick() {
       const dot = dist > 0.1 ? (toX / dist) * fx + (toZ / dist) * fz : 1;
       if (dot > 0.25 || dist <= 1.3) {
         hitAnything = true;
+        transferEffectsOnContact(player, t, 0, true, 1.0);
         // Вектор импульса от точки удара (игрок -> цель)
         const dirLen = dist > 0.05 ? dist : 1;
         const impDirX = dist > 0.05 ? (toX / dirLen) : fx;
@@ -4387,6 +4437,7 @@ export function performPlayerKick() {
         const hitPt = new THREE.Vector3(player.x + fx * Math.min(dist + 0.4, 1.8), player.y + 0.9, player.z + fz * Math.min(dist + 0.4, 1.8));
         const kickPower = 22.0 * clamp(pWeight / 70, 0.5, 2.5);
         applyImpulseToDynamicBlock(b, fx * kickPower, 4.8, fz * kickPower, hitPt, false);
+        transferEffectsOnContact(player, b, 0, true, 1.0);
         hitAnything = true;
       }
     }
@@ -4412,13 +4463,14 @@ export function performPlayerMeleeAttack(isSpecialKey = false) {
   const player = S.player;
   if (S.state !== 'play' || !player || S.playerDead) return;
   if (player.attackCooldown > 0) return;
+  if (isEntityFrozen(player)) return;
 
   // 0. Если игрок несёт физический блок (Rigidbody) — ЛКМ бросает его вперёд с учётом веса!
   if (player.carriedPhysicsBlock) {
     const blkName = player.carriedPhysicsBlock.label;
     const blkW = player.carriedPhysicsBlock.weight || 15;
     player.rot = S.yaw + Math.PI;
-    if (player.rig) player.rig.g.rotation.y = player.rot;
+    if (player.rig) player.rig.g.rotation.set(0, player.rot, 0);
     triggerEntityAttack(player, 'push');
     dropCarriedPhysicsBlock(player, 15.5, `🚀 Ты метнул «${blkName}» (${blkW} кг)!`);
     player.attackCooldown = 0.35;
@@ -4428,7 +4480,7 @@ export function performPlayerMeleeAttack(isSpecialKey = false) {
   // 1. Если игрок несёт 2-ручный контейнер — ЛКМ бросает его вперёд!
   if (player.carriedItem) {
     player.rot = S.yaw + Math.PI;
-    if (player.rig) player.rig.g.rotation.y = player.rot;
+    if (player.rig) player.rig.g.rotation.set(0, player.rot, 0);
     triggerEntityAttack(player, 'push');
     dropHeldOrCarriedItem(player, 9.5, `📦 Ты метнул «${player.carriedItem.name}»!`);
     player.attackCooldown = 0.35;
@@ -4436,6 +4488,12 @@ export function performPlayerMeleeAttack(isSpecialKey = false) {
   }
 
   const item = !isSpecialKey ? getActiveHeldItem(player) : null;
+  if (item && isItemFrozen(item)) {
+    sfx.oof?.();
+    showBanner(`❄️ «${item.name}» заморожен — его нельзя использовать!`, '#56f0ff');
+    player.attackCooldown = 0.3;
+    return;
+  }
   if (item && item.scriptData?.enabled) {
     runItemScriptHook(item, 'onUse', { holder: player });
   }
@@ -4502,7 +4560,7 @@ export function performPlayerMeleeAttack(isSpecialKey = false) {
     if (!item.infiniteAmmo) item.ammo--;
 
     player.rot = S.yaw + Math.PI;
-    if (player.rig) player.rig.g.rotation.y = player.rot;
+    if (player.rig) player.rig.g.rotation.set(0, player.rot, 0);
 
     triggerEntityAttack(player, 'shoot');
     sfx.zap();
@@ -4527,7 +4585,7 @@ export function performPlayerMeleeAttack(isSpecialKey = false) {
 
   // Разворачиваем персонажа по направлению удара (взгляда камеры)
   player.rot = S.yaw + Math.PI;
-  if (player.rig?.g) player.rig.g.rotation.y = player.rot;
+  if (player.rig?.g) player.rig.g.rotation.set(0, player.rot, 0);
 
   triggerEntityAttack(player, isSpecialKey ? 'push' : 'punch');
   if (isMeleeItem) sfx.swing();
@@ -4607,6 +4665,8 @@ export function performPlayerMeleeAttack(isSpecialKey = false) {
     if (!isMeleeLineOfSightClear(player.x, eyeY, player.z, t.x, tCenterY, t.z)) continue;
 
     hitAnyone = true;
+    transferEffectsOnContact(player, t, 0, true, 1.0);
+    if (item) transferEffectsOnContact(item, t, 0, true, 1.15);
     const centerFocusMult = dot > 0.88 ? 1.1 : 1.0;
     const finalKb = kb * centerFocusMult;
 
@@ -4710,6 +4770,7 @@ function detonateProjectile(proj, hitX, hitY, hitZ, directTarget = null, directH
           const blastForce = proj.knockback * 1.6 * Math.max(0.3, 1 - Math.hypot(dx, dy, dz) / proj.blastRadius);
           applyImpulseToDynamicBlock(b, (bdx / bLen) * blastForce, Math.max(3.5, (bdy / bLen) * blastForce), (bdz / bLen) * blastForce);
         }
+        if (proj.item) transferEffectsOnContact(proj.item, b, 0, false, 1.0);
       }
     }
 
@@ -4735,9 +4796,11 @@ function detonateProjectile(proj, hitX, hitY, hitZ, directTarget = null, directH
           t.vxKnock = (dx / h) * proj.knockback;
           t.vzKnock = (dz / h) * proj.knockback;
         }
+        if (proj.item) transferEffectsOnContact(proj.item, t, 0, false, 1.15);
       }
     }
   } else if (directTarget) {
+    if (proj.item) transferEffectsOnContact(proj.item, directTarget, 0, false, 1.2);
     const pHoriz = Math.hypot(proj.vx, proj.vz) || 1;
     if (proj.damage > 0) {
       dealDamage(directTarget, proj.damage, proj.owner, proj.knockback, {
@@ -4825,6 +4888,7 @@ function updateProjectilesAndWorldItems(dt) {
         if (hitThisBlock) {
           hitSomething = true;
           directBlock = b;
+          if (pr.item) transferEffectsOnContact(pr.item, b, 0, false, 1.1);
           try {
             if ((!b.components || b.components.spawner?.enabled) && b.spawnerData && b.spawnerData.mode === 'hit') {
               triggerBlockSpawner(b);
@@ -4906,12 +4970,15 @@ function updateProjectilesAndWorldItems(dt) {
     wi.y += wi.vy * dt;
     wi.z += wi.vz * dt;
 
-    wi.vx *= Math.pow(0.08, dt);
-    wi.vz *= Math.pow(0.08, dt);
+    const wiSlip = isItemFrozen(wi) || isBlockSlippery(wi._supportBlock);
+    wi.vx *= Math.pow(wiSlip ? 0.78 : 0.08, dt);
+    wi.vz *= Math.pow(wiSlip ? 0.78 : 0.08, dt);
 
     if (wi._throwGrace > 0) wi._throwGrace = Math.max(0, wi._throwGrace - dt);
     if (wi._hitEntCd > 0) wi._hitEntCd = Math.max(0, wi._hitEntCd - dt);
 
+    const rad = wi.item.holdMode === 'carried' ? 0.65 : 0.35;
+    const h = wi.item.holdMode === 'carried' ? 1.1 : 0.55;
     const wiSpd3D = Math.hypot(wi.vx, wi.vy, wi.vz);
     if (!wi.grounded && wiSpd3D > 4.2 && (wi._hitEntCd || 0) <= 0) {
       const itemWeight = clamp(
@@ -4936,6 +5003,7 @@ function updateProjectilesAndWorldItems(dt) {
         const impactPower = wiSpd3D * Math.pow(itemWeight / Math.max(15, mEnt), 0.62);
         if (impactPower > 2.2) {
           wi._hitEntCd = 0.45;
+          transferEffectsOnContact(wi, ent, 0, true, 1.1);
           const hSpd = Math.hypot(wi.vx, wi.vz) || 1;
           const nxI = wi.vx / hSpd;
           const nzI = wi.vz / hSpd;
@@ -4969,20 +5037,29 @@ function updateProjectilesAndWorldItems(dt) {
       }
     }
 
-    const rad = wi.item.holdMode === 'carried' ? 0.65 : 0.35;
-    const h = wi.item.holdMode === 'carried' ? 1.1 : 0.55;
     wi.grounded = false;
 
+    wi._supportBlock = null;
     for (const b of S.allBlocks) {
+      if (b.isDisabled || b._depletedDisabled) continue;
+      if (b.matterState === 'liquid') {
+        if (testPlayerOBB(wi.x, wi.y, wi.z, rad, h, b)) {
+          interactTargetWithLiquid(wi, b, dt);
+        }
+        continue;
+      }
       if (b.matterState !== 'solid' || (b.logicRuntime && b.logicRuntime.ghostOpen)) continue;
       const hit = testPlayerOBB(wi.x, wi.y, wi.z, rad, h, b);
       if (!hit) continue;
+
+      transferEffectsOnContact(wi, b, dt, true, 0.9);
 
       if (hit.ny > 0.45 && wi.vy <= 0.5) {
         const impactSpeed = Math.abs(prevVy);
         wi.y += hit.pen / Math.max(0.45, hit.ny);
         wi.vy = 0;
         wi.grounded = true;
+        wi._supportBlock = b;
 
         // Проверка урона от падения для хрупких переносимых контейнеров (яиц, ящиков и т.д.)
         if (impactSpeed > 9.5 && !wi.item.infiniteDurability && (wi.item.fallDamageMult || 0) > 0) {
@@ -5070,7 +5147,8 @@ function updateAimTrajectoryAndTorch(player, dt) {
   const hud = ensureThrowChargeHUD();
   const ch = ensureCrosshairHUD();
 
-  const held = getActiveHeldItem(player);
+  const rawHeld = getActiveHeldItem(player);
+  const held = (rawHeld && !isItemFrozen(rawHeld)) ? rawHeld : null;
 
   // Пассивное расходование прочности и работа света (Факел / Светящийся предмет)
   if (held && !S.playerDead && S.state === 'play') {
@@ -5327,6 +5405,19 @@ export function oofRespawn(msg) {
   }
 }
 
+let _lastPhysErrLogAt = 0;
+function runSafeSubsystem(label, fn) {
+  try {
+    fn();
+  } catch (err) {
+    const now = performance.now();
+    if (now - _lastPhysErrLogAt > 2000) {
+      _lastPhysErrLogAt = now;
+      console.error(`[DebiX:${label}]`, err);
+    }
+  }
+}
+
 export function update(dt) {
   S.time += dt;
   if (S.contactDamageCooldown > 0) S.contactDamageCooldown -= dt;
@@ -5335,7 +5426,8 @@ export function update(dt) {
 
   // Обновление глобального скрипта мира, скриптов блоков и ИИ NPC
   if (!S.studioMode || S.studioPlaytest) {
-    updateAllScriptsRuntime(dt, S.player);
+    runSafeSubsystem('scripts', () => updateAllScriptsRuntime(dt, S.player));
+    runSafeSubsystem('statusEffects', () => updateStatusEffectsRuntime(dt));
   }
 
   const p = S.player;
@@ -5346,6 +5438,9 @@ export function update(dt) {
   if (p.stunTimer > 0) p.stunTimer = Math.max(0, p.stunTimer - dt);
 
   const activeHeld = getActiveHeldItem(p);
+  const playerFrozen = isEntityFrozen(p);
+  if (activeHeld) transferEffectsOnContact(activeHeld, p, dt, true, 0.8);
+  if (p.carriedItem) transferEffectsOnContact(p.carriedItem, p, dt, true, 0.85);
 
   // Перезарядка оружия по УДЕРЖАНИЮ клавиши [R]
   if (S.isReloadingHold) {
@@ -5395,7 +5490,9 @@ export function update(dt) {
   // Автоматическая стрельба при удержании ЛКМ (в том числе при зажатом ПКМ прицеле!)
   if (
     S.lmbDown &&
+    !playerFrozen &&
     activeHeld &&
+    !isItemFrozen(activeHeld) &&
     activeHeld.useType === 'ranged' &&
     activeHeld.autoFire &&
     p.attackCooldown <= 0 &&
@@ -5407,7 +5504,7 @@ export function update(dt) {
 
   if (p._jumpGraceTimer > 0) p._jumpGraceTimer = Math.max(0, p._jumpGraceTimer - dt);
   updateBlocksLogicRuntime(dt, p);
-  updateProjectilesAndWorldItems(dt);
+  runSafeSubsystem('projectiles', () => updateProjectilesAndWorldItems(dt));
   updateAimTrajectoryAndTorch(p, dt);
 
   if (S.playerDead) {
@@ -5445,13 +5542,13 @@ export function update(dt) {
   // Если живой игрок сейчас в рэгдоле — симулируем физику падения до подъёма на ноги
   if (p.ragdoll && (p.ragdoll.active || p.ragdoll.recoverTimer > 0)) {
     const stillInRagdoll = updateEntityRagdollPhysics(p, dt);
-    updateDynamicBlocksPhysics(dt, p);
+    runSafeSubsystem('dynamicBlocks', () => updateDynamicBlocksPhysics(dt, p));
     updateEntityAnimation(p, dt, { moving: false, grounded: false, inLiquid: !!p.inLiquid });
     if (p.hpBarTimer > 0) {
       p.hpBarTimer -= dt;
       if (p.hpBarTimer <= 0) refreshEntityTagWithHP(p);
     }
-    updateCustomNPCsRuntime(dt, p);
+    runSafeSubsystem('npcs', () => updateCustomNPCsRuntime(dt, p));
     if (S.gameMode && S.gameMode.onUpdate) S.gameMode.onUpdate(dt, 0);
     if (stillInRagdoll) {
       const hintEl = $('hint');
@@ -5489,6 +5586,13 @@ export function update(dt) {
     len = 1;
   }
 
+  if (playerFrozen) {
+    f = 0;
+    s = 0;
+    len = 0;
+    p.isFlying = false;
+  }
+
   let inLiquid = false;
   let activeLiqBlock = null;
   for (const b of S.allBlocks) {
@@ -5499,6 +5603,7 @@ export function update(dt) {
       if (testPlayerOBB(p.x, p.y, p.z, pr, ph, b)) {
         inLiquid = true;
         activeLiqBlock = b;
+        interactTargetWithLiquid(p, b, dt);
         if ((b.components?.interaction?.enabled && b.interactionData?.trigger === 'touch') || (b.logicData && b.logicData.trigger === 'touch')) {
           triggerBlockLogic(b, 'touch', p);
         }
@@ -5521,7 +5626,7 @@ export function update(dt) {
     ? clamp(1.0 - (carriedPhysW / Math.max(20, playerWeight * 1.25)) * 0.55, 0.38, 0.94)
     : 1.0;
 
-  const equipSpdBonus = Number(activeHeld?.equipStats?.speedBonus) || 0;
+  const equipSpdBonus = (activeHeld && !isItemFrozen(activeHeld)) ? (Number(activeHeld.equipStats?.speedBonus) || 0) : 0;
   const carryPenalty = (p.carriedItem ? 0.78 : 1.0) * carryPhysPenalty;
   const spdBoost = (p.hasSpeed || (S.activeSlot === 1 && p.hasSpeed)) ? 1.55 : 1.0;
   const stunMoveMult = (p.stunTimer || 0) > 0 ? 0.25 : 1.0;
@@ -5529,10 +5634,17 @@ export function update(dt) {
   const prevStamInt = Math.ceil(p.stamina ?? 100);
   const prevExh = !!p.staminaExhausted;
   const sprintMult = updateEntityStaminaAndSprint(p, dt, playerWantsSprint, len > 0.1);
+  const playerSoaked = isEntitySoaked(p);
+  if (p.isSprinting && playerSoaked && S.worldSettings.staminaDrainOnSprint !== false) {
+    const extraStamMult = Math.max(0, getWetStaminaDrainMultiplier(p) - 1);
+    const baseDrain = Number(S.worldSettings.staminaDrainRate) || 18;
+    p.stamina = Math.max(0, (p.stamina ?? 100) - baseDrain * extraStamMult * dt);
+  }
   if (Math.ceil(p.stamina ?? 100) !== prevStamInt || !!p.staminaExhausted !== prevExh) {
     updateShopUI();
   }
-  const spd = ((p.walkSpeed || 7.6) + equipSpdBonus) * spdBoost * sprintMult * carryPenalty * stunMoveMult * (inLiquid ? 0.65 : 1.0);
+  const wetSpdMult = playerSoaked ? 0.92 : 1.0;
+  const spd = ((p.walkSpeed || 7.6) + equipSpdBonus) * spdBoost * sprintMult * carryPenalty * stunMoveMult * wetSpdMult * (inLiquid ? 0.65 : 1.0);
   const fx = -Math.sin(S.yaw);
   const fz = -Math.cos(S.yaw);
   const rx = -fz;
@@ -5544,10 +5656,11 @@ export function update(dt) {
   p.vzKnock = (p.vzKnock || 0) * Math.pow(0.05, dt);
 
   const lockFaceToCamera =
-    S.isAimingRMB ||
-    S.isChargingThrow ||
-    !!p.carriedPhysicsBlock ||
-    !!(activeHeld && activeHeld.useType === 'ranged');
+    !playerFrozen &&
+    (S.isAimingRMB ||
+      S.isChargingThrow ||
+      !!p.carriedPhysicsBlock ||
+      !!(activeHeld && !isItemFrozen(activeHeld) && activeHeld.useType === 'ranged'));
 
   if (p.isFlying) {
     // Удобный отзывчивый режим полёта [V] в Песочнице: мгновенный отклик без заносов и гравитации
@@ -5584,9 +5697,14 @@ export function update(dt) {
     p.z += flyVz * dt;
     p.grounded = false;
   } else {
-    if (len > 0.1) {
-      let moveVx = (fx * f + rx * s) * spd;
-      let moveVz = (fz * f + rz * s) * spd;
+    const surfSample = p._wasGroundedPrev ? sampleSurfaceWeatherAt(p.x, p.y, p.z) : null;
+    const onSlipperyIce = playerFrozen || (p._supportBlock && isBlockSlippery(p._supportBlock)) || Boolean(surfSample?.onFrozenPuddle);
+    let moveVx = 0;
+    let moveVz = 0;
+
+    if (!playerFrozen && len > 0.1) {
+      moveVx = (fx * f + rx * s) * spd;
+      moveVz = (fz * f + rz * s) * spd;
 
       // Если игрок несёт привязанный верёвкой объект — чем сильнее натяжение, тем тяжелее идти от якоря
       if (p.carriedPhysicsBlock && (p._ropeResistStrength || 0) > 0.01) {
@@ -5598,16 +5716,29 @@ export function update(dt) {
         }
       }
 
-      vx += moveVx;
-      vz += moveVz;
-      p.rot = lockFaceToCamera ? S.yaw + Math.PI : Math.atan2(vx, vz);
+      p.rot = lockFaceToCamera ? S.yaw + Math.PI : Math.atan2(moveVx, moveVz);
       p.step += Math.hypot(moveVx, moveVz) * dt;
     } else if (lockFaceToCamera) {
       p.rot = S.yaw + Math.PI;
     }
 
+    if (onSlipperyIce && !inLiquid) {
+      // Инерционное скольжение по льду / в замороженном состоянии
+      const iceAccel = playerFrozen ? 0.55 : 2.3;
+      const blend = 1 - Math.exp(-iceAccel * dt);
+      p._iceSlideVx = (p._iceSlideVx || 0) + (moveVx - (p._iceSlideVx || 0)) * blend;
+      p._iceSlideVz = (p._iceSlideVz || 0) + (moveVz - (p._iceSlideVz || 0)) * blend;
+      vx += p._iceSlideVx;
+      vz += p._iceSlideVz;
+    } else {
+      p._iceSlideVx = moveVx;
+      p._iceSlideVz = moveVz;
+      vx += moveVx;
+      vz += moveVz;
+    }
+
     // Упругая оттяжка игрока натянутой верёвкой
-    if (p.carriedPhysicsBlock && (p._ropePullX || p._ropePullZ)) {
+    if (!playerFrozen && p.carriedPhysicsBlock && (p._ropePullX || p._ropePullZ)) {
       vx += clamp((p._ropePullX || 0) * dt * 1.4, -10, 10);
       vz += clamp((p._ropePullZ || 0) * dt * 1.4, -10, 10);
     }
@@ -5621,14 +5752,14 @@ export function update(dt) {
       if (activeLiqBlock.conveyorVz) vz += activeLiqBlock.axisZ.z * activeLiqBlock.conveyorVz;
     }
 
-    const totalEffectiveWeight = playerWeight + carriedPhysW * 0.65;
+    const totalEffectiveWeight = playerWeight * getWetWeightMultiplier(p) + carriedPhysW * 0.65;
     const weightGravMult = clamp(Math.pow(totalEffectiveWeight / 70, 0.35), 0.45, 2.2);
     const weightJumpMult = clamp(Math.pow(70 / totalEffectiveWeight, 0.22), 0.55, 1.35);
     const gravBoost = (p.hasGrav ? 0.62 : 1.0) * weightGravMult;
     const baseJump = (p.jumpPower || 10.2) * weightJumpMult;
 
     const canCoyoteJump = p.grounded || (p._groundedAnimTimer || 0) > 0;
-    if (S.keys.Space || S.btnJump) {
+    if (!playerFrozen && (S.keys.Space || S.btnJump)) {
       if (inLiquid) {
         p.vy = clamp(6.4 * weightJumpMult, 3.2, 8.5);
       } else if (canCoyoteJump && (p._jumpGraceTimer || 0) <= 0) {
@@ -5693,6 +5824,8 @@ export function update(dt) {
 
     const hit = testPlayerOBB(p.x, p.y - probeDepth, p.z, pr, ph + probeDepth, b);
     if (!hit) continue;
+
+    transferEffectsOnContact(b, p, dt, true, 1.0);
 
     if ((b.components?.interaction?.enabled && b.interactionData?.trigger === 'touch') || (b.logicData && b.logicData.trigger === 'touch')) {
       triggerBlockLogic(b, 'touch', p);
@@ -5884,7 +6017,7 @@ export function update(dt) {
     }
   }
 
-  updateDynamicBlocksPhysics(dt, p);
+  runSafeSubsystem('dynamicBlocks', () => updateDynamicBlocksPhysics(dt, p));
 
   if (p.y < -18 && !S.playerDead) {
     oofRespawn('☁️ Ты упал с облаков в бездну!');
@@ -5905,11 +6038,13 @@ export function update(dt) {
   }
 
   // Гарантированное обновление процедурной анимации и 15 жестов R6 со стабилизацией на наклонных мостах и плотах
-  updateEntityAnimation(p, dt, {
-    moving: len > 0.1,
-    grounded: isStableGrounded,
-    inLiquid: p.inLiquid
-  });
+  if (!playerFrozen) {
+    updateEntityAnimation(p, dt, {
+      moving: len > 0.1,
+      grounded: isStableGrounded,
+      inLiquid: p.inLiquid
+    });
+  }
   if (p.rig && p.rig.g) {
     p.rig.g.position.set(p.x, p.y, p.z);
 
@@ -5969,7 +6104,7 @@ export function update(dt) {
     }
   }
 
-  updateCustomNPCsRuntime(dt, p);
+  runSafeSubsystem('npcs', () => updateCustomNPCsRuntime(dt, p));
 
   // Обработка диалога с NPC по нажатию [E] без дублирования с предметами и кнопками
   const nearItem = findNearestWorldItem(p, 4.2);
@@ -6542,6 +6677,7 @@ export function updateCustomNPCsRuntime(dt, player) {
           npc.stamina = npc.maxStamina || 100;
           npc.staminaExhausted = false;
           npc.ragdoll = null;
+          clearTargetStatusEffects(npc);
           npc.x = npc.homeX ?? npc.x;
           npc.y = npc.homeY ?? npc.y;
           npc.z = npc.homeZ ?? npc.z;
@@ -6645,6 +6781,9 @@ export function updateCustomNPCsRuntime(dt, player) {
     const cmbMod = mods.combat;
     const dlgMod = mods.dialogue;
 
+    const npcFrozen = isEntityFrozen(npc);
+    if (npc.equippedItem) transferEffectsOnContact(npc.equippedItem, npc, dt, true, 0.8);
+
     if (npc.hpBarTimer > 0) {
       npc.hpBarTimer -= dt;
       if (npc.hpBarTimer <= 0) refreshEntityTagWithHP(npc);
@@ -6677,14 +6816,18 @@ export function updateCustomNPCsRuntime(dt, player) {
       if (npc._aggroTimer <= 0) npc._aggroTarget = null;
     }
 
-    // Применение отдачи (knockback)
+    // Применение отдачи (knockback) с учётом скользкости льда и обледенелых луж
+    const npcSurfSample = npc.grounded ? sampleSurfaceWeatherAt(npc.x, npc.y, npc.z) : null;
+    const npcOnIce = isEntityFrozen(npc) || Boolean(npcSurfSample?.onFrozenPuddle);
     npc.x += (npc.vxKnock || 0) * dt;
     npc.z += (npc.vzKnock || 0) * dt;
-    npc.vxKnock = (npc.vxKnock || 0) * Math.pow(0.05, dt);
-    npc.vzKnock = (npc.vzKnock || 0) * Math.pow(0.05, dt);
+    npc.vxKnock = (npc.vxKnock || 0) * Math.pow(npcOnIce ? 0.65 : 0.05, dt);
+    npc.vzKnock = (npc.vzKnock || 0) * Math.pow(npcOnIce ? 0.65 : 0.05, dt);
 
-    const walkSpd = clamp(Number(navMod.walkSpeed) || 5.4, 1.5, 24);
-    const jumpPwr = clamp(Number(navMod.jumpPower) || 10.2, 4.0, 30);
+    const npcSoaked = isEntitySoaked(npc);
+    const npcWetWeightMult = getWetWeightMultiplier(npc);
+    const walkSpd = clamp(Number(navMod.walkSpeed) || 5.4, 1.5, 24) * (npcSoaked ? 0.92 : 1.0);
+    const jumpPwr = clamp(Number(navMod.jumpPower) || 10.2, 4.0, 30) / Math.pow(npcWetWeightMult, 0.28);
     const effGrav = grav * clamp(Number(physMod.gravityScale) || 1.0, 0.2, 3.0);
 
     if (npc.grounded || npc._supportY === undefined) {
@@ -6765,7 +6908,9 @@ export function updateCustomNPCsRuntime(dt, player) {
       }
     }
 
-    if ((npc.stunTimer || 0) > 0) {
+    if (npcFrozen) {
+      moving = false;
+    } else if ((npc.stunTimer || 0) > 0) {
       moving = false;
       if (Math.random() < dt * 5.0) {
         emitParticleBurst(npc.x, npc.y + 2.55, npc.z, 1, {
@@ -6794,7 +6939,8 @@ export function updateCustomNPCsRuntime(dt, player) {
       const dx = activeTarget.x - npc.x;
       const dz = activeTarget.z - npc.z;
       const d = Math.hypot(dx, dz) || 0.001;
-      const heldWeapon = (cmbMod.useEquippedWeapon !== false && npc.equippedItem) ? npc.equippedItem : null;
+      const rawNpcWeapon = (cmbMod.useEquippedWeapon !== false && npc.equippedItem) ? npc.equippedItem : null;
+      const heldWeapon = (rawNpcWeapon && !isItemFrozen(rawNpcWeapon)) ? rawNpcWeapon : null;
       const isRangedWeapon = heldWeapon && (heldWeapon.useType === 'ranged' || heldWeapon.useType === 'throwable');
       const attackDist = isRangedWeapon
         ? Math.min(Number(heldWeapon.maxRange) || 22, 16.0)
@@ -6926,6 +7072,8 @@ export function updateCustomNPCsRuntime(dt, player) {
             : (npc.meleeDamage || 15);
           const kb = (heldWeapon && heldWeapon.useType === 'melee') ? (Number(heldWeapon.knockback) || 8) : 8;
           dealDamage(activeTarget, dmg, npc, kb);
+          transferEffectsOnContact(npc, activeTarget, 0, true, 1.0);
+          if (heldWeapon) transferEffectsOnContact(heldWeapon, activeTarget, 0, true, 1.15);
         }
       }
     } else if (navMod.enabled && navMod.mode !== 'stand') {
@@ -7026,7 +7174,12 @@ export function updateCustomNPCsRuntime(dt, player) {
     // Расчёт спринта и стамины для NPC (глупые сжигают всю стамину сразу, умные расходуют тактически)
     const npcWantsSprint = decideNpcSprintIntent(npc, activeTarget, moving, tacticalState);
     const npcSprintMult = updateEntityStaminaAndSprint(npc, dt, npcWantsSprint, moving);
-    const effectiveWalkSpd = walkSpd * npcSprintMult;
+    if (npc.isSprinting && npcSoaked && S.worldSettings.staminaDrainOnSprint !== false) {
+      const extraStamMult = Math.max(0, getWetStaminaDrainMultiplier(npc) - 1);
+      const baseDrain = Number(S.worldSettings.staminaDrainRate) || 18;
+      npc.stamina = Math.max(0, (npc.stamina ?? 100) - baseDrain * extraStamMult * dt);
+    }
+    const effectiveWalkSpd = walkSpd * npcSprintMult; 
 
     // 3. ПЕРЕМЕЩЕНИЕ, ПАРКУР-ПРЫЖКИ И ФИЗИЧЕСКОЕ ВЗАИМОДЕЙСТВИЕ С МИРОМ
     if (!physMod.enabled) {
@@ -7049,6 +7202,7 @@ export function updateCustomNPCsRuntime(dt, player) {
         const b = _npcNearbyBlocks[i];
         if (b.matterState === 'liquid' && testPlayerOBB(npc.x, npc.y, npc.z, nr, nh, b)) {
           inLiquid = true;
+          interactTargetWithLiquid(npc, b, dt);
           if (physMod.hazardDamage) {
             if ((b.components?.interaction?.enabled && b.interactionData?.trigger === 'touch') || (b.logicData && b.logicData.trigger === 'touch')) {
               triggerBlockLogic(b, 'touch', npc);
@@ -7218,6 +7372,8 @@ export function updateCustomNPCsRuntime(dt, player) {
         const hit = testPlayerOBB(npc.x, npc.y - 0.04, npc.z, nr, nh + 0.04, b);
         if (!hit) continue;
 
+        transferEffectsOnContact(b, npc, dt, true, 1.0);
+
         if ((b.components?.interaction?.enabled && b.interactionData?.trigger === 'touch') || (b.logicData && b.logicData.trigger === 'touch')) {
           triggerBlockLogic(b, 'touch', npc);
           if (b.components?.script?.enabled && b.scriptData?.enabled) {
@@ -7351,18 +7507,20 @@ export function updateCustomNPCsRuntime(dt, player) {
       refreshEntityTagWithHP(npc);
     }
 
-    npc._netMoving = moving;
-    updateEntityAnimation(npc, dt, {
-      moving,
-      grounded: npc.grounded !== false,
-      inLiquid: !!npc.inLiquid
-    });
+    npc._netMoving = moving && !npcFrozen;
+    if (!npcFrozen) {
+      updateEntityAnimation(npc, dt, {
+        moving,
+        grounded: npc.grounded !== false,
+        inLiquid: !!npc.inLiquid
+      });
+    }
 
     const hoverYOffset = applyEntityGaitStyle(npc, dt, moving);
 
     if (npc.rig && npc.rig.g) {
       npc.rig.g.position.set(npc.x, npc.y + hoverYOffset, npc.z);
-      npc.rig.g.rotation.y = npc.rot;
+      npc.rig.g.rotation.set(0, npc.rot, 0);
     }
     if (npc.tag) {
       npc.tag.position.set(npc.x, npc.y + hoverYOffset + 3.35, npc.z);

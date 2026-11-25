@@ -35,6 +35,7 @@ import { HeavenQueueGame } from '../games/HeavenQueueGame.js';
 import { SandboxGame } from '../games/SandboxGame.js';
 import { toggleStudioMode, selectEditorObject } from '../studio/StudioController.js';
 import { spawnEmptyObject, clearEmptyObjects } from '../studio/HierarchyAndSpawn.js';
+import { normalizeWeatherSubstance } from './WeatherAndClouds.js';
 
 export const GAME_MODES = {
   heaven_queue: HeavenQueueGame,
@@ -256,6 +257,7 @@ export function serializeSceneState() {
           walkSpeed: player.walkSpeed,
           jumpPower: player.jumpPower,
           weight: player.weight ?? 70,
+          effectSource: player.effectSource || 'none',
           inventory: JSON.parse(JSON.stringify(player.inventory || [null, null, null, null, null, null])),
           carriedItem: player.carriedItem ? JSON.parse(JSON.stringify(player.carriedItem)) : null,
           handGripPoint: player.preset?.handGripPoint ? Object.assign({}, player.preset.handGripPoint) : null,
@@ -278,6 +280,9 @@ export function serializeSceneState() {
       scaleZ: wi.scaleZ || 1,
       isDisabled: !!wi.isDisabled,
       editorHidden: !!wi.editorHidden,
+      effectSource: wi.effectSource || wi.item?.effectSource || 'none',
+      isFlammable: Boolean(wi.isFlammable ?? wi.item?.isFlammable),
+      takesFireDamage: Boolean(wi.takesFireDamage ?? wi.item?.takesFireDamage),
       item: Object.assign({}, JSON.parse(JSON.stringify(wi.item)), {
         scriptData: serializeCleanScriptData(wi.item.scriptData)
       })
@@ -316,6 +321,11 @@ export function serializeSceneState() {
         liquidPhysicsEnabled: b.liquidPhysicsEnabled !== false,
         liquidBuoyancy: b.liquidBuoyancy ?? 45,
         liquidDrag: b.liquidDrag ?? 3.5,
+        liquidTemp: b.liquidTemp || 'neutral',
+        effectSource: b.effectSource || 'none',
+        isFlammable: !!b.isFlammable,
+        takesFireDamage: !!b.takesFireDamage,
+        maxFireHp: b.maxFireHp ?? 100,
         bounciness: b.bounciness,
         conveyorVz: b.conveyorVz,
         conveyorVx: b.conveyorVx,
@@ -358,6 +368,7 @@ export function serializeSceneState() {
         walkSpeed: n.walkSpeed || 5.4,
         jumpPower: n.jumpPower || 10.2,
         weight: n.weight ?? 70,
+        effectSource: n.effectSource || 'none',
         equippedItem: n.equippedItem ? JSON.parse(JSON.stringify(n.equippedItem)) : null,
         aiModules: n.aiModules ? JSON.parse(JSON.stringify(n.aiModules)) : null,
         homeX: n.homeX ?? n.x,
@@ -397,7 +408,21 @@ export function loadSceneState(data, opts = {}) {
   }
 
   if (data.worldSettings) {
+    const defClouds = {
+      enabled: true, color: '#ffffff', coverage: 0.35, height: 72, dynamicCoverage: false, dynamicSpeed: 0.04
+    };
+    const defWeather = {
+      type: 'none',
+      intensity: 0.75,
+      affectTemperature: true,
+      accumulateSurface: true,
+      growLiquids: true
+    };
     Object.assign(S.worldSettings, data.worldSettings);
+    if (!S.worldSettings.worldTemperature) S.worldSettings.worldTemperature = 'normal';
+    S.worldSettings.cloudsSettings = Object.assign(defClouds, S.worldSettings.cloudsSettings || {});
+    S.worldSettings.weatherSettings = Object.assign(defWeather, S.worldSettings.weatherSettings || {});
+    S.worldSettings.weatherSettings.type = normalizeWeatherSubstance(S.worldSettings.weatherSettings.type);
     updateSkybox();
   }
   if (data.worldSettings?.worldScriptData) {
@@ -522,7 +547,10 @@ export function loadSceneState(data, opts = {}) {
         rotZ: sw.rotZ || 0,
         scaleX: sw.scaleX || 1,
         scaleY: sw.scaleY || 1,
-        scaleZ: sw.scaleZ || 1
+        scaleZ: sw.scaleZ || 1,
+        effectSource: sw.effectSource || sw.item?.effectSource || 'none',
+        isFlammable: Boolean(sw.isFlammable ?? sw.item?.isFlammable),
+        takesFireDamage: Boolean(sw.takesFireDamage ?? sw.item?.takesFireDamage)
       });
       wi.isDisabled = Boolean(sw.isDisabled);
       wi.editorHidden = Boolean(sw.editorHidden);
@@ -569,6 +597,7 @@ export function loadSceneState(data, opts = {}) {
       walkSpeed: pd.walkSpeed || 7.6,
       jumpPower: pd.jumpPower || 10.2,
       weight: pd.weight ?? 70,
+      effectSource: pd.effectSource || 'none',
       inventory: Array.isArray(pd.inventory)
         ? pd.inventory.map(it => (it ? normalizeItemData(it) : null))
         : [null, null, null, null, null, null],
@@ -900,6 +929,10 @@ export async function exportPlayOnlyBuild() {
       texJs,
       particleJs,
       audioJs,
+      statusFxJs,
+      weatherJs,
+      surfaceWeatherVisJs,
+      surfaceWeatherJs,
       rigJs,
       worldJs,
       entityJs,
@@ -914,6 +947,10 @@ export async function exportPlayOnlyBuild() {
       fetchText('./src/core/TextureFactory.js'),
       fetchText('./src/core/ParticleSystem.js'),
       fetchText('./src/core/AudioEngine.js'),
+      fetchText('./src/core/StatusEffects.js'),
+      fetchText('./src/core/WeatherAndClouds.js'),
+      fetchText('./src/core/SurfaceWeatherVisuals.js'),
+      fetchText('./src/core/SurfaceWeatherLayer.js'),
       fetchText('./src/core/CharacterRig.js'),
       fetchText('./src/core/WorldRegistry.js'),
       fetchText('./src/core/EntityManager.js'),
@@ -935,6 +972,10 @@ export async function exportPlayOnlyBuild() {
       texJs,
       particleJs,
       audioJs,
+      statusFxJs,
+      weatherJs,
+      surfaceWeatherVisJs,
+      surfaceWeatherJs,
       rigJs,
       worldJs,
       entityJs,
@@ -1184,6 +1225,8 @@ export async function exportPlayOnlyBuild() {
         function loop(now) {
           const dt = Math.min(0.05, (now - lastTime) / 1000); lastTime = now;
           if (S.state === 'play') update(dt);
+          updateWeatherAndClouds(dt);
+          updateSurfaceWeatherLayer(dt);
           updateParticles(dt);
           updateAllPets(dt);
           if (S.state === 'play' && S.player) {
@@ -1240,6 +1283,7 @@ ${hudCss}
   <button class="sbtn" id="buyHalo" type="button"><span>😇 VIP Нимб Донатера</span><span class="tag" id="costHalo">250 R$</span></button>
 </div>
 <div id="banner" hidden></div>
+<div id="statusEffectsHUD" hidden></div>
 <div id="hint" hidden></div>
 <div id="hotbar" hidden></div>
 <div id="touch" hidden>

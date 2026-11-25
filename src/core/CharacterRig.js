@@ -1318,6 +1318,7 @@ export const buildCustomCosmeticMesh = buildCustomCosmeticGroup;
 export function createRobloxRig(preset, scale = 1, isAngel = false) {
   normalizeCharacterGripPoints(preset);
   const g = new THREE.Group();
+  g.rotation.order = 'YXZ';
   const cHead = isAngel ? 0xfff3d6 : (preset.head ?? 0xf5cd30);
   const cTorso = isAngel ? 0xffffff : (preset.torso ?? 0x00a2ff);
   const cArmL = isAngel ? 0xfff3d6 : (preset.armL ?? cHead);

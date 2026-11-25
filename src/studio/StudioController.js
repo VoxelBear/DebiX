@@ -1850,7 +1850,9 @@ export function enforcePlayModeCleanVisuals() {
   clearStudioMotionHelpers();
   hideAllCharacterGripMarkers();
   for (const wi of S.worldItems) {
-    rebuildWorldItemVisual(wi, false);
+    if (wi.group?.userData?.gripMarker || wi.group?.userData?.muzzleMarker) {
+      rebuildWorldItemVisual(wi, false);
+    }
   }
   tControls.detach();
   tControls.visible = false;
@@ -1869,7 +1871,9 @@ export function cleanupStudioVisualsForPlay() {
   clearStudioMotionHelpers();
   hideAllCharacterGripMarkers();
   for (const wi of S.worldItems) {
-    rebuildWorldItemVisual(wi, false);
+    if (wi.group?.userData?.gripMarker || wi.group?.userData?.muzzleMarker) {
+      rebuildWorldItemVisual(wi, false);
+    }
   }
   tControls.detach();
   tControls.visible = false;
@@ -1939,7 +1943,10 @@ export function toggleStudioMode(forceState) {
 
     for (const wi of S.worldItems) {
       const isSelWi = S.selectedRef && S.selectedRef.kind === 'world_item' && S.selectedRef.worldEntry === wi;
-      rebuildWorldItemVisual(wi, !!isSelWi);
+      const hasMarkers = Boolean(wi.group?.userData?.gripMarker || wi.group?.userData?.muzzleMarker);
+      if (isSelWi || hasMarkers) {
+        rebuildWorldItemVisual(wi, !!isSelWi);
+      }
     }
 
     if (S.selectedRef && S.selectedRef.kind === 'char' && S.selectedRef.ent?.rig?.setGripMarkersVisible) {
@@ -1969,7 +1976,6 @@ export function toggleStudioMode(forceState) {
       n.baseScale = n.rig?.g?.scale?.x || 1;
       n.baseGait = n.aiModules?.navigation?.gait || 'normal';
     }
-    syncSceneVisibilityForMode('play');
     $('studioUI').hidden = true;
     $('paintModal').hidden = true;
     $('topbar').hidden = false;

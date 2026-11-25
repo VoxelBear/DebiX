@@ -70,7 +70,11 @@ export const BUILTIN_SFX_LIST = [
   { id: 'sfx:heal', name: '💚 Исцеление / Аптечка' },
   { id: 'sfx:oof', name: '💀 Смерть / Поломка (OOF)' },
   { id: 'sfx:splash', name: '💦 Всплеск воды' },
-  { id: 'sfx:gas', name: '☁️ Выброс пара / Газа' }
+  { id: 'sfx:gas', name: '☁️ Выброс пара / Газа' },
+  { id: 'sfx:steam', name: '💨 Шипение пара / Тушение' },
+  { id: 'sfx:freeze', name: '❄️ Обледенение / Заморозка' },
+  { id: 'sfx:burnCrack', name: '🔥 Потрескивание огня' },
+  { id: 'sfx:poisonBubble', name: '☠️ Пузыри яда / Кислота' }
 ];
 
 function createNoiseBuffers(ctx) {
@@ -359,11 +363,15 @@ export const sfx = {
     tone(245, 535, 0.14, 'sine', 0.13 * v, 0, { pitchVar: 0.1 });
     noiseBurst(0.055, 0.05 * v, 0, { freq: 650, freqEnd: 1400, q: 1.0 });
   },
-  step(surface = 'studs', inLiquid = false, v = 1) {
+  step(surface = 'studs', inLiquid = false, v = 1, isSoaked = false) {
     if (inLiquid) {
       tone(190, 320, 0.09, 'sine', 0.08 * v, 0, { pitchVar: 0.16 });
       noiseBurst(0.11, 0.09 * v, 0, { pink: true, freq: 620, freqEnd: 260, q: 1.8 });
       return;
+    }
+    if (isSoaked) {
+      tone(220, 340, 0.065, 'sine', 0.055 * v, 0, { pitchVar: 0.18 });
+      noiseBurst(0.08, 0.068 * v, 0.005, { pink: true, freq: 760, freqEnd: 300, q: 1.8 });
     }
     if (surface === 'metal') {
       tone(520, 210, 0.065, 'triangle', 0.09 * v, 0, { pitchVar: 0.14 });
@@ -507,6 +515,35 @@ export const sfx = {
   emoteNo(v = 1) {
     tone(310, 260, 0.11, 'triangle', 0.13 * v, 0, { pitchVar: 0.07 });
     tone(250, 185, 0.15, 'triangle', 0.13 * v, 0.12, { pitchVar: 0.07 });
+  },
+  steam(v = 1) {
+    noiseBurst(0.36, 0.17 * v, 0, { white: true, freq: 2400, freqEnd: 900, q: 1.4, attack: 0.02 });
+    tone(420, 180, 0.16, 'sine', 0.06 * v, 0, { pitchVar: 0.12 });
+  },
+  freeze(v = 1) {
+    tone(1420, 2480, 0.14, 'sine', 0.13 * v, 0, { pitchVar: 0.1 });
+    tone(2150, 1620, 0.18, 'triangle', 0.1 * v, 0.035, { pitchVar: 0.1 });
+    noiseBurst(0.11, 0.11 * v, 0, { freq: 3800, freqEnd: 1900, q: 2.6 });
+  },
+  burnCrack(v = 1) {
+    noiseBurst(0.08, 0.12 * v, 0, { pink: true, freq: 1450, freqEnd: 520, q: 1.8 });
+    tone(190, 95, 0.09, 'sawtooth', 0.08 * v, 0, { pitchVar: 0.16, filterFreq: 850 });
+  },
+  poisonBubble(v = 1) {
+    tone(280, 560, 0.11, 'sine', 0.1 * v, 0, { pitchVar: 0.18 });
+    tone(420, 740, 0.09, 'sine', 0.07 * v, 0.06, { pitchVar: 0.18 });
+  },
+  hailHit(v = 1) {
+    tone(880, 310, 0.055, 'triangle', 0.13 * v, 0, { pitchVar: 0.18 });
+    noiseBurst(0.04, 0.11 * v, 0, { freq: 2400, freqEnd: 950, q: 2.1 });
+  },
+  obsidianHit(v = 1) {
+    tone(440, 130, 0.09, 'sawtooth', 0.18 * v, 0, { pitchVar: 0.14, filterFreq: 1450 });
+    tone(1280, 540, 0.06, 'triangle', 0.12 * v, 0.005, { pitchVar: 0.16 });
+    noiseBurst(0.065, 0.16 * v, 0, { freq: 1850, freqEnd: 480, q: 1.7 });
+  },
+  wetDrip(v = 1) {
+    tone(680, 1180, 0.045, 'sine', 0.055 * v, 0, { pitchVar: 0.2 });
   }
 };
 
@@ -1155,7 +1192,8 @@ export function updateAudioEngineRuntime(dt) {
 
     if ((p.grounded || p.inLiquid) && Math.abs((p.step || 0) - lastPlayerStepVal) >= 2.15) {
       lastPlayerStepVal = p.step || 0;
-      sfx.step(floorSurface, p.inLiquid, 0.85);
+      const isSoaked = (p.statusEffects?.wet?.stacks || 0) > 50;
+      sfx.step(floorSurface, p.inLiquid, 0.85, isSoaked);
     }
   }
 
@@ -1200,4 +1238,74 @@ if (muteBtn) {
   muteBtn.addEventListener('click', () => {
     toggleMasterMute();
   });
+}
+
+/* ---------- ФОНОВЫЙ ЗВУК ПОГОДЫ (С ПРИГЛУШЕНИЕМ ПОД КРЫШЕЙ) ---------- */
+
+let weatherNoiseSrc = null;
+let weatherNoiseFilter = null;
+let weatherNoiseGain = null;
+
+export function updateWeatherAudio(weatherType = 'none', intensity = 0, isSheltered = false) {
+  if (!AC || !soundOn || !noiseBufferPink) return;
+  const active = weatherType && weatherType !== 'none' && intensity > 0.05;
+
+  if (!active) {
+    if (weatherNoiseGain) {
+      weatherNoiseGain.gain.setTargetAtTime(0.0001, AC.currentTime, 0.18);
+    }
+    return;
+  }
+
+  if (!weatherNoiseSrc) {
+    weatherNoiseSrc = AC.createBufferSource();
+    weatherNoiseSrc.buffer = noiseBufferPink;
+    weatherNoiseSrc.loop = true;
+
+    weatherNoiseFilter = AC.createBiquadFilter();
+    weatherNoiseFilter.type = 'lowpass';
+    weatherNoiseFilter.frequency.value = 1100;
+
+    weatherNoiseGain = AC.createGain();
+    weatherNoiseGain.gain.value = 0.0001;
+
+    weatherNoiseSrc.connect(weatherNoiseFilter);
+    weatherNoiseFilter.connect(weatherNoiseGain);
+    weatherNoiseGain.connect(ambienceGain || masterGain);
+    weatherNoiseSrc.start(0);
+  }
+
+  const isSnowOrAsh = weatherType === 'snow' || weatherType === 'blood_snow' ||
+    weatherType === 'acid_snow' || weatherType === 'ash';
+  const isHail = weatherType.includes('hail');
+  const isMistOrSteam = weatherType === 'steam' || weatherType === 'evaporate' || weatherType.endsWith('_mist');
+  const isLava = weatherType === 'lava_rain' || weatherType === 'fire_rain';
+
+  const baseVol = isSnowOrAsh ? 0.085
+    : isMistOrSteam ? 0.11
+    : isLava ? 0.16
+    : isHail ? 0.19
+    : 0.21;
+  const targetVol = baseVol * clamp(intensity, 0.1, 1.0) * (isSheltered ? 0.38 : 1.0);
+  const targetFreq = isSnowOrAsh
+    ? (isSheltered ? 240 : 500)
+    : isMistOrSteam
+      ? (isSheltered ? 380 : 1250)
+      : isLava
+        ? (isSheltered ? 380 : 920)
+        : (isSheltered ? 440 : 1850);
+
+  weatherNoiseGain.gain.setTargetAtTime(targetVol, AC.currentTime, 0.14);
+  weatherNoiseFilter.frequency.setTargetAtTime(targetFreq, AC.currentTime, 0.14);
+
+  if (isHail) {
+    const now = AC.currentTime;
+    if (!updateWeatherAudio._nextHailTap || now >= updateWeatherAudio._nextHailTap) {
+      updateWeatherAudio._nextHailTap = now + rnd(0.08, 0.26) / clamp(intensity, 0.25, 1.0);
+      const isObs = weatherType === 'obsidian_hail';
+      const tapVol = (isSheltered ? 0.045 : 0.085) * clamp(intensity, 0.2, 1.0);
+      const f0 = isSheltered ? (isObs ? 260 : 420) : (isObs ? 520 : 980);
+      tone(f0, f0 * 0.42, 0.045, 'triangle', tapVol, 0, { bus: 'ambience', pitchVar: 0.24 });
+    }
+  }
 }

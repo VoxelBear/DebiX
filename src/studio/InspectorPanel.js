@@ -105,6 +105,8 @@ import {
   bindScriptAddonInspectorEvents,
   openScriptStudioModal
 } from '../core/ScriptEngine.js';
+import { WORLD_TEMPERATURE_PROFILES } from '../core/StatusEffects.js';
+import { WEATHER_PROFILES, normalizeWeatherSubstance } from '../core/WeatherAndClouds.js';
 
 function normalizeInspectorWindowKey(rawTitle, idx = 0) {
   const scope = !S.selectedRef ? 'world' : (S.selectedRef.kind || 'obj');
@@ -538,6 +540,103 @@ function _renderInspectorUICore() {
         })()}
       </div>
 
+      <div class="prop-group" style="border-color:#38bdf8">
+        <h5>🌡️ Температура Мира, ☁️ Облака и 🌦️ Погода</h5>
+        ${(() => {
+          if (!S.worldSettings.cloudsSettings) {
+            S.worldSettings.cloudsSettings = {
+              enabled: true, color: '#ffffff', coverage: 0.35, height: 72, dynamicCoverage: false, dynamicSpeed: 0.04
+            };
+          }
+          if (!S.worldSettings.weatherSettings) {
+            S.worldSettings.weatherSettings = {
+              type: 'none',
+              intensity: 0.75,
+              affectTemperature: true,
+              accumulateSurface: true,
+              growLiquids: true
+            };
+          }
+          const cs = S.worldSettings.cloudsSettings;
+          const ws = S.worldSettings.weatherSettings;
+          ws.type = normalizeWeatherSubstance(ws.type);
+          const curTemp = S.worldSettings.worldTemperature || 'normal';
+          const phasePreview = S.weatherRuntime?.phase && S.weatherRuntime.phase !== 'none'
+            ? S.weatherRuntime.phaseLabel
+            : '';
+          const covPct = Math.round((Number(cs.coverage) ?? 0.35) * 100);
+          const covLabel = covPct === 0 ? 'Безоблачно' : (covPct >= 95 ? 'Сплошная' : `${covPct}%`);
+
+          return `
+            <div class="prop-row">
+              <label>🌡️ Температура</label>
+              <select class="ed-inp" id="wTempSelect" style="flex:1">
+                ${Object.values(WORLD_TEMPERATURE_PROFILES).map(tp =>
+                  `<option value="${tp.id}" ${curTemp === tp.id ? 'selected' : ''}>${tp.label}</option>`
+                ).join('')}
+              </select>
+            </div>
+
+            <div style="border-top:1px dashed #283147;padding-top:6px;margin-top:4px;display:flex;flex-direction:column;gap:5px">
+              <div class="prop-row">
+                <label style="flex:1;color:#bae6fd;font-weight:800">☁️ Облака ВКЛ</label>
+                <input type="checkbox" id="wCloudOn" ${cs.enabled !== false ? 'checked' : ''}>
+                <label style="margin-left:8px">Цвет</label>
+                <input type="color" class="ed-color" id="wCloudCol" value="${cs.color || '#ffffff'}">
+              </div>
+              <div class="prop-row">
+                <label title="0% — безоблачно, 100% — полностью закрытое небо">Кучность</label>
+                <input type="range" min="0" max="1" step="0.02" id="wCloudCov" value="${cs.coverage ?? 0.35}" style="flex:1">
+                <span id="wCloudCovTxt" style="font-size:10px;width:62px;text-align:right;color:#56f0ff">${covLabel}</span>
+              </div>
+              <div class="prop-row">
+                <label>Высота (м)</label>
+                <input type="number" step="4" min="16" max="260" class="ed-inp" id="wCloudHeight" value="${cs.height ?? 72}" style="width:74px">
+                <label style="flex:1;text-align:right" title="Автоматическая плавная смена кучности облаков">Динам. смена</label>
+                <input type="checkbox" id="wCloudDyn" ${cs.dynamicCoverage ? 'checked' : ''}>
+              </div>
+              <div class="prop-row" id="wCloudDynSpdRow" ${cs.dynamicCoverage ? '' : 'hidden'}>
+                <label>Скорость смены</label>
+                <input type="range" min="0.005" max="0.25" step="0.005" id="wCloudDynSpd" value="${cs.dynamicSpeed ?? 0.04}" style="flex:1">
+              </div>
+            </div>
+
+              <div style="border-top:1px dashed #283147;padding-top:6px;margin-top:4px;display:flex;flex-direction:column;gap:5px">
+                <div class="prop-row">
+                  <label>🌦️ Осадки</label>
+                  <select class="ed-inp" id="wWeatherType" style="flex:1">
+                    ${Object.values(WEATHER_PROFILES).map(wp =>
+                      `<option value="${wp.id}" ${ws.type === wp.id ? 'selected' : ''}>${wp.label}</option>`
+                    ).join('')}
+                  </select>
+                </div>
+                <div id="wWeatherIntRow" ${ws.type && ws.type !== 'none' ? '' : 'hidden'} style="display:flex;flex-direction:column;gap:5px">
+                  <div class="prop-row">
+                    <label>Интенсивность</label>
+                    <input type="range" min="0.1" max="1.0" step="0.05" id="wWeatherInt" value="${ws.intensity ?? 0.75}" style="flex:1">
+                    <span id="wWeatherIntTxt" style="font-size:10px;width:36px;text-align:right">${Math.round((ws.intensity ?? 0.75) * 100)}%</span>
+                  </div>
+                  ${phasePreview ? `
+                    <div style="font:700 10px var(--f);color:#7dd3fc;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.28);border-radius:6px;padding:4px 7px">
+                      Активная фаза: <b>${phasePreview}</b>
+                    </div>
+                  ` : ''}
+                  <div class="prop-row">
+                    <label title="Водяные осадки постепенно охлаждают мир, лавовые — нагревать">Влияют на t°</label>
+                    <input type="checkbox" id="wWeatherTempShift" ${ws.affectTemperature !== false ? 'checked' : ''}>
+                    <label style="flex:1;text-align:right" title="Лужи, сугробы, сток в ямы и обледенение">Лужи и снег</label>
+                    <input type="checkbox" id="wWeatherAccum" ${ws.accumulateSurface !== false ? 'checked' : ''}>
+                  </div>
+                  <div class="prop-row">
+                    <label style="flex:1" title="Водоёмы под открытым небом поднимаются вверх от осадков и стока">🌊 Рост уровня жидкостей</label>
+                    <input type="checkbox" id="wWeatherGrowLiq" ${ws.growLiquids !== false ? 'checked' : ''}>
+                  </div>
+                </div>
+              </div>
+          `;
+        })()}
+      </div>
+
       <div class="prop-group">
         <h5>🌍 Физика Мира, Смерть и Респавн</h5>
         <div class="prop-row">
@@ -793,6 +892,63 @@ function _renderInspectorUICore() {
         _renderInspectorUICore();
       };
     }
+
+    if ($('wTempSelect')) {
+      $('wTempSelect').onchange = e => {
+        S.worldSettings.worldTemperature = e.target.value;
+        if (S.weatherRuntime) {
+          S.weatherRuntime.tempOffset = 0;
+          S.weatherRuntime.effectiveTemp = e.target.value;
+        }
+        if (window.__debixSyncWorldSettings) window.__debixSyncWorldSettings(false);
+      };
+    }
+    const syncCloudsInputs = () => {
+      const cs = S.worldSettings.cloudsSettings;
+      if ($('wCloudOn')) cs.enabled = $('wCloudOn').checked;
+      if ($('wCloudCol')) cs.color = $('wCloudCol').value;
+      if ($('wCloudCov')) {
+        cs.coverage = clamp(+$('wCloudCov').value || 0, 0, 1);
+        const pct = Math.round(cs.coverage * 100);
+        if ($('wCloudCovTxt')) {
+          $('wCloudCovTxt').textContent = pct === 0 ? 'Безоблачно' : (pct >= 95 ? 'Сплошная' : `${pct}%`);
+        }
+      }
+      if ($('wCloudHeight')) cs.height = clamp(+$('wCloudHeight').value || 72, 16, 260);
+      if ($('wCloudDyn')) {
+        cs.dynamicCoverage = $('wCloudDyn').checked;
+        if ($('wCloudDynSpdRow')) $('wCloudDynSpdRow').hidden = !cs.dynamicCoverage;
+      }
+      if ($('wCloudDynSpd')) cs.dynamicSpeed = clamp(+$('wCloudDynSpd').value || 0.04, 0.005, 0.5);
+    };
+    ['wCloudOn', 'wCloudCol', 'wCloudCov', 'wCloudHeight', 'wCloudDyn', 'wCloudDynSpd'].forEach(id => {
+      if ($(id)) {
+        $(id).oninput = syncCloudsInputs;
+        $(id).onchange = syncCloudsInputs;
+      }
+    });
+
+    const syncWeatherInputs = (rerender = false) => {
+      const ws = S.worldSettings.weatherSettings;
+      if ($('wWeatherType')) {
+        ws.type = normalizeWeatherSubstance($('wWeatherType').value);
+        if ($('wWeatherIntRow')) $('wWeatherIntRow').hidden = ws.type === 'none';
+      }
+      if ($('wWeatherInt')) {
+        ws.intensity = clamp(+$('wWeatherInt').value || 0.75, 0.1, 1.0);
+        if ($('wWeatherIntTxt')) $('wWeatherIntTxt').textContent = `${Math.round(ws.intensity * 100)}%`;
+      }
+      if ($('wWeatherTempShift')) ws.affectTemperature = $('wWeatherTempShift').checked;
+      if ($('wWeatherAccum')) ws.accumulateSurface = $('wWeatherAccum').checked;
+      if ($('wWeatherGrowLiq')) ws.growLiquids = $('wWeatherGrowLiq').checked;
+      if (window.__debixSyncWorldSettings) window.__debixSyncWorldSettings(false);
+      if (rerender) _renderInspectorUICore();
+    };
+    if ($('wWeatherType')) $('wWeatherType').onchange = () => syncWeatherInputs(true);
+    if ($('wWeatherInt')) $('wWeatherInt').oninput = () => syncWeatherInputs(false);
+    ['wWeatherTempShift', 'wWeatherAccum', 'wWeatherGrowLiq'].forEach(id => {
+      if ($(id)) $(id).onchange = () => syncWeatherInputs(false);
+    });
 
     const bindCbUpdate = (sel, fn) => {
       cont.querySelectorAll(sel).forEach(el => {
@@ -1272,6 +1428,24 @@ function _renderInspectorUICore() {
         </div>
 
         <!-- Булевы свойства свечения и частиц предмета -->
+        <div style="margin-top:4px;padding-top:6px;border-top:1px dashed #283147;display:flex;flex-direction:column;gap:5px">
+          <div style="font:800 9.5px var(--f);color:#fbbf24;text-transform:uppercase">🧪 Эффекты и Горючесть предмета:</div>
+          <div class="prop-row">
+            <label>Источник эффекта</label>
+            <select class="ed-inp" id="inpItmEffSrc" style="flex:1">
+              <option value="none" ${(item.effectSource || 'none') === 'none' ? 'selected' : ''}>⚪ Нет (Обычный)</option>
+              <option value="poison" ${item.effectSource === 'poison' ? 'selected' : ''}>☠️ Источник Отравления (Макс.)</option>
+              <option value="burn" ${item.effectSource === 'burn' ? 'selected' : ''}>🔥 Источник Горения (Макс.)</option>
+              <option value="freeze" ${item.effectSource === 'freeze' ? 'selected' : ''}>❄️ Источник Заморозки (Макс.)</option>
+            </select>
+          </div>
+          <div class="prop-row">
+            <label>Может гореть</label>
+            <input type="checkbox" id="inpItmFlammable" ${item.isFlammable ? 'checked' : ''}>
+            <label style="flex:1;text-align:right">Урон от огня</label>
+            <input type="checkbox" id="inpItmFireDmg" ${item.takesFireDamage ? 'checked' : ''}>
+          </div>
+        </div>
         <div style="margin-top:4px;padding-top:6px;border-top:1px dashed #283147;display:flex;flex-direction:column;gap:5px">
           <div style="font:800 9.5px var(--f);color:#94a3b8;text-transform:uppercase">Свечение и частицы предмета:</div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;background:#101420;padding:6px;border-radius:7px;border:1px solid #252f48">
@@ -1797,6 +1971,19 @@ function _renderInspectorUICore() {
       item.equipStats.damageBonus = +$('inpEqDmg').value || 0;
       item.equipStats.invulnerable = $('inpEqInv').checked;
 
+      if ($('inpItmEffSrc')) {
+        item.effectSource = $('inpItmEffSrc').value;
+        worldEntry.effectSource = item.effectSource;
+      }
+      if ($('inpItmFlammable')) {
+        item.isFlammable = $('inpItmFlammable').checked;
+        worldEntry.isFlammable = item.isFlammable;
+      }
+      if ($('inpItmFireDmg')) {
+        item.takesFireDamage = $('inpItmFireDmg').checked;
+        worldEntry.takesFireDamage = item.takesFireDamage;
+      }
+
       item.lightData.realLight = $('inpItmRealLgt').checked;
       item.lightData.pseudoLight = $('inpItmPseudoLgt').checked;
       item.lightData.enabled = Boolean(item.lightData.realLight || item.lightData.pseudoLight);
@@ -1831,7 +2018,8 @@ function _renderInspectorUICore() {
       'inpItmRel', 'inpItmStack', 'inpItmMinSpd', 'inpItmChgT',
       'inpItmHeal', 'inpItmBfSpd', 'inpItmBfJmp', 'inpItmBfDmg', 'inpItmBfScl',
       'inpItmInfDur', 'inpItmDropHit', 'inpItmDur', 'inpItmMaxDur', 'inpItmDurCost',
-      'inpItmDecay', 'inpItmFallMult', 'inpEqArmor', 'inpEqHp', 'inpEqDmg', 'inpEqInv',
+      'inpItmDecay', 'inpItmFallMult',       'inpEqArmor', 'inpEqHp', 'inpEqDmg', 'inpEqInv',
+      'inpItmEffSrc', 'inpItmFlammable', 'inpItmFireDmg',
       'inpItmRealLgt', 'inpItmPseudoLgt', 'inpItmLgtCol', 'inpItmLgtInt', 'inpItmLgtDist',
       'inpItmEmitAll', 'inpItmEmitPreset', 'inpItmEmitCol', 'inpItmEmitRate', 'inpItmEmitSize'
     ].forEach(id => {
@@ -2829,6 +3017,14 @@ function _renderInspectorUICore() {
                     <input type="number" step="0.5" min="0.2" max="25" class="ed-inp" id="inpLiqDrag" value="${box.liquidDrag ?? 3.5}">
                   </div>
                 ` : ''}
+                <div class="prop-row">
+                  <label title="Холодная и нейтральная тушат огонь и замерзают; нейтральная отравляется; горячая растапливает лёд">🌡️ Температура</label>
+                  <select class="ed-inp" id="inpLiqTemp" style="flex:1">
+                    <option value="cold" ${box.liquidTemp === 'cold' ? 'selected' : ''}>❄️ Холодная (Быстро замерзает, тушит огонь)</option>
+                    <option value="neutral" ${(!box.liquidTemp || box.liquidTemp === 'neutral') ? 'selected' : ''}>💧 Нейтральная (Замерзает, травится, тушит)</option>
+                    <option value="hot" ${box.liquidTemp === 'hot' ? 'selected' : ''}>🔥 Горячая (Снимает заморозку, не замерзает)</option>
+                  </select>
+                </div>
               </div>
             `}
             <div class="prop-row">
@@ -2853,6 +3049,28 @@ function _renderInspectorUICore() {
               <input type="number" step="0.5" class="ed-inp" id="inpConvX" value="${box.conveyorVx}" title="Скорость тяги по оси X">
             </div></div>
             <div class="prop-row"><label>Вращение Y</label><input type="number" step="0.5" class="ed-inp" id="inpSpin" value="${box.spinSpeed}" title="Постоянное осевое вращение"></div>
+            <div style="border-top:1px dashed #283147;padding-top:6px;margin-top:4px;display:flex;flex-direction:column;gap:5px">
+              <div style="font:800 9.5px var(--f);color:#fbbf24;text-transform:uppercase">🧪 Эффекты, Источник и Горючесть:</div>
+              <div class="prop-row">
+                <label title="Постоянный источник держит макс. стаки, не гаснет и не получает урона">Источник эффекта</label>
+                <select class="ed-inp" id="inpBlkEffSrc" style="flex:1">
+                  <option value="none" ${(!box.effectSource || box.effectSource === 'none') ? 'selected' : ''}>⚪ Нет (Обычный)</option>
+                  <option value="poison" ${box.effectSource === 'poison' ? 'selected' : ''}>☠️ Источник Отравления (Макс.)</option>
+                  <option value="burn" ${box.effectSource === 'burn' ? 'selected' : ''}>🔥 Источник Горения (Макс.)</option>
+                  <option value="freeze" ${box.effectSource === 'freeze' ? 'selected' : ''}>❄️ Источник Заморозки (Макс.)</option>
+                </select>
+              </div>
+              <div class="prop-row">
+                <label>Может гореть</label>
+                <input type="checkbox" id="inpBlkFlammable" ${box.isFlammable ? 'checked' : ''}>
+                <label style="flex:1;text-align:right">Сгорает от огня</label>
+                <input type="checkbox" id="inpBlkFireDmg" ${box.takesFireDamage ? 'checked' : ''}>
+              </div>
+              <div class="prop-row" id="rowBlkFireHp" ${box.takesFireDamage ? '' : 'hidden'}>
+                <label>Запас прочн. (огонь)</label>
+                <input type="number" step="10" min="10" max="5000" class="ed-inp" id="inpBlkFireHp" value="${box.maxFireHp ?? 100}">
+              </div>
+            </div>
           </div>
         </div>
       ` : ''}
@@ -3957,6 +4175,29 @@ function _renderInspectorUICore() {
     if ($('inpConvX')) $('inpConvX').oninput = e => { box.conveyorVx = +e.target.value || 0; };
     if ($('inpSpin')) $('inpSpin').oninput = e => { box.spinSpeed = +e.target.value || 0; };
 
+    if ($('inpLiqTemp')) {
+      $('inpLiqTemp').onchange = e => { box.liquidTemp = e.target.value; };
+    }
+    if ($('inpBlkEffSrc')) {
+      $('inpBlkEffSrc').onchange = e => { box.effectSource = e.target.value; };
+    }
+    if ($('inpBlkFlammable')) {
+      $('inpBlkFlammable').onchange = e => { box.isFlammable = e.target.checked; };
+    }
+    if ($('inpBlkFireDmg')) {
+      $('inpBlkFireDmg').onchange = e => {
+        box.takesFireDamage = e.target.checked;
+        if ($('rowBlkFireHp')) $('rowBlkFireHp').hidden = !box.takesFireDamage;
+      };
+    }
+    if ($('inpBlkFireHp')) {
+      $('inpBlkFireHp').oninput = e => {
+        const v = Math.max(10, +e.target.value || 100);
+        box.maxFireHp = v;
+        box.fireHp = v;
+      };
+    }
+
     if (comps.interaction?.enabled) {
       const syncInteract = (rerender = false) => {
         if ($('inpItTrig')) it.trigger = $('inpItTrig').value;
@@ -4970,11 +5211,20 @@ function _renderInspectorUICore() {
             </div>
           </div>
         ` : ''}
-        <div class="prop-row">
-          <label title="Вес влияет на гравитацию персонажа, плавучесть в воде и способность толкать/поднимать тяжёлые физические блоки">⚖️ Вес (кг)</label>
-          <input type="number" step="5" min="5" max="2000" class="ed-inp" id="inpCharWeight" value="${ent.weight ?? 70}" style="width:80px;font-weight:800;color:#ffce3a">
-          <span style="font-size:10px;color:#94a3b8">Подымает до ${Math.round((ent.weight ?? 70) * 0.9)} кг</span>
-        </div>
+          <div class="prop-row">
+            <label title="Вес влияет на гравитацию персонажа, плавучесть в воде и способность толкать/поднимать тяжёлые физические блоки">⚖️ Вес (кг)</label>
+            <input type="number" step="5" min="5" max="2000" class="ed-inp" id="inpCharWeight" value="${ent.weight ?? 70}" style="width:80px;font-weight:800;color:#ffce3a">
+            <span style="font-size:10px;color:#94a3b8">Подымает до ${Math.round((ent.weight ?? 70) * 0.9)} кг</span>
+          </div>
+          <div class="prop-row">
+            <label title="Постоянная аура эффекта на персонаже (макс. стак, иммунитет к урону от своего эффекта)">🧪 Источник эффекта</label>
+            <select class="ed-inp" id="inpCharEffSrc" style="flex:1">
+              <option value="none" ${(!ent.effectSource || ent.effectSource === 'none') ? 'selected' : ''}>⚪ Нет</option>
+              <option value="poison" ${ent.effectSource === 'poison' ? 'selected' : ''}>☠️ Источник Отравления</option>
+              <option value="burn" ${ent.effectSource === 'burn' ? 'selected' : ''}>🔥 Источник Горения</option>
+              <option value="freeze" ${ent.effectSource === 'freeze' ? 'selected' : ''}>❄️ Источник Заморозки</option>
+            </select>
+          </div>
         ${!ent.isP && npcMods ? `
           <div class="prop-row" style="border-top:1px dashed #283147;padding-top:5px;margin-top:2px">
             <label style="flex:1;color:#ff6b6b" title="Если включено — после гибели NPC исчезает навсегда (не возрождается)">💀 Умирать навсегда</label>
@@ -5118,6 +5368,7 @@ function _renderInspectorUICore() {
       ent.maxHp = Math.max(1, +$('inpCharMaxHp').value || 100);
       ent.hp = clamp(+$('inpCharHp').value || ent.maxHp, 1, ent.maxHp);
       if ($('inpCharWeight')) ent.weight = clamp(+$('inpCharWeight').value || 70, 5, 2000);
+      if ($('inpCharEffSrc')) ent.effectSource = $('inpCharEffSrc').value;
       if (ent.isP) {
         ent.baseMaxHp = ent.maxHp;
         if ($('inpPlayerGait')) ent.gait = $('inpPlayerGait').value;
@@ -5131,7 +5382,7 @@ function _renderInspectorUICore() {
       }
       refreshEntityTagWithHP(ent);
     };
-    ['inpCharHpOn', 'inpCharHp', 'inpCharMaxHp', 'inpCharWeight', 'inpPlayerGait', 'inpCharWalkSpd', 'inpCharJumpPwr', 'inpCharMeleeDmg', 'inpCharCash'].forEach(id => {
+    ['inpCharHpOn', 'inpCharHp', 'inpCharMaxHp', 'inpCharWeight', 'inpCharEffSrc', 'inpPlayerGait', 'inpCharWalkSpd', 'inpCharJumpPwr', 'inpCharMeleeDmg', 'inpCharCash'].forEach(id => {
       if ($(id)) {
         $(id).oninput = syncCharStats;
         $(id).onchange = syncCharStats;

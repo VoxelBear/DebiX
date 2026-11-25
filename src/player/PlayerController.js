@@ -65,6 +65,9 @@ import {
   triggerEntityEmote,
   stopEntityEmote
 } from '../core/CharacterRig.js';
+import { isEntityFrozen, isItemFrozen, updatePlayerStatusHUD } from '../core/StatusEffects.js';
+import { updateWeatherAndClouds } from '../core/WeatherAndClouds.js';
+import { updateSurfaceWeatherLayer } from '../core/SurfaceWeatherLayer.js';
 import { initPaintStudio2D, isPaintModalOpen } from '../studio/PaintStudio2D.js';
 import {
   initMultiplayerSystem,
@@ -608,6 +611,13 @@ export function initInputControls() {
       return;
     }
 
+    if (S.state === 'play' && S.player && isEntityFrozen(S.player)) {
+      if (['KeyE', 'KeyQ', 'KeyF', 'KeyR', 'KeyG', 'KeyV', 'KeyB', 'KeyT', 'Space'].includes(e.code)) {
+        e.preventDefault();
+        return;
+      }
+    }
+
     if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code) && S.state === 'play') {
       e.preventDefault();
     }
@@ -694,11 +704,16 @@ export function initInputControls() {
         registerPlayerRagdollStruggle(1.2);
         return;
       }
+      if (isEntityFrozen(S.player)) return;
       if (S.gmodTool?.active) {
         handleGmodToolTrigger('lmb');
         return;
       }
       const held = getActiveHeldItem(S.player);
+      if (held && isItemFrozen(held)) {
+        showBanner(`❄️ «${held.name}» заморожен — его нельзя использовать!`, '#56f0ff');
+        return;
+      }
       if (held && held.useType === 'throwable' && !S.player.carriedItem) {
         if ((S.player.attackCooldown || 0) <= 0) {
           S.isChargingThrow = true;
@@ -727,6 +742,9 @@ export function initInputControls() {
     }
     if (isDown) {
       if (S.isAimingRMB) return;
+      if (S.player && isEntityFrozen(S.player)) return;
+      const heldRmb = S.player ? getActiveHeldItem(S.player) : null;
+      if (heldRmb && isItemFrozen(heldRmb)) return;
       S.isAimingRMB = true;
       if (S.player) syncEntityHeldItemMesh(S.player);
       if (window.__debixSendImmediateFullState) window.__debixSendImmediateFullState();
@@ -1249,14 +1267,19 @@ export function loop(now) {
         if (prevEmote === 'fake_die' && !S.player?.activeEmote) sfx.coil?.();
         syncEmotesPanelActiveState();
       }
-    } else if ($('emotesPanel') && !$('emotesPanel').hidden) {
-      $('emotesPanel').hidden = true;
+    } else {
+      if ($('emotesPanel') && !$('emotesPanel').hidden) {
+        $('emotesPanel').hidden = true;
+      }
+      updatePlayerStatusHUD();
     }
-    updateParticles(dt);
-    updateAllPets(dt);
   } catch (err) {
     console.error('Ошибка в игровом цикле update:', err);
   }
+  try { updateWeatherAndClouds(dt); } catch (err) { console.error('Ошибка WeatherAndClouds:', err); }
+  try { updateSurfaceWeatherLayer(dt); } catch (err) { console.error('Ошибка SurfaceWeatherLayer:', err); }
+  try { updateParticles(dt); } catch (err) { console.error('Ошибка Particles:', err); }
+  try { updateAllPets(dt); } catch (err) { console.error('Ошибка Pets:', err); }
   render(dt);
 }
 
