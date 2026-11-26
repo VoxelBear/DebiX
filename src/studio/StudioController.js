@@ -2,6 +2,7 @@
 import { S, $, coarse, showBanner, ITEM_STUDIO_ORIGIN, clamp } from '../core/State.js';
 import { cv, scene, camera } from '../core/SceneManager.js';
 import { initAudio, sfx } from '../core/AudioEngine.js';
+import { disposeBlockMedia } from '../core/MediaSystem.js';
 import {
   MAX_COSMETIC_PARTS,
   MAX_ITEM_PARTS,
@@ -2405,6 +2406,8 @@ function cloneSingleSceneBlockExact(src, customLabel = null, parentKeyOverride =
         showBadge: s.showBadge !== false
       })) : undefined
     })) : null,
+    mediaScreenData: src.mediaScreenData ? JSON.parse(JSON.stringify(src.mediaScreenData)) : null,
+    soundEmitterData: src.soundEmitterData ? JSON.parse(JSON.stringify(src.soundEmitterData)) : null,
     bbmodelData: src.bbmodelData ? JSON.parse(JSON.stringify(src.bbmodelData)) : null,
     label: nextLabel,
     isCustom: true
@@ -2600,6 +2603,7 @@ export function duplicateSelected() {
 function removeSceneNodeByKindAndObj(kind, obj) {
   if (!obj) return;
   if (kind === 'block') {
+    disposeBlockMedia(obj);
     removeBlockHalo(obj);
     if (obj.m) scene.remove(obj.m);
     if (obj.cpVisualGroup) scene.remove(obj.cpVisualGroup);

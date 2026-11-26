@@ -6,6 +6,7 @@ let masterGain = null;
 let sfxGain = null;
 let musicGain = null;
 let ambienceGain = null;
+let mediaGain = null;
 let noiseBufferWhite = null;
 let noiseBufferPink = null;
 let soundOn = true;
@@ -112,15 +113,18 @@ export function initAudio() {
       sfxGain = AC.createGain();
       musicGain = AC.createGain();
       ambienceGain = AC.createGain();
+      mediaGain = AC.createGain();
 
       masterGain.gain.value = soundOn ? 0.8 : 0;
       sfxGain.gain.value = S.worldSettings?.sfxVolume ?? 0.85;
       musicGain.gain.value = S.worldSettings?.musicVolume ?? 0.42;
       ambienceGain.gain.value = S.worldSettings?.ambienceVolume ?? 0.45;
+      mediaGain.gain.value = S.worldSettings?.mediaVolume ?? 0.9;
 
       sfxGain.connect(masterGain);
       musicGain.connect(masterGain);
       ambienceGain.connect(masterGain);
+      mediaGain.connect(masterGain);
       masterGain.connect(AC.destination);
 
       createNoiseBuffers(AC);
@@ -140,6 +144,42 @@ export function syncVolumesFromSettings() {
   if (sfxGain) sfxGain.gain.setTargetAtTime(clamp(ws.sfxVolume ?? 0.85, 0, 1.5), AC.currentTime, 0.04);
   if (musicGain) musicGain.gain.setTargetAtTime(clamp(ws.musicVolume ?? 0.42, 0, 1.5), AC.currentTime, 0.08);
   if (ambienceGain) ambienceGain.gain.setTargetAtTime(clamp(ws.ambienceVolume ?? 0.45, 0, 1.5), AC.currentTime, 0.08);
+  if (mediaGain) mediaGain.gain.setTargetAtTime(clamp(ws.mediaVolume ?? 0.9, 0, 1.8), AC.currentTime, 0.05);
+}
+
+export function getAudioContext() {
+  initAudio();
+  return AC;
+}
+
+export function getAudioBuses() {
+  initAudio();
+  return { AC, masterGain, sfxGain, musicGain, ambienceGain, mediaGain };
+}
+
+export function isMasterSoundOn() {
+  return soundOn;
+}
+
+export function getMediaProxyBaseUrl() {
+  try {
+    if (location.protocol.startsWith('http') && location.port === '8765') {
+      return location.origin;
+    }
+  } catch (_) {}
+  const wsUrl = S.mpState?.wsUrl || 'ws://127.0.0.1:8765';
+  if (/^wss?:\/\//i.test(wsUrl)) {
+    return wsUrl.replace(/^ws:/i, 'http:').replace(/^wss:/i, 'https:').replace(/\/$/, '');
+  }
+  return 'http://127.0.0.1:8765';
+}
+
+export function buildProxiedAudioUrl(rawUrl) {
+  const s = String(rawUrl || '').trim();
+  if (!s) return '';
+  if (s.startsWith('data:') || s.startsWith('blob:')) return s;
+  const base = getMediaProxyBaseUrl();
+  return `${base}/api/media/stream?kind=audio&url=${encodeURIComponent(s)}`;
 }
 
 export function syncAudioWithWorldSettings() {
@@ -259,6 +299,40 @@ export function playCustomAudioById(customId, opts = {}) {
   const entry = (S.customAudioLibrary || []).find(a => a.id === cleanId);
   if (!entry) return null;
 
+  // Потоковое воспроизведение по ссылке (YouTube / прямой URL) без загрузки всего файла в память
+  if (entry.url && !entry.dataURL) {
+    const el = document.createElement('audio');
+    el.crossOrigin = 'anonymous';
+    el.preload = 'auto';
+    el.loop = Boolean(opts.loop);
+    el.playbackRate = opts.rate || 1.0;
+    el.src = buildProxiedAudioUrl(entry.url);
+
+    let srcNode = null;
+    const g = AC.createGain();
+    g.gain.value = clamp(opts.vol ?? 0.85, 0, 2.0);
+    const targetBus = opts.bus === 'music' ? musicGain : (opts.bus === 'ambience' ? ambienceGain : sfxGain);
+    try {
+      srcNode = AC.createMediaElementSource(el);
+      srcNode.connect(g);
+      g.connect(targetBus || masterGain);
+    } catch (_) {
+      el.volume = clamp(opts.vol ?? 0.85, 0, 1);
+    }
+
+    el.play().catch(() => {});
+    const handle = {
+      el,
+      stop() {
+        try { el.pause(); el.removeAttribute('src'); el.load(); } catch (_) {}
+        try { srcNode?.disconnect(); } catch (_) {}
+        try { g.disconnect(); } catch (_) {}
+      }
+    };
+    if (opts.onSourceCreated) opts.onSourceCreated(handle, g);
+    return handle;
+  }
+
   const playFromBuf = buf => {
     if (!buf || !AC) return;
     const src = AC.createBufferSource();
@@ -316,6 +390,38 @@ export function promptUploadCustomAudio(category = 'sfx', onLoaded = null) {
     reader.readAsDataURL(file);
   };
   inp.click();
+}
+
+export function promptAddCustomStreamAudio(category = 'music', onLoaded = null) {
+  const rawUrl = prompt(
+    'Вставь ссылку на YouTube или прямой аудио-файл (.mp3 / .ogg / .wav):',
+    'https://'
+  );
+  if (!rawUrl || !rawUrl.trim() || rawUrl.trim() === 'https://') return;
+  const cleanUrl = rawUrl.trim();
+  if (!/^https?:\/\//i.test(cleanUrl)) {
+    showBanner('⚠️ Ссылка должна начинаться с http:// или https://', '#ffce3a');
+    return;
+  }
+  const defaultTitle = cleanUrl.includes('youtu')
+    ? 'YouTube Аудио'
+    : (cleanUrl.split('/').pop()?.split('?')[0]?.slice(0, 32) || 'Поток по ссылке');
+  const title = (prompt('Название трека в библиотеке проекта:', defaultTitle) || defaultTitle).trim().slice(0, 38);
+
+  initAudio();
+  const entry = {
+    id: 'aud_' + Date.now() + '_' + Math.floor(Math.random() * 999),
+    name: title,
+    category: category || 'music',
+    sourceType: 'url',
+    url: cleanUrl,
+    dataURL: null
+  };
+  if (!Array.isArray(S.customAudioLibrary)) S.customAudioLibrary = [];
+  S.customAudioLibrary.push(entry);
+  sfx.cash();
+  showBanner(`🌐 Аудио-ссылка «${entry.name}» добавлена в библиотеку!`, '#00e676');
+  if (onLoaded) onLoaded(entry);
 }
 
 export function playSoundId(soundId, opts = {}) {

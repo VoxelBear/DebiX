@@ -1,11 +1,16 @@
 // src/core/SurfaceWeatherLayer.js
 import { S, clamp, rnd } from './State.js';
-import { camera } from './SceneManager.js';
+import { camera, getEffectiveSkyColors } from './SceneManager.js';
 import { emitParticleBurst } from './ParticleSystem.js';
 import {
   tickSurfaceWeatherVisualsTime,
+  setSurfaceWeatherSkyColors,
+  patchLiquidBlockReflectionMaterial,
   rebuildSurfacePrecipitationMeshes,
   updateBlockSurfaceCoatings,
+  sampleBlockSnowCoatAt,
+  addSnowFootprintStamp,
+  updateSnowFootprints,
   clearSurfaceWeatherVisuals
 } from './SurfaceWeatherVisuals.js';
 import { sfx } from './AudioEngine.js';
@@ -42,6 +47,16 @@ let _lastBlockCount = -1;
 let _steamSoundCd = 0;
 
 const _vSurfLocal = new THREE.Vector3();
+let _surfVisualDirty = false;
+let _surfBoilSoundCd = 0;
+const _surfSkyColTmp = new THREE.Color();
+const _surfSkyHorizTmp = new THREE.Color();
+const _surfBaseColTmp = new THREE.Color();
+const _footBoxTmp = new THREE.Box3();
+const _footSizeTmp = new THREE.Vector3();
+const _surfBoilRedCol = new THREE.Color('#dc2626');
+const _surfBoilEmissiveCol = new THREE.Color('#991b1b');
+const _surfEmissiveTmp = new THREE.Color();
 
 // Детерминированный 2D-шум для естественной неравномерности луж и сугробов
 function hash2D(x, z) {
@@ -145,6 +160,7 @@ function getOrCreateCell(gx, gz, surf) {
     frozenRatio: 0, // 0..1 — степень обледенения лужи при freezing
     // Твёрдый/сыпучий слой (снег, пепел, обсидиановая крошка)
     snowDepth: 0,
+    snowCompress: 0, // 0..0.78 — степень проминания сугроба от шагов
     snowSubstance: 'water',
     solidType: 'snow', // 'snow' | 'ash' | 'obsidian'
     // Остывшая лавовая корка (результат термальной реакции воды и лавы)
@@ -227,10 +243,13 @@ function depositPrecipitationOnCell(cell, substance, phase, intensity, stepDt, a
     cell.snowSubstance = 'lava';
     cell.snowDepth = clamp(cell.snowDepth + amt * 0.85, 0, 0.42);
   } else if (pInfo.kind === 'snow') {
-    // Снег накапливается неравномерными объёмными 3D-сугробами
+    // Снег накапливается неравномерными объёмными 3D-сугробами и плавно заносит следы
     cell.solidType = 'snow';
     cell.snowSubstance = substance;
     cell.snowDepth = clamp(cell.snowDepth + amt * 1.65, 0, 0.85);
+    if (cell.snowCompress > 0) {
+      cell.snowCompress = Math.max(0, cell.snowCompress - amt * 1.8);
+    }
   } else if (pInfo.isHail) {
     // Град создаёт ЛУЖИ и СНЕГ/ЛЕДЯНУЮ КРОШКУ одновременно!
     cell.solidType = 'snow';
@@ -454,8 +473,11 @@ function updateLiquidBlocksHydrology(stepDt, substance, phase, intensity, effTem
   const blocks = S.allBlocks;
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
-    if (!b || b.isDisabled || b._depletedDisabled || b.matterState !== 'liquid' || b._frozenFromLiquid || !b.m) continue;
+    if (!b || b.isDisabled || b._depletedDisabled || b._evaporated || b.matterState !== 'liquid' || b._frozenFromLiquid || !b.m) continue;
     if (b.components && !b.components.physics?.enabled) continue;
+    // В температуре «Ад» вода выкипает и уменьшается в высоту отдельно — не поднимаем её обратно
+    const isBoilingWater = effTemp === 'hell' && b.liquidTemp !== 'hot' && b.effectSource !== 'burn' && b.effectSource !== 'poison' && !(b.statusEffects?.poison?.stacks > 0);
+    if (isBoilingWater || (b._boilProgress || 0) > 0.01) continue;
 
     // Фиксируем исходную высоту и нижнюю грань (дно) водоёма при первом обновлении в Игре
     if (b._weatherBaseH === undefined) {
@@ -501,6 +523,416 @@ function updateLiquidBlocksHydrology(stepDt, substance, phase, intensity, effTem
     if (b.haloSprite) b.haloSprite.position.copy(b.m.position);
     if (b.cpVisualGroup) b.cpVisualGroup.position.copy(b.m.position);
   }
+}
+
+/**
+ * 1) Отражение цвета неба на всех жидких блоках (с Френель-усилением к горизонту).
+ * 2) Эффект бурления (пузыри/пар) по умолчанию для лавы и кислоты.
+ * 3) В температуре мира «Ад» вся вода вскипает, пузырится, gradualmente краснеет,
+ *    уменьшается в высоту и полностью испаряется.
+ */
+function updateLiquidBlocksBoilingAndReflection(dt, effTemp, anchorPos) {
+  const blocks = S.allBlocks || [];
+  if (blocks.length === 0) return;
+
+  getEffectiveSkyColors(_surfSkyColTmp, _surfSkyHorizTmp);
+  setSurfaceWeatherSkyColors(_surfSkyColTmp, _surfSkyHorizTmp);
+
+  const isPlay = S.state === 'play';
+  const tNow = S.time || 0;
+
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (!b || b.isDisabled || b._depletedDisabled || b._evaporated || !b.m) continue;
+
+    // Если замёрзший водоём имеет пропатченный шейдер жидкости — гасим отражение неба на льду
+    if (b._frozenFromLiquid || b.matterState !== 'liquid') {
+      const m0 = Array.isArray(b.m.material) ? b.m.material[0] : b.m.material;
+      if (m0?.userData?._liqReflUniforms) {
+        m0.userData._liqReflUniforms.uLiqSkyStrength.value = 0;
+      }
+      continue;
+    }
+
+    const isLava = b.liquidTemp === 'hot' || b.effectSource === 'burn';
+    const isAcid = !isLava && (b.effectSource === 'poison' || (b.statusEffects?.poison?.stacks || 0) > 0);
+    const isWater = !isLava && !isAcid;
+
+    // --- А. Выкипание воды при температуре мира «Ад» (уменьшение высоты + постепенное покраснение) ---
+    if (isWater) {
+      if (effTemp === 'hell' && isPlay) {
+        if (b._weatherBaseH === undefined) {
+          b._weatherBaseH = b.h;
+          b._weatherBaseY0 = b.m.position.y - b.h * 0.5;
+        }
+        const area = Math.max(2.0, (b.w || 2) * (b.d || 2));
+        // Крупные водоёмы выкипают чуть плавнее, но процесс заметно виден с первых секунд
+        const boilSpd = clamp(0.056 / Math.pow(Math.max(1, area / 28), 0.18), 0.024, 0.066);
+        b._boilProgress = clamp((b._boilProgress || 0) + boilSpd * dt, 0, 1);
+
+        // После короткого прогрева (6%) вода начинает заметно уменьшаться в высоту
+        const shrinkT = clamp((b._boilProgress - 0.06) / 0.94, 0, 1);
+        const newH = Math.max(0.025, b._weatherBaseH * (1 - shrinkT));
+
+        if (Math.abs(newH - b.h) > 0.0005) {
+          b.h = newH;
+          b.m.scale.y = newH;
+          b.m.position.y = b._weatherBaseY0 + newH * 0.5;
+          b.m.updateMatrixWorld();
+          if (_surfHooks.updateBlockOBB) _surfHooks.updateBlockOBB(b);
+          if (b.haloSprite) b.haloSprite.position.copy(b.m.position);
+          if (b.cpVisualGroup) b.cpVisualGroup.position.copy(b.m.position);
+        }
+
+        // Полное выкипание водоёма
+        if (b._boilProgress >= 0.996) {
+          b._evaporated = true;
+          b._depletedDisabled = true;
+          b.m.visible = false;
+          if (b.haloSprite) b.haloSprite.visible = false;
+          if (b.cpVisualGroup) b.cpVisualGroup.visible = false;
+          if (_surfHooks.updateBlockOBB) _surfHooks.updateBlockOBB(b);
+
+          const ex = clamp(anchorPos.x, b.x0, b.x1);
+          const ez = clamp(anchorPos.z, b.z0, b.z1);
+          emitParticleBurst(ex, b._weatherBaseY0 + 0.35, ez, 10, {
+            preset: 'smoke',
+            color: '#f1f5f9',
+            sizeStart: 0.65,
+            sizeEnd: 1.9,
+            speed: 2.2,
+            spread: 1.4,
+            gravity: 2.8,
+            lifetime: 1.2
+          });
+          continue;
+        }
+      } else if ((b._boilProgress || 0) > 0) {
+        // При снижении температуры невыкипевшая вода остывает обратно
+        b._boilProgress = Math.max(0, b._boilProgress - 0.14 * dt);
+      }
+    }
+
+    const boil = isWater ? clamp(b._boilProgress || 0, 0, 1) : 0;
+
+    // --- Б. Попиксельное Френель-отражение неба + постепенное покраснение кипящей воды ---
+    if (b.m.material) {
+      const mats = Array.isArray(b.m.material) ? b.m.material : [b.m.material];
+      const reflUniforms = patchLiquidBlockReflectionMaterial(b.m.material);
+
+      if (reflUniforms) {
+        reflUniforms.uLiqSkyStrength.value = isLava
+          ? 0.14
+          : isAcid
+            ? 0.52
+            : clamp(0.92 * (1.0 - boil * 0.48), 0.35, 0.92);
+        reflUniforms.uLiqFresnelMin.value = isLava ? 0.08 : (isAcid ? 0.14 : 0.22);
+      }
+
+      _surfBaseColTmp.set(b.colorHex || '#38bdf8');
+      if (boil > 0.005) {
+        _surfBaseColTmp.lerp(_surfBoilRedCol, clamp(boil * 0.92, 0, 0.92));
+      }
+
+      const hasUserLight = Boolean(b.lightData && b.lightData.mode && b.lightData.mode !== 'none');
+      const isNeon = b.surfaceType === 'neon';
+
+      for (let mIdx = 0; mIdx < mats.length; mIdx++) {
+        const mat = mats[mIdx];
+        if (!mat || !mat.color) continue;
+        mat.color.copy(_surfBaseColTmp);
+
+        if (!hasUserLight && !isNeon && mat.emissive) {
+          if (boil > 0.05) {
+            _surfEmissiveTmp.copy(_surfBoilEmissiveCol).multiplyScalar(boil * 0.72);
+            mat.emissive.copy(_surfEmissiveTmp);
+            mat.emissiveIntensity = 1.0;
+            b._swvSkyEmissiveApplied = true;
+          } else if (b._swvSkyEmissiveApplied) {
+            mat.emissive.setHex(0x000000);
+            mat.emissiveIntensity = 0;
+            b._swvSkyEmissiveApplied = false;
+          }
+        }
+
+        // Лёгкое дрожание/бурление текстуры на кипящих поверхностях
+        if (mat.map && (isLava || isAcid || (isWater && effTemp === 'hell'))) {
+          const agitate = isWater ? (0.35 + boil * 0.65) : 0.45;
+          mat.map.offset.x = Math.sin(tNow * 5.2 + i * 1.3) * 0.028 * agitate;
+        }
+      }
+    }
+
+    // --- В. Частицы бурления и пара (по умолчанию у лавы и кислоты; у воды — в «Ад») ---
+    const shouldBubble = isLava || isAcid || (isWater && (effTemp === 'hell' || boil > 0.12));
+    if (!shouldBubble) continue;
+
+    const nearX = clamp(anchorPos.x, b.x0, b.x1);
+    const nearZ = clamp(anchorPos.z, b.z0, b.z1);
+    const distToAnchor = Math.hypot(anchorPos.x - nearX, anchorPos.z - nearZ);
+    if (distToAnchor > 44) continue;
+
+    // Видимый участок поверхности в пределах 24м от игрока (чтобы даже в океане пузыри были рядом)
+    const minX = Math.max(b.x0 + 0.15, anchorPos.x - 24);
+    const maxX = Math.min(b.x1 - 0.15, anchorPos.x + 24);
+    const minZ = Math.max(b.z0 + 0.15, anchorPos.z - 24);
+    const maxZ = Math.min(b.z1 - 0.15, anchorPos.z + 24);
+    if (maxX <= minX || maxZ <= minZ) continue;
+
+    const visArea = (maxX - minX) * (maxZ - minZ);
+    const rateScale = clamp(Math.sqrt(visArea) * 0.55, 0.9, 6.5);
+    const bubbleRate = isWater
+      ? rateScale * (1.1 + boil * 1.4)
+      : (isLava ? rateScale * 0.95 : rateScale * 1.05);
+
+    b._boilPartAccum = (b._boilPartAccum || 0) + bubbleRate * dt;
+    const spawnMax = 3;
+    let spawned = 0;
+
+    while (b._boilPartAccum >= 1.0 && spawned < spawnMax) {
+      b._boilPartAccum -= 1.0;
+      spawned++;
+
+      const px = rnd(minX, maxX);
+      const pz = rnd(minZ, maxZ);
+      const py = b.y1 + 0.06;
+
+      if (isLava) {
+        emitParticleBurst(px, py, pz, 1, {
+          preset: 'circle',
+          color: Math.random() < 0.45 ? '#ffd166' : '#ff6b2b',
+          sizeStart: rnd(0.22, 0.42),
+          sizeEnd: 0.04,
+          speed: rnd(1.5, 2.6),
+          spread: 0.35,
+          gravity: -5.2,
+          lifetime: rnd(0.35, 0.58)
+        });
+        if (Math.random() < 0.22) {
+          emitParticleBurst(px, py + 0.1, pz, 1, {
+            preset: 'smoke',
+            color: '#4a3d4f',
+            sizeStart: 0.35,
+            sizeEnd: 1.05,
+            speed: 1.1,
+            spread: 0.4,
+            gravity: 1.9,
+            lifetime: 0.95
+          });
+        }
+      } else if (isAcid) {
+        emitParticleBurst(px, py, pz, 1, {
+          preset: 'circle',
+          color: Math.random() < 0.5 ? '#4ade80' : '#a3e635',
+          sizeStart: rnd(0.20, 0.38),
+          sizeEnd: 0.03,
+          speed: rnd(1.4, 2.3),
+          spread: 0.32,
+          gravity: -4.2,
+          lifetime: rnd(0.38, 0.62)
+        });
+        if (Math.random() < 0.25) {
+          emitParticleBurst(px, py + 0.08, pz, 1, {
+            preset: 'smoke',
+            color: '#86efac',
+            sizeStart: 0.32,
+            sizeEnd: 0.95,
+            speed: 1.0,
+            spread: 0.45,
+            gravity: 1.7,
+            lifetime: 0.9
+          });
+        }
+      } else {
+        // Кипящая вода в «Ад»: пузыри + густой пар
+        const waterBubCol = boil > 0.55
+          ? (Math.random() < 0.5 ? '#fca5a5' : '#ff7b7b')
+          : (Math.random() < 0.5 ? '#e0f2fe' : '#fecaca');
+        emitParticleBurst(px, py, pz, 1, {
+          preset: 'circle',
+          color: waterBubCol,
+          sizeStart: rnd(0.22, 0.40),
+          sizeEnd: 0.04,
+          speed: rnd(1.8, 3.1),
+          spread: 0.38,
+          gravity: -5.8,
+          lifetime: rnd(0.32, 0.54)
+        });
+        if (Math.random() < 0.52) {
+          emitParticleBurst(px, py + 0.1, pz, 1, {
+            preset: 'smoke',
+            color: boil > 0.6 ? '#ffe4e6' : '#f1f5f9',
+            sizeStart: rnd(0.45, 0.72),
+            sizeEnd: rnd(1.25, 1.85),
+            speed: 1.5,
+            spread: 0.6,
+            gravity: 2.6,
+            lifetime: rnd(0.85, 1.3)
+          });
+        }
+        if (_surfBoilSoundCd <= 0 && distToAnchor < 16 && isPlay) {
+          _surfBoilSoundCd = 1.6;
+          sfx.steam?.(clamp(0.45 * (1 - distToAnchor / 18), 0.15, 0.45));
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Проминает 3D-сугроб и оставляет чёткий след ботинка при ходьбе по снегу/пеплу.
+ */
+function resolveEntityFootMetrics(ent) {
+  if (!ent || !ent.rig) {
+    return { offsetX: 0.24, halfW: 0.25, halfL: 0.25 };
+  }
+  const rig = ent.rig;
+  if (!ent._footMetrics || ent._footMetricsRef !== rig) {
+    let offsetX = 0.24;
+    let baseW = 0.46;
+    let baseL = 0.46;
+
+    const legObj = rig.legL || rig.legR;
+    if (legObj) {
+      if (Math.abs(legObj.position.x) > 0.05) {
+        offsetX = Math.abs(legObj.position.x);
+      }
+      let mainMesh = legObj.isMesh ? legObj : null;
+      if (!mainMesh && Array.isArray(legObj.children)) {
+        for (let i = 0; i < legObj.children.length; i++) {
+          const ch = legObj.children[i];
+          if (ch && ch.isMesh && ch.geometry) {
+            mainMesh = ch;
+            break;
+          }
+        }
+      }
+      if (mainMesh && mainMesh.geometry) {
+        if (!mainMesh.geometry.boundingBox) mainMesh.geometry.computeBoundingBox();
+        if (mainMesh.geometry.boundingBox) {
+          _footBoxTmp.copy(mainMesh.geometry.boundingBox);
+          _footBoxTmp.getSize(_footSizeTmp);
+          const mw = _footSizeTmp.x * Math.abs(mainMesh.scale.x || 1) * Math.abs(legObj.scale.x || 1);
+          const md = _footSizeTmp.z * Math.abs(mainMesh.scale.z || 1) * Math.abs(legObj.scale.z || 1);
+          if (mw > 0.08 && mw < 3.0) baseW = mw;
+          if (md > 0.08 && md < 3.0) baseL = md;
+        }
+      }
+    }
+
+    ent._footMetricsRef = rig;
+    ent._footMetrics = { offsetX, baseW, baseL };
+  }
+
+  const scX = Math.abs(rig.g?.scale?.x || 1);
+  const scZ = Math.abs(rig.g?.scale?.z || 1);
+  return {
+    offsetX: ent._footMetrics.offsetX * scX,
+    halfW: ent._footMetrics.baseW * scX * 0.56,
+    halfL: ent._footMetrics.baseL * scZ * 0.56
+  };
+}
+
+export function stampSnowFootprint(wx, wy, wz, yaw = 0, footSide = 1, supportBlock = null, ent = null) {
+  if (S.itemStudioOpen || S.state === 'menu') return false;
+
+  const fm = resolveEntityFootMetrics(ent);
+  // Точное смещение под реальную левую/правую ногу игрока или бота с учётом его масштаба
+  const rx = Math.cos(yaw);
+  const rz = -Math.sin(yaw);
+  const fx = wx + rx * (footSide * fm.offsetX);
+  const fz = wz + rz * (footSide * fm.offsetX);
+
+  const gx = Math.floor(fx / CELL_SIZE);
+  const gz = Math.floor(fz / CELL_SIZE);
+  const key = `${gx},${gz}`;
+  const cell = _cells.get(key);
+
+  if (cell && cell.snowDepth > 0.03 && Math.abs(wy - cell.baseY) <= 0.85) {
+    // 1. Проминаем 3D-сугроб в текущей ячейке и слегка в примыкающей к точке шага
+    const pressAmt = cell.solidType === 'obsidian' ? 0.16 : 0.42;
+    cell.snowCompress = clamp((cell.snowCompress || 0) + pressAmt, 0, 0.74);
+
+    // Мягкое проминание соседнего края сугроба, если шаг близко к границе ячейки
+    const fracX = (fx / CELL_SIZE) - gx;
+    const fracZ = (fz / CELL_SIZE) - gz;
+    const nbOx = fracX < 0.3 ? -1 : (fracX > 0.7 ? 1 : 0);
+    const nbOz = fracZ < 0.3 ? -1 : (fracZ > 0.7 ? 1 : 0);
+    if (nbOx !== 0) {
+      const nb = _cells.get(`${gx + nbOx},${gz}`);
+      if (nb && nb.snowDepth > 0.03 && Math.abs(nb.baseY - cell.baseY) < 0.25) {
+        nb.snowCompress = clamp((nb.snowCompress || 0) + pressAmt * 0.45, 0, 0.65);
+      }
+    }
+    if (nbOz !== 0) {
+      const nb = _cells.get(`${gx},${gz + nbOz}`);
+      if (nb && nb.snowDepth > 0.03 && Math.abs(nb.baseY - cell.baseY) < 0.25) {
+        nb.snowCompress = clamp((nb.snowCompress || 0) + pressAmt * 0.45, 0, 0.65);
+      }
+    }
+
+    _surfVisualDirty = true;
+
+    const rawLift = clamp(cell.snowDepth * (0.58 + cell.noise * 0.28), 0.04, 0.56);
+    const footY = cell.baseY + Math.max(0.015, rawLift * (1.0 - cell.snowCompress)) + 0.018;
+    const snowCol = cell.solidType === 'ash' ? '#676c78'
+      : cell.solidType === 'obsidian' ? '#2b265e'
+      : cell.snowSubstance === 'blood' ? '#f5b5b5'
+      : cell.snowSubstance === 'acid' ? '#a7f3c2'
+      : '#f1f6fc';
+
+    addSnowFootprintStamp({
+      x: fx,
+      y: footY,
+      z: fz,
+      yaw,
+      halfW: fm.halfW,
+      halfL: fm.halfL,
+      color: snowCol,
+      alpha: 0.9,
+      block: cell.block,
+      cellKey: key
+    });
+
+    // Небольшой всплеск снежинок из-под подошвы
+    emitParticleBurst(fx, footY + 0.05, fz, 2, {
+      preset: 'snow',
+      color: snowCol,
+      sizeStart: 0.14,
+      sizeEnd: 0.03,
+      speed: 1.5,
+      spread: 0.75,
+      gravity: -7.5,
+      lifetime: 0.36
+    });
+    return true;
+  }
+
+  // 2. Если сугроба нет, но блок покрыт тонким слоем снега/пепла — тоже оставляем след
+  const coat = sampleBlockSnowCoatAt(fx, wy, fz, supportBlock);
+  if (coat && coat.snow >= 0.14) {
+    const snowCol = coat.snowType === 'blood_snow' ? '#f5b5b5'
+      : coat.snowType === 'acid_snow' ? '#a7f3c2'
+      : coat.snowType === 'ash' ? '#676c78'
+      : coat.snowType === 'obsidian' ? '#2b265e'
+      : '#f1f6fc';
+
+    addSnowFootprintStamp({
+      x: fx,
+      y: coat.surfaceY + 0.022,
+      z: fz,
+      yaw,
+      halfW: fm.halfW,
+      halfL: fm.halfL,
+      color: snowCol,
+      alpha: clamp(0.45 + coat.snow * 0.45, 0.45, 0.88),
+      block: coat.block,
+      cellKey: null
+    });
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -562,34 +994,71 @@ export function clearSurfaceWeatherLayer() {
 
 export function resetSurfaceWeatherLayer(restoreLiquids = true) {
   clearSurfaceWeatherLayer();
+  _surfVisualDirty = false;
   if (!restoreLiquids) return;
 
   const blocks = S.allBlocks || [];
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
-    if (!b || b._weatherBaseH === undefined) continue;
-    if (b.m && b.matterState === 'liquid') {
-      b.h = b._weatherBaseH;
-      b.m.scale.y = b._weatherBaseH;
-      b.m.position.y = b._weatherBaseY0 + b._weatherBaseH * 0.5;
-      b.m.updateMatrixWorld();
-      if (_surfHooks.updateBlockOBB) _surfHooks.updateBlockOBB(b);
-      if (b.haloSprite) b.haloSprite.position.copy(b.m.position);
-      if (b.cpVisualGroup) b.cpVisualGroup.position.copy(b.m.position);
+    if (!b) continue;
+    if (b._evaporated) {
+      b._evaporated = false;
+      b._depletedDisabled = false;
+      if (b.m) b.m.visible = !b.isDisabled && !(S.state === 'edit' && b.editorHidden);
     }
-    delete b._weatherBaseH;
-    delete b._weatherBaseY0;
-    b._weatherRunoffAccum = 0;
+    b._boilProgress = 0;
+    b._boilPartAccum = 0;
+    if (b.m && b.m.material && b.matterState === 'liquid') {
+      const mats = Array.isArray(b.m.material) ? b.m.material : [b.m.material];
+      const origHex = b.colorHex || '#38bdf8';
+      for (let k = 0; k < mats.length; k++) {
+        if (mats[k]?.color) mats[k].color.set(origHex);
+        if (b._swvSkyEmissiveApplied && mats[k]?.emissive) {
+          mats[k].emissive.setHex(0x000000);
+          mats[k].emissiveIntensity = 0;
+        }
+      }
+      b._swvSkyEmissiveApplied = false;
+    }
+    if (b._weatherBaseH !== undefined) {
+      if (b.m && b.matterState === 'liquid') {
+        b.h = b._weatherBaseH;
+        b.m.scale.y = b._weatherBaseH;
+        b.m.position.y = b._weatherBaseY0 + b._weatherBaseH * 0.5;
+        b.m.updateMatrixWorld();
+        if (_surfHooks.updateBlockOBB) _surfHooks.updateBlockOBB(b);
+        if (b.haloSprite) b.haloSprite.position.copy(b.m.position);
+        if (b.cpVisualGroup) b.cpVisualGroup.position.copy(b.m.position);
+      }
+      delete b._weatherBaseH;
+      delete b._weatherBaseY0;
+      b._weatherRunoffAccum = 0;
+    }
   }
 }
 
 export function updateSurfaceWeatherLayer(dt) {
   if (_steamSoundCd > 0) _steamSoundCd = Math.max(0, _steamSoundCd - dt);
+  if (_surfBoilSoundCd > 0) _surfBoilSoundCd = Math.max(0, _surfBoilSoundCd - dt);
   tickSurfaceWeatherVisualsTime(S.time || performance.now() * 0.001);
 
   if (S.itemStudioOpen || S.state === 'menu') {
     rebuildSurfacePrecipitationMeshes(null, CELL_SIZE);
     return;
+  }
+
+  const effTempNow = getEffectiveWorldTemperatureKey();
+  const frameAnchor = (S.state === 'play' && S.player && !S.playerDead)
+    ? { x: S.player.x, y: S.player.y, z: S.player.z }
+    : { x: camera.position.x, y: camera.position.y, z: camera.position.z };
+
+  // Плавное покадровое бурление, выкипание воды в «Ад» и отражение неба на жидких блоках
+  updateLiquidBlocksBoilingAndReflection(dt, effTempNow, frameAnchor);
+
+  // Мгновенная перестройка 3D-сугроба в кадре, когда персонаж промял его шагом
+  if (_surfVisualDirty) {
+    _surfVisualDirty = false;
+    rebuildSurfacePrecipitationMeshes(_cells, CELL_SIZE);
   }
 
   _simAccum += dt;
@@ -658,7 +1127,8 @@ export function updateSurfaceWeatherLayer(dt) {
   // 4. Гидрология: рост жидких блоков вверх
   updateLiquidBlocksHydrology(stepDt, substance, phase, intensity, effTemp);
 
-  // 5. Постепенное покрытие поверхности блоков + объединённые меши луж/сугробов
+  // 5. Постепенное покрытие поверхности блоков + объединённые меши луж/сугробов + обновление следов
   updateBlockSurfaceCoatings(stepDt, substance, phase, intensity, effTemp, anchorPos);
   rebuildSurfacePrecipitationMeshes(_cells, CELL_SIZE);
+  updateSnowFootprints(stepDt, substance, phase, intensity, effTemp, _cells);
 }

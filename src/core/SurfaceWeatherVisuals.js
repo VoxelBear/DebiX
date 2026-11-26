@@ -6,6 +6,7 @@ import { WEATHER_PHASES, isPointExposedToSky } from './WeatherAndClouds.js';
 const SWV_MAX_PUDDLE_QUADS = 1800;
 const SWV_MAX_SNOW_QUADS = 3000;
 const SWV_MAX_COAT_QUADS = 2200;
+const SWV_MAX_FOOTPRINTS = 280;
 const SWV_ATLAS_TILE = 64;
 const SWV_ATLAS_SIZE = SWV_ATLAS_TILE * 4; // 256x256 (16 бесшовных масок связности)
 const SWV_COAT_STEP = 2.2;                 // Шаг сетки покрытия для мягких границ под крышами
@@ -18,9 +19,13 @@ let _swvLavaBatch = null;
 let _swvSnowBatch = null;
 let _swvCoatWetBatch = null;
 let _swvCoatSnowBatch = null;
+let _swvFootprintBatch = null;
 
-// Единый uniform времени для плавной анимации ряби, бликов и пузырьков на 60 FPS
+// Единые uniforms времени и цвета неба для отражения в лужах и влажных поверхностях
 const _swvTimeUniform = { value: 0 };
+const _swvSkyColorUniform = { value: new THREE.Color('#88ccff') };
+const _swvSkyHorizonUniform = { value: new THREE.Color('#88ccff') };
+const _swvFootprints = [];
 
 const _swvColor = new THREE.Color();
 const _swvIceColor = new THREE.Color();
@@ -107,9 +112,11 @@ function createPuddleConnectivityFieldTexture() {
 
 const GLSL_SWV_NOISE_COMMON = `
 uniform float uSwvTime;
+uniform vec3 uSwvSkyColor;
 varying float vSwvAlpha;
 varying vec3 vSwvWorldPos;
 varying float vSwvNormalY;
+varying vec2 vSwvUv;
 
 float swvHash(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -158,21 +165,22 @@ function patchSwvMaterial(mat, mode, cacheKey) {
   mat.customProgramCacheKey = () => cacheKey;
   mat.onBeforeCompile = shader => {
     shader.uniforms.uSwvTime = _swvTimeUniform;
+    shader.uniforms.uSwvSkyColor = _swvSkyColorUniform;
 
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
-        '#include <common>\nattribute float aAlpha;\nvarying float vSwvAlpha;\nvarying vec3 vSwvWorldPos;\nvarying float vSwvNormalY;'
+        '#include <common>\nattribute float aAlpha;\nvarying float vSwvAlpha;\nvarying vec3 vSwvWorldPos;\nvarying float vSwvNormalY;\nvarying vec2 vSwvUv;'
       )
       .replace(
         '#include <begin_vertex>',
-        '#include <begin_vertex>\nvSwvAlpha = aAlpha;\nvSwvWorldPos = position;\nvSwvNormalY = normal.y;'
+        '#include <begin_vertex>\nvSwvAlpha = aAlpha;\nvSwvWorldPos = position;\nvSwvNormalY = normal.y;\nvSwvUv = uv;'
       );
 
     let fragBody = '';
 
     if (mode === 'puddle') {
-      // Стилизованная полупрозрачная глянцевая жидкость с чётким краем, мениском и анимированной рябью
+      // Стилизованная полупрозрачная глянцевая жидкость с Френель-отражением неба, мениском и рябью
       fragBody = `
         #include <color_fragment>
         float conn = diffuseColor.a;
@@ -195,13 +203,18 @@ function patchSwvMaterial(mat, mode, cacheKey) {
         // Тонкий намёк на квадратные пупырышки под прозрачной лужей
         float stud = swvLegoStudMask(wp);
 
-        vec3 baseCol = diffuseColor.rgb;
-        vec3 rimCol = mix(baseCol * 1.45, vec3(0.95, 0.98, 1.0), 0.52);
-        diffuseColor.rgb = mix(baseCol, rimCol, rim * 0.62);
-        diffuseColor.rgb += vec3(0.28, 0.32, 0.36) * glint * (0.45 + vSwvAlpha * 0.5);
+        // Отражение цвета неба под углом взгляда (Френель)
+        vec3 viewToCam = normalize(cameraPosition - vSwvWorldPos);
+        float fresnel = pow(1.0 - clamp(abs(viewToCam.y), 0.0, 1.0), 2.1);
+        float skyRefl = mix(0.24, 0.68, fresnel);
+
+        vec3 baseCol = mix(diffuseColor.rgb, uSwvSkyColor, skyRefl);
+        vec3 rimCol = mix(baseCol * 1.35, mix(vec3(0.95, 0.98, 1.0), uSwvSkyColor, 0.45), 0.52);
+        diffuseColor.rgb = mix(baseCol, rimCol, rim * 0.60);
+        diffuseColor.rgb += mix(vec3(0.25, 0.28, 0.32), uSwvSkyColor * 0.55, 0.5) * glint * (0.45 + vSwvAlpha * 0.5);
         diffuseColor.rgb -= vec3(0.05) * max(0.0, stud);
 
-        diffuseColor.a = shape * clamp(vSwvAlpha + rim * 0.16 + glint * 0.10, 0.0, 0.82);
+        diffuseColor.a = shape * clamp(vSwvAlpha + rim * 0.16 + glint * 0.10 + fresnel * 0.12, 0.0, 0.86);
         if (diffuseColor.a < 0.02) discard;
       `;
     } else if (mode === 'lava') {
@@ -265,9 +278,37 @@ function patchSwvMaterial(mat, mode, cacheKey) {
         float studCollect = clamp(reveal + max(0.0, stud) * vSwvAlpha * 0.22, 0.0, 1.0);
         float speck = smoothstep(0.76, 0.86, nFine) * 0.22;
 
-        diffuseColor.rgb = diffuseColor.rgb + vec3(0.22, 0.25, 0.28) * speck;
+        diffuseColor.rgb = mix(diffuseColor.rgb, uSwvSkyColor, 0.38) + mix(vec3(0.20, 0.23, 0.26), uSwvSkyColor * 0.45, 0.55) * speck;
         diffuseColor.a = studCollect * clamp(vSwvAlpha * 0.44, 0.0, 0.44);
         if (diffuseColor.a < 0.015) discard;
+      `;
+    } else if (mode === 'footprint') {
+      // Отпечаток квадратной/прямоугольной ноги R6 на снегу с мягкой тенью глубины и тонким валиком
+      fragBody = `
+        #include <color_fragment>
+        vec2 p = vSwvUv - 0.5;
+        vec2 q = abs(p) - vec2(0.38, 0.38);
+        float sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - 0.045;
+
+        // Чёткая вмятина ровно по контуру блока ноги R6
+        float innerMask = 1.0 - smoothstep(-0.035, 0.012, sd);
+        float bevelWall = smoothstep(-0.075, -0.005, sd) * innerMask;
+        float outerRim = smoothstep(0.0, 0.03, sd) * (1.0 - smoothstep(0.03, 0.085, sd));
+
+        float grain = swvNoise(vSwvWorldPos.xz * 8.0) * 0.06;
+        // Направленный объёмный градиент внутри ямки (имитирует реальную глубину вмятины)
+        float shadeGrad = clamp(0.5 + (p.x + p.y) * 0.75, 0.2, 0.95);
+        vec3 floorCol = diffuseColor.rgb * mix(vec3(0.60, 0.67, 0.78), vec3(0.76, 0.82, 0.90), shadeGrad) * (1.0 - grain);
+        vec3 wallCol = diffuseColor.rgb * vec3(0.50, 0.58, 0.70);
+        vec3 rimCol = diffuseColor.rgb * 1.08;
+
+        vec3 insideCol = mix(floorCol, wallCol, bevelWall * 0.65);
+        float mask = max(innerMask * 0.88, outerRim * 0.36);
+        if (mask < 0.02) discard;
+
+        diffuseColor.rgb = mix(rimCol, insideCol, clamp(innerMask * 1.2, 0.0, 1.0));
+        diffuseColor.a = mask * clamp(vSwvAlpha, 0.0, 0.88);
+        if (diffuseColor.a < 0.02) discard;
       `;
     } else if (mode === 'coat_snow') {
       // Стилизованное снежное/пепельное покрытие с мягкой границей под крышами и LEGO-пупырышками
@@ -513,10 +554,143 @@ function ensureVisualBatches() {
     'debix_swv_coatsnow_v2'
   );
   _swvCoatSnowBatch = createMergedQuadBatch(SWV_MAX_COAT_QUADS, coatSnowMat, 2, false);
+
+  // 6. Объединённый меш следов ног на снегу
+  const footprintMat = patchSwvMaterial(
+    new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.92,
+      metalness: 0.0,
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -6
+    }),
+    'footprint',
+    'debix_swv_footprint_v1'
+  );
+  _swvFootprintBatch = createMergedQuadBatch(SWV_MAX_FOOTPRINTS, footprintMat, 5, false);
 }
 
 export function tickSurfaceWeatherVisualsTime(timeSec) {
   _swvTimeUniform.value = Number(timeSec) || 0;
+}
+
+export function setSurfaceWeatherSkyColors(skyColor, horizonColor) {
+  if (skyColor) _swvSkyColorUniform.value.copy(skyColor);
+  if (horizonColor) _swvSkyHorizonUniform.value.copy(horizonColor);
+  else if (skyColor) _swvSkyHorizonUniform.value.copy(skyColor);
+}
+
+export function setSurfaceWeatherSkyColor(skyColor) {
+  setSurfaceWeatherSkyColors(skyColor, skyColor);
+}
+
+/**
+ * Патчит материал жидкого блока для попиксельного Френель-отражения неба с рябью.
+ * Совместим с Three.js r128 (WebGL1) и массивами 6-гранных материалов.
+ */
+export function patchLiquidBlockReflectionMaterial(matOrArr) {
+  if (!matOrArr) return null;
+  const mats = Array.isArray(matOrArr) ? matOrArr : [matOrArr];
+  let sharedUniforms = null;
+
+  for (let i = 0; i < mats.length; i++) {
+    const mat = mats[i];
+    if (!mat || !mat.isMaterial) continue;
+    if (mat.userData && mat.userData._liqReflUniforms) {
+      sharedUniforms = mat.userData._liqReflUniforms;
+      continue;
+    }
+    if (!sharedUniforms) {
+      sharedUniforms = {
+        uLiqSkyStrength: { value: 0.85 },
+        uLiqFresnelMin: { value: 0.16 }
+      };
+    }
+    if (!mat.userData) mat.userData = {};
+    mat.userData._liqReflUniforms = sharedUniforms;
+
+    mat.customProgramCacheKey = () => 'debix_liq_skyrefl_v2';
+    mat.onBeforeCompile = shader => {
+      shader.uniforms.uSwvTime = _swvTimeUniform;
+      shader.uniforms.uSwvSkyColor = _swvSkyColorUniform;
+      shader.uniforms.uSwvSkyHorizon = _swvSkyHorizonUniform;
+      shader.uniforms.uLiqSkyStrength = sharedUniforms.uLiqSkyStrength;
+      shader.uniforms.uLiqFresnelMin = sharedUniforms.uLiqFresnelMin;
+
+      const hasNormalChunk = shader.vertexShader.indexOf('#include <beginnormal_vertex>') !== -1;
+
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <common>',
+        '#include <common>\nvarying vec3 vLiqWorldPos;\nvarying vec3 vLiqWorldNorm;'
+      );
+
+      if (hasNormalChunk) {
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <beginnormal_vertex>',
+          `#include <beginnormal_vertex>
+          vec3 _liqWn = (modelMatrix * vec4(objectNormal, 0.0)).xyz;
+          vLiqWorldNorm = length(_liqWn) > 0.0001 ? normalize(_liqWn) : vec3(0.0, 1.0, 0.0);`
+        );
+      }
+
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vLiqWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        ${hasNormalChunk ? '' : 'vLiqWorldNorm = vec3(0.0, 1.0, 0.0);'}`
+      );
+
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          `#include <common>
+uniform float uSwvTime;
+uniform vec3 uSwvSkyColor;
+uniform vec3 uSwvSkyHorizon;
+uniform float uLiqSkyStrength;
+uniform float uLiqFresnelMin;
+varying vec3 vLiqWorldPos;
+varying vec3 vLiqWorldNorm;`
+        )
+        .replace(
+          '#include <tonemapping_fragment>',
+          `
+          if (uLiqSkyStrength > 0.005) {
+            vec3 toCam = cameraPosition - vLiqWorldPos;
+            float camDist = length(toCam);
+            vec3 viewDir = toCam / max(camDist, 0.001);
+            vec3 baseN = length(vLiqWorldNorm) > 0.0001 ? normalize(vLiqWorldNorm) : vec3(0.0, 1.0, 0.0);
+
+            // Живая рябь волн, преломляющая отражение неба
+            float topMask = smoothstep(0.35, 0.85, baseN.y);
+            float w1 = sin(vLiqWorldPos.x * 1.15 + uSwvTime * 1.75 + cos(vLiqWorldPos.z * 0.72)) * 0.055;
+            float w2 = cos(vLiqWorldPos.z * 1.35 - uSwvTime * 1.45 + sin(vLiqWorldPos.x * 0.85)) * 0.055;
+            vec3 rippleN = normalize(baseN + vec3(w1, 0.0, w2) * topMask);
+
+            float ndotv = clamp(abs(dot(rippleN, viewDir)), 0.0, 1.0);
+            float fresnel = clamp(uLiqFresnelMin + (1.0 - uLiqFresnelMin) * pow(max(0.0001, 1.0 - ndotv), 2.35), 0.0, 0.96);
+            float distFade = smoothstep(18.0, 165.0, camDist) * 0.62;
+            float reflFactor = clamp(max(fresnel, distFade) * uLiqSkyStrength * mix(0.45, 1.0, topMask), 0.0, 0.95);
+
+            // Ближе к зениту отражается верх неба, ближе к горизонту — цвет горизонта
+            vec3 skyRefl = mix(uSwvSkyColor, uSwvSkyHorizon, smoothstep(0.12, 0.82, fresnel));
+            float shimmer = smoothstep(0.055, 0.095, abs(w1 + w2)) * 0.14 * topMask * uLiqSkyStrength;
+
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, skyRefl, reflFactor) + skyRefl * shimmer;
+            gl_FragColor.a = clamp(gl_FragColor.a + reflFactor * 0.24, 0.0, 0.98);
+          }
+          #include <tonemapping_fragment>
+          `
+        );
+    };
+    mat.needsUpdate = true;
+  }
+
+  return sharedUniforms;
 }
 
 /* ---------- 4. ОБРЕЗКА ПО КРАЮ БЛОКОВ И ПОСТРОЕНИЕ 3D-СУГРОБОВ И ЛУЖ ---------- */
@@ -665,8 +839,10 @@ function computeSnowCornerLift(cellsMap, gx, gz, dxCorner, dzCorner, baseY) {
     for (let iz = 0; iz < 2; iz++) {
       const c = getNeighborCell(cellsMap, xs[ix], zs[iz], baseY);
       if (c && c.snowDepth > 0.03) {
-        // Рельефная высота настоящего 3D-сугроба с учётом неравномерности шума
-        sum += clamp(c.snowDepth * (0.58 + c.noise * 0.28), 0.04, 0.56);
+        // Рельефная высота настоящего 3D-сугроба с учётом проминания от шагов (snowCompress)
+        const rawLift = clamp(c.snowDepth * (0.58 + c.noise * 0.28), 0.04, 0.56);
+        const comp = clamp(c.snowCompress || 0, 0, 0.78);
+        sum += Math.max(0.015, rawLift * (1.0 - comp));
         cnt++;
       }
     }
@@ -1124,11 +1300,157 @@ export function updateBlockSurfaceCoatings(stepDt, substance, phase, intensity, 
   flushBatch(_swvCoatSnowBatch);
 }
 
+/**
+ * Проверяет толщину тонкого снежного покрытия на блоке в точке (wx, wy, wz).
+ */
+export function sampleBlockSnowCoatAt(wx, wy, wz, supportBlock = null) {
+  if (_swvBlockCoats.size === 0) return null;
+  const checkBlock = b => {
+    if (!b || b.isDisabled || b._depletedDisabled || b.matterState !== 'solid' || !b.m) return null;
+    if (wx < b.x0 - 0.1 || wx > b.x1 + 0.1 || wz < b.z0 - 0.1 || wz > b.z1 + 0.1) return null;
+    if (Math.abs(wy - b.y1) > 0.65) return null;
+
+    const segX = Math.max(1, Math.ceil(b.w / SWV_COAT_STEP));
+    const segZ = Math.max(1, Math.ceil(b.d / SWV_COAT_STEP));
+    const stepLX = (b.hx * 2) / segX;
+    const stepLZ = (b.hz * 2) / segZ;
+
+    let lx, lz;
+    if (!b.isRotated) {
+      lx = wx - b.m.position.x + b.hx;
+      lz = wz - b.m.position.z + b.hz;
+    } else {
+      _swvTmp.set(wx - b.m.position.x, 0, wz - b.m.position.z).applyQuaternion(b.invQuat);
+      lx = _swvTmp.x + b.hx;
+      lz = _swvTmp.z + b.hz;
+    }
+    const ix = clamp(Math.floor(lx / stepLX), 0, segX - 1);
+    const iz = clamp(Math.floor(lz / stepLZ), 0, segZ - 1);
+    const st = _swvBlockCoats.get(`${b.id}_${ix}_${iz}`);
+    if (!st || (st.snow || 0) < 0.12) return null;
+    return { snow: st.snow, snowType: st.snowType || 'snow', block: b, surfaceY: b.y1 };
+  };
+
+  if (supportBlock) {
+    const res = checkBlock(supportBlock);
+    if (res) return res;
+  }
+  const blocks = S.allBlocks || [];
+  for (let i = 0; i < blocks.length; i++) {
+    const res = checkBlock(blocks[i]);
+    if (res) return res;
+  }
+  return null;
+}
+
+export function rebuildSnowFootprintsMesh() {
+  ensureVisualBatches();
+  resetBatch(_swvFootprintBatch);
+
+  if (S.itemStudioOpen || _swvFootprints.length === 0) {
+    flushBatch(_swvFootprintBatch);
+    return;
+  }
+
+  _swvNorm.set(0, 1, 0);
+  for (let i = 0; i < _swvFootprints.length; i++) {
+    const fp = _swvFootprints[i];
+    if (!fp || fp.alpha <= 0.02) continue;
+    if (fp.block && (fp.block.isDisabled || fp.block._depletedDisabled)) continue;
+
+    const sinY = Math.sin(fp.yaw);
+    const cosY = Math.cos(fp.yaw);
+    const fx = sinY * fp.halfL;
+    const fz = cosY * fp.halfL;
+    const rx = cosY * fp.halfW;
+    const rz = -sinY * fp.halfW;
+
+    const cx = fp.x;
+    const cy = fp.y;
+    const cz = fp.z;
+
+    _swvV0.set(cx - rx - fx, cy, cz - rz - fz);
+    _swvV1.set(cx + rx - fx, cy, cz + rz - fz);
+    _swvV2.set(cx + rx + fx, cy, cz + rz + fz);
+    _swvV3.set(cx - rx + fx, cy, cz - rz + fz);
+
+    _swvColor.set(fp.color || '#f1f6fc');
+    pushQuadToBatch(
+      _swvFootprintBatch,
+      _swvV0, _swvV1, _swvV2, _swvV3,
+      _swvNorm,
+      0, 0, 1, 1,
+      _swvColor.r, _swvColor.g, _swvColor.b,
+      fp.alpha, fp.alpha, fp.alpha, fp.alpha
+    );
+  }
+
+  flushBatch(_swvFootprintBatch);
+}
+
+export function addSnowFootprintStamp({ x, y, z, yaw = 0, halfW = 0.26, halfL = 0.26, color = '#f1f6fc', alpha = 0.88, block = null, cellKey = null }) {
+  ensureVisualBatches();
+  if (_swvFootprints.length >= SWV_MAX_FOOTPRINTS) {
+    _swvFootprints.shift();
+  }
+  _swvFootprints.push({
+    x,
+    y,
+    z,
+    yaw,
+    halfW: clamp(Number(halfW) || 0.26, 0.12, 1.8),
+    halfL: clamp(Number(halfL) || 0.26, 0.12, 1.8),
+    color,
+    alpha: clamp(alpha, 0.25, 0.92),
+    age: 0,
+    maxAge: 42,
+    block,
+    cellKey
+  });
+  rebuildSnowFootprintsMesh();
+}
+
+export function updateSnowFootprints(stepDt, substance, phase, intensity, effTemp, cellsMap) {
+  if (_swvFootprints.length === 0) return;
+
+  const pInfo = WEATHER_PHASES[phase] || WEATHER_PHASES.none;
+  const isSnowing = substance !== 'none' && (pInfo.kind === 'snow' || pInfo.isHail);
+  const meltRates = { freezing: 0, cold: 0, cool: 0.03, normal: 0.08, warm: 0.16, hot: 0.32, hell: 0.6 };
+  const meltFade = meltRates[effTemp] ?? 0.05;
+
+  for (let i = _swvFootprints.length - 1; i >= 0; i--) {
+    const fp = _swvFootprints[i];
+    fp.age += stepDt;
+
+    if (fp.cellKey && cellsMap) {
+      const c = cellsMap.get(fp.cellKey);
+      if (c && c.snowDepth > 0.03) {
+        const rawLift = clamp(c.snowDepth * (0.58 + c.noise * 0.28), 0.04, 0.56);
+        const comp = clamp(c.snowCompress || 0, 0, 0.78);
+        fp.y = c.baseY + Math.max(0.015, rawLift * (1.0 - comp)) + 0.018;
+      } else {
+        fp.alpha -= stepDt * 0.45;
+      }
+    }
+
+    const snowFillFade = isSnowing ? (0.042 * intensity * stepDt) : 0;
+    const ageFade = fp.age > fp.maxAge * 0.72 ? (stepDt * 0.12) : 0;
+    fp.alpha -= (snowFillFade + meltFade * stepDt + ageFade);
+
+    if (fp.alpha <= 0.02 || fp.age >= fp.maxAge || (fp.block && (fp.block.isDisabled || fp.block._depletedDisabled))) {
+      _swvFootprints.splice(i, 1);
+    }
+  }
+
+  rebuildSnowFootprintsMesh();
+}
+
 export function clearSurfaceWeatherVisuals() {
   _swvBlockCoats.clear();
+  _swvFootprints.length = 0;
   restoreAllBlockRoughness();
   if (!_swvInited) return;
-  for (const batch of [_swvPuddleBatch, _swvLavaBatch, _swvSnowBatch, _swvCoatWetBatch, _swvCoatSnowBatch]) {
+  for (const batch of [_swvPuddleBatch, _swvLavaBatch, _swvSnowBatch, _swvCoatWetBatch, _swvCoatSnowBatch, _swvFootprintBatch]) {
     if (batch) {
       batch.quadCount = 0;
       batch.geo.setDrawRange(0, 0);

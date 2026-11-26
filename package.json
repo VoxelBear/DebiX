@@ -6,10 +6,12 @@
     "build-exe": "pkg . --targets node18-win-x64 --output DebiX-Launcher.exe"
   },
   "dependencies": {
-    "ws": "^8.18.0"
+    "ws": "^8.23.0"
   },
   "pkg": {
-    "scripts": ["lan-server.js"],
+    "scripts": [
+      "lan-server.js"
+    ],
     "assets": [
       "launcher.html",
       "lan-server.js",

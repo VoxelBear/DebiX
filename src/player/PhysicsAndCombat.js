@@ -73,7 +73,8 @@ import {
 } from '../core/StatusEffects.js';
 import {
   registerSurfaceWeatherHooks,
-  sampleSurfaceWeatherAt
+  sampleSurfaceWeatherAt,
+  stampSnowFootprint
 } from '../core/SurfaceWeatherLayer.js';
 
 const _vLocal = new THREE.Vector3();
@@ -6037,6 +6038,24 @@ export function update(dt) {
     p._supportBlock = null;
   }
 
+  // Следы и проминание снега под ногами игрока (шаги + приземление)
+  if (p.grounded && !p.isFlying && !p.inLiquid && !playerFrozen) {
+    const pScale = Math.abs(p.rig?.g?.scale?.y || 1);
+    const stepStride = clamp(0.66 * pScale, 0.35, 1.8);
+    if (!p._wasGroundedPrev) {
+      stampSnowFootprint(p.x, p.y, p.z, p.rot || 0, -1, p._supportBlock, p);
+      stampSnowFootprint(p.x, p.y, p.z, p.rot || 0, 1, p._supportBlock, p);
+      p._snowStepDist = 0;
+    } else if (len > 0.1) {
+      p._snowStepDist = (p._snowStepDist || 0) + Math.hypot(vx, vz) * dt;
+      if (p._snowStepDist >= stepStride) {
+        p._snowStepDist -= stepStride;
+        p._snowFootSide = -(p._snowFootSide || 1);
+        stampSnowFootprint(p.x, p.y, p.z, p.rot || 0, p._snowFootSide, p._supportBlock, p);
+      }
+    }
+  }
+
   // Гарантированное обновление процедурной анимации и 15 жестов R6 со стабилизацией на наклонных мостах и плотах
   if (!playerFrozen) {
     updateEntityAnimation(p, dt, {
@@ -7338,6 +7357,16 @@ export function updateCustomNPCsRuntime(dt, player) {
         npc.z += desiredMoveZ * effSpd * dt;
         npc.rot = Math.atan2(desiredMoveX, desiredMoveZ);
         npc.step += effSpd * dt * 2.5;
+        if (npc.grounded && !inLiquid && (!player || Math.hypot(npc.x - player.x, npc.z - player.z) < 32)) {
+          const nScale = Math.abs(npc.rig?.g?.scale?.y || 1);
+          const nStride = clamp(0.72 * nScale, 0.35, 2.0);
+          npc._snowStepDist = (npc._snowStepDist || 0) + effSpd * dt;
+          if (npc._snowStepDist >= nStride) {
+            npc._snowStepDist -= nStride;
+            npc._snowFootSide = -(npc._snowFootSide || 1);
+            stampSnowFootprint(npc.x, npc.y, npc.z, npc.rot || 0, npc._snowFootSide, null, npc);
+          }
+        }
       } 
 
       // Вертикальная физика (Гравитация и плавание)

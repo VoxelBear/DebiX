@@ -538,16 +538,23 @@ function syncWorldItemEffectsMirror(target) {
 export function freezeLiquidBlock(box) {
   if (!box || box.matterState !== 'liquid' || box._frozenFromLiquid) return;
   box._frozenFromLiquid = true;
+  box._boilProgress = 0;
   box._origColorHex = box.colorHex;
-  box._origOpacity = box.m?.material?.opacity ?? 0.72;
-  box._origTransparent = box.m?.material?.transparent ?? true;
+  const firstMat = Array.isArray(box.m?.material) ? box.m.material[0] : box.m?.material;
+  box._origOpacity = firstMat?.opacity ?? 0.72;
+  box._origTransparent = firstMat?.transparent ?? true;
   box.matterState = 'solid';
 
-  if (box.m && box.m.material && box.m.material.color) {
-    box.m.material.color.set('#b9ecff');
-    if (box.m.material.roughness !== undefined) box.m.material.roughness = 0.14;
-    box.m.material.transparent = true;
-    box.m.material.opacity = 0.88;
+  if (box.m && box.m.material) {
+    const mats = Array.isArray(box.m.material) ? box.m.material : [box.m.material];
+    for (let i = 0; i < mats.length; i++) {
+      const m = mats[i];
+      if (!m) continue;
+      if (m.color) m.color.set('#b9ecff');
+      if (m.roughness !== undefined) m.roughness = 0.14;
+      m.transparent = true;
+      m.opacity = 0.88;
+    }
   }
   if (_hooks.updateBlockOBB) _hooks.updateBlockOBB(box);
   spawnSteamBurst(box);
@@ -557,10 +564,15 @@ export function thawLiquidBlock(box) {
   if (!box || !box._frozenFromLiquid) return;
   box._frozenFromLiquid = false;
   box.matterState = 'liquid';
-  if (box.m && box.m.material && box.m.material.color) {
-    box.m.material.color.set(box._origColorHex || '#38bdf8');
-    box.m.material.transparent = true;
-    box.m.material.opacity = box._origOpacity ?? 0.72;
+  if (box.m && box.m.material) {
+    const mats = Array.isArray(box.m.material) ? box.m.material : [box.m.material];
+    for (let i = 0; i < mats.length; i++) {
+      const m = mats[i];
+      if (!m) continue;
+      if (m.color) m.color.set(box._origColorHex || '#38bdf8');
+      m.transparent = true;
+      m.opacity = box._origOpacity ?? 0.72;
+    }
   }
   if (_hooks.updateBlockOBB) _hooks.updateBlockOBB(box);
 }
@@ -929,12 +941,12 @@ function tickTargetStatusEffects(target, dt, prof) {
   const se = ensureStatusEffects(target);
   if (target._burnContactCd > 0) target._burnContactCd = Math.max(0, target._burnContactCd - dt);
   if (target._heatThawGrace > 0) target._heatThawGrace = Math.max(0, target._heatThawGrace - dt);
+  // 1. Поддержание перманентного источника эффекта с учётом температуры мира
+  const srcType = target.effectSource || target.item?.effectSource || 'none';
   if (target._frozenFromLiquid && se.freeze.stacks <= 0 && srcType !== 'freeze') {
     thawLiquidBlock(target);
   }
 
-  // 1. Поддержание перманентного источника эффекта с учётом температуры мира
-  const srcType = target.effectSource || target.item?.effectSource || 'none';
   if (srcType !== 'none' && EFFECT_TYPES.includes(srcType)) {
     const srcMax = srcType === 'burn'
       ? prof.burnSourceMax

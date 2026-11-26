@@ -12,9 +12,28 @@ import {
   setWorldAmbience,
   syncVolumesFromSettings,
   promptUploadCustomAudio,
+  promptAddCustomStreamAudio,
   playSoundId,
   createDefaultSoundData
 } from '../core/AudioEngine.js';
+import {
+  createDefaultMediaScreenData,
+  createDefaultSoundEmitterData,
+  promptUploadCustomVideo,
+  promptAddStreamVideo,
+  toggleBlockMediaPlayback,
+  reloadBlockMedia,
+  syncBlockMediaVisuals,
+  getLinkedSpeakersForScreen,
+  getLinkedSpeakersCountForScreen,
+  addUrlOrPlaylistToScreenQueue,
+  addLibraryVideoToScreenQueue,
+  playScreenQueueIndex,
+  nextScreenTrack,
+  prevScreenTrack,
+  removeScreenQueueItem,
+  clearScreenQueue
+} from '../core/MediaSystem.js';
 import {
   MAX_COSMETIC_PARTS,
   MAX_ITEM_PARTS,
@@ -720,20 +739,28 @@ function _renderInspectorUICore() {
           <label>Громк. Эмбиента</label>
           <input type="range" min="0" max="1.2" step="0.05" id="wVolAmb" value="${S.worldSettings.ambienceVolume ?? 0.45}" style="flex:1">
         </div>
+        <div class="prop-row">
+          <label>Громк. Экранов/3D</label>
+          <input type="range" min="0" max="1.5" step="0.05" id="wVolMedia" value="${S.worldSettings.mediaVolume ?? 0.9}" style="flex:1">
+        </div>
 
         <div style="border-top:1px dashed #283147;padding-top:6px;margin-top:4px;display:flex;flex-direction:column;gap:5px">
-          <div style="font:800 9.5px var(--f);color:#8fa0bd;text-transform:uppercase">📥 Загрузить свои аудиофайлы (.MP3 / .WAV / .OGG):</div>
+          <div style="font:800 9.5px var(--f);color:#8fa0bd;text-transform:uppercase">📥 Свои аудиофайлы и 🌐 Потоки по ссылке (YouTube / URL):</div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px">
-            <button class="ed-btn apply-oneclick" id="btnUploadCustomSfx" type="button" style="justify-content:center;font-size:10px">➕ Свой Звук</button>
-            <button class="ed-btn" id="btnUploadCustomMusic" type="button" style="justify-content:center;font-size:10px;border-color:#56f0ff">➕ Своя Музыка</button>
-            <button class="ed-btn" id="btnUploadCustomAmb" type="button" style="justify-content:center;font-size:10px;border-color:#00e676">➕ Свой Фон</button>
+            <button class="ed-btn apply-oneclick" id="btnUploadCustomSfx" type="button" style="justify-content:center;font-size:10px">➕ Файл Звук</button>
+            <button class="ed-btn" id="btnUploadCustomMusic" type="button" style="justify-content:center;font-size:10px;border-color:#56f0ff">➕ Файл Музыка</button>
+            <button class="ed-btn" id="btnUploadCustomAmb" type="button" style="justify-content:center;font-size:10px;border-color:#00e676">➕ Файл Фон</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+            <button class="ed-btn" id="btnAddStreamMusic" type="button" style="justify-content:center;font-size:10px;border-color:#ff6b6b">🌐 Музыка по ссылке / YT</button>
+            <button class="ed-btn" id="btnAddStreamSfx" type="button" style="justify-content:center;font-size:10px;border-color:#ffce3a">🌐 Звук для колонок / YT</button>
           </div>
           ${(S.customAudioLibrary || []).length > 0 ? `
             <div style="display:flex;flex-direction:column;gap:4px;max-height:130px;overflow-y:auto;margin-top:3px">
               ${S.customAudioLibrary.map((aud, idx) => `
                 <div style="display:flex;align-items:center;gap:4px;background:#101420;padding:4px 6px;border-radius:6px;border:1px solid #252f48">
-                  <span style="flex:1;font:700 10px var(--f);color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                    ${aud.category === 'music' ? '🎵' : (aud.category === 'ambience' ? '🌲' : '🔊')} ${aud.name}
+                  <span style="flex:1;font:700 10px var(--f);color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${aud.url || aud.name}">
+                    ${aud.url ? '🌐' : (aud.category === 'music' ? '🎵' : (aud.category === 'ambience' ? '🌲' : '🔊'))} ${aud.name}
                   </span>
                   <button class="ed-btn" data-aud-play="${aud.id}" type="button" style="padding:2px 6px;font-size:10px" title="Прослушать">▶</button>
                   <button class="ed-btn danger" data-aud-del="${idx}" type="button" style="padding:2px 6px;font-size:10px" title="Удалить">🗑️</button>
@@ -984,16 +1011,31 @@ function _renderInspectorUICore() {
         if (window.__debixSyncWorldSettings) window.__debixSyncWorldSettings(false);
       };
     }
-    ['wVolSfx', 'wVolMusic', 'wVolAmb'].forEach(id => {
+    ['wVolSfx', 'wVolMusic', 'wVolAmb', 'wVolMedia'].forEach(id => {
       if ($(id)) {
         $(id).oninput = () => {
           S.worldSettings.sfxVolume = +$('wVolSfx').value;
           S.worldSettings.musicVolume = +$('wVolMusic').value;
           S.worldSettings.ambienceVolume = +$('wVolAmb').value;
+          if ($('wVolMedia')) S.worldSettings.mediaVolume = +$('wVolMedia').value;
           syncVolumesFromSettings();
         };
       }
     });
+    if ($('btnAddStreamMusic')) {
+      $('btnAddStreamMusic').onclick = () => promptAddCustomStreamAudio('music', entry => {
+        if (window.__debixSyncCustomAsset) window.__debixSyncCustomAsset('audio', entry);
+        setWorldMusic('custom:' + entry.id);
+        if (window.__debixSyncWorldSettings) window.__debixSyncWorldSettings(false);
+        _renderInspectorUICore();
+      });
+    }
+    if ($('btnAddStreamSfx')) {
+      $('btnAddStreamSfx').onclick = () => promptAddCustomStreamAudio('sfx', entry => {
+        if (window.__debixSyncCustomAsset) window.__debixSyncCustomAsset('audio', entry);
+        _renderInspectorUICore();
+      });
+    }
     if ($('btnUploadCustomSfx')) {
       $('btnUploadCustomSfx').onclick = () => promptUploadCustomAudio('sfx', entry => {
         if (window.__debixSyncCustomAsset) window.__debixSyncCustomAsset('audio', entry);
@@ -2623,6 +2665,13 @@ function _renderInspectorUICore() {
     const ct = box.costData;
     if (!box.soundData) box.soundData = createDefaultSoundData();
     const snd = box.soundData;
+    const msd = comps.mediaScreen?.enabled
+      ? (box.mediaScreenData || (box.mediaScreenData = createDefaultMediaScreenData()))
+      : null;
+    const sed = comps.soundEmitter?.enabled
+      ? (box.soundEmitterData || (box.soundEmitterData = createDefaultSoundEmitterData()))
+      : null;
+    const availableScreens = S.allBlocks.filter(b => b && b !== box && b.components?.mediaScreen?.enabled);
 
     if (!Array.isArray(md.waypoints) || md.waypoints.length === 0) {
       md.waypoints = [
@@ -2667,6 +2716,8 @@ function _renderInspectorUICore() {
       { key: 'item', icon: '⚔️', title: 'Предмет / Оружие', desc: 'Сделать этот объект и его дочерние примитивы удерживаемым оружием или предметом' },
       { key: 'spawner', icon: '🏭', title: 'Спавнер Объектов', desc: 'Генерация NPC, монет или физических кубов по таймеру или действию' },
       { key: 'sound', icon: '🔊', title: '3D Звук и Импакт', desc: 'Привязка встроенного или своего звука к активации объекта или 3D-зоне вокруг него' },
+      { key: 'mediaScreen', icon: '📺', title: 'Видео-Экран (Поверхность)', desc: 'Воспроизведение видеофайлов и YouTube с авто-скейлом под размер поверхности и выводом звука на колонки' },
+      { key: 'soundEmitter', icon: '📻', title: '3D-Колонка (Пространственный звук)', desc: 'Свой звук (файл / YouTube / URL) или привязка к Видео-Экрану (неограниченное число колонок)' },
       { key: 'script', icon: '🧩', title: 'Скрипт-Аддон (DebiX Script)', desc: 'Кастомный код на JS: физика, магниты, логика и свои ползунки params' }
     ];
 
@@ -3655,6 +3706,297 @@ function _renderInspectorUICore() {
         </div>
       ` : ''}
 
+      <!-- 10.5. КОМПОНЕНТ: 📺 ВИДЕО-ЭКРАН -->
+      ${comps.mediaScreen?.enabled && msd ? `
+        <div class="ecs-comp-card" style="border-color:#00d2ff">
+          <div class="ecs-comp-head" data-comp-toggle="mediaScreen">
+            <div class="ecs-comp-title">
+              <span class="ecs-arrow">${comps.mediaScreen.collapsed ? '▶' : '▼'}</span>
+              <span>📺 Видео-Экран (Колонок: ${getLinkedSpeakersCountForScreen(box.id)})</span>
+            </div>
+            <div class="ecs-comp-actions">
+              <button class="ecs-comp-del" data-comp-remove="mediaScreen" type="button" title="Удалить Видео-Экран">🗑️</button>
+            </div>
+          </div>
+          <div class="ecs-comp-body" ${comps.mediaScreen.collapsed ? 'hidden' : ''}>
+            <div class="prop-row">
+              <label>Источник</label>
+              <select class="ed-inp" id="inpMsSourceType">
+                <option value="url" ${msd.sourceType !== 'library' ? 'selected' : ''}>🌐 Прямая ссылка / YouTube</option>
+                <option value="library" ${msd.sourceType === 'library' ? 'selected' : ''}>🎞️ Из библиотеки видео (${(S.customVideoLibrary || []).length})</option>
+              </select>
+            </div>
+
+            ${msd.sourceType !== 'library' ? `
+              <div class="prop-row">
+                <label>URL / YouTube</label>
+                <input class="ed-inp" id="inpMsUrl" placeholder="https://youtu.be/... или .mp4" value="${msd.url || ''}" style="flex:1">
+              </div>
+            ` : `
+              <div class="prop-row">
+                <label>Видеофайл</label>
+                <select class="ed-inp" id="inpMsVideoId" style="flex:1">
+                  <option value="">-- Выбрать видео --</option>
+                  ${(S.customVideoLibrary || []).map(v => `<option value="${v.id}" ${msd.videoId === v.id ? 'selected' : ''}>${v.url ? '🌐' : '🎬'} ${v.name}</option>`).join('')}
+                </select>
+              </div>
+            `}
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+              <button class="ed-btn apply-oneclick" id="btnMsUploadVideo" type="button" style="justify-content:center;font-size:10px">📥 Загрузить видео</button>
+              <button class="ed-btn" id="btnMsAddUrlLib" type="button" style="justify-content:center;font-size:10px;border-color:#56f0ff">🌐 Ссылку в библ.</button>
+            </div>
+
+            <div style="display:flex;gap:4px;margin-top:2px">
+              <button class="ed-btn apply-oneclick" id="btnMsPlayToggle" type="button" style="flex:1;justify-content:center">
+                ${msd.playing ? '⏸️ Пауза' : '▶️ Воспроизвести'}
+              </button>
+              <button class="ed-btn" id="btnMsReload" type="button" title="Перезагрузить поток">🔄</button>
+            </div>
+
+            <div class="prop-row">
+              <label>Масштаб (Fit)</label>
+              <select class="ed-inp" id="inpMsFit">
+                <option value="stretch" ${msd.fitMode === 'stretch' ? 'selected' : ''}>↔️ Растянуть 1:1 по поверхности</option>
+                <option value="contain" ${msd.fitMode === 'contain' ? 'selected' : ''}>🖼️ Вписать с сохранением пропорций</option>
+                <option value="cover" ${msd.fitMode === 'cover' ? 'selected' : ''}>✂️ Заполнить без полей (Cover)</option>
+              </select>
+            </div>
+            <div class="prop-row">
+              <label>Сторона экрана</label>
+              <select class="ed-inp" id="inpMsFace">
+                <option value="front" ${msd.face === 'front' ? 'selected' : ''}>▭ Передняя грань (+Z)</option>
+                <option value="back" ${msd.face === 'back' ? 'selected' : ''}>▭ Задняя грань (-Z)</option>
+                <option value="front_back" ${msd.face === 'front_back' ? 'selected' : ''}>▯ Двусторонний (+Z и -Z)</option>
+                <option value="top" ${msd.face === 'top' ? 'selected' : ''}>⬆️ Верхняя грань (+Y)</option>
+                <option value="all" ${msd.face === 'all' ? 'selected' : ''}>🧊 Все 6 граней</option>
+              </select>
+            </div>
+
+            <div class="prop-row">
+              <label>Вывод звука</label>
+              <select class="ed-inp" id="inpMsAudioOut">
+                <option value="auto" ${msd.audioOutputMode === 'auto' ? 'selected' : ''}>🔄 Авто (экран, пока нет колонок)</option>
+                <option value="speakers_only" ${msd.audioOutputMode === 'speakers_only' ? 'selected' : ''}>📻 Только в привязанные колонки</option>
+                <option value="always_screen" ${msd.audioOutputMode === 'always_screen' ? 'selected' : ''}>📺 Сам экран + колонки</option>
+              </select>
+            </div>
+
+            ${msd.audioOutputMode !== 'speakers_only' ? `
+              <div class="prop-row">
+                <label>Громк. / Дист.(м)</label>
+                <div class="vec3" style="grid-template-columns:1fr 1fr">
+                  <input type="number" step="0.1" min="0" max="2" class="ed-inp" id="inpMsVol" value="${msd.builtInVolume ?? 0.9}" title="Громкость встроенного звука экрана">
+                  <input type="number" step="2" min="4" max="200" class="ed-inp" id="inpMsMaxDist" value="${msd.builtInMaxDist ?? 32}" title="Макс. дальность слышимости экрана (м)">
+                </div>
+              </div>
+            ` : ''}
+
+            <div class="prop-row">
+              <label>Яркость / Скор.</label>
+              <div class="vec3" style="grid-template-columns:1fr 1fr">
+                <input type="number" step="0.1" min="0.2" max="2.5" class="ed-inp" id="inpMsBright" value="${msd.brightness ?? 1.0}" title="Яркость экрана">
+                <input type="number" step="0.1" min="0.25" max="2.5" class="ed-inp" id="inpMsRate" value="${msd.playbackRate ?? 1.0}" title="Скорость воспроизведения">
+              </div>
+            </div>
+
+            <div class="prop-row">
+              <label>Автоплей</label>
+              <input type="checkbox" id="inpMsAutoplay" ${msd.autoplay !== false ? 'checked' : ''}>
+              <label style="margin-left:6px">Повтор</label>
+              <input type="checkbox" id="inpMsLoop" ${msd.loop !== false ? 'checked' : ''}>
+              <label style="flex:1;text-align:right">Пауза [E]</label>
+              <input type="checkbox" id="inpMsKeyE" ${msd.interactKeyE !== false ? 'checked' : ''}>
+            </div>
+
+            <div style="border-top:1px dashed #283147;padding-top:6px;margin-top:4px;display:flex;flex-direction:column;gap:5px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:4px">
+                <span style="font:800 10px var(--f);color:#56f0ff;text-transform:uppercase">
+                  📋 Очередь и Плейлисты (${(msd.queue || []).length})
+                </span>
+                <div style="display:flex;gap:3px">
+                  <button class="ed-btn" id="btnMsPrevTrack" type="button" style="padding:2px 6px;font-size:10px" title="Предыдущее видео">⏮</button>
+                  <button class="ed-btn" id="btnMsNextTrack" type="button" style="padding:2px 6px;font-size:10px" title="Следующее видео">⏭</button>
+                  ${(msd.queue || []).length > 0 ? `<button class="ed-btn danger" id="btnMsClearQueue" type="button" style="padding:2px 6px;font-size:10px" title="Очистить очередь">🗑️</button>` : ''}
+                </div>
+              </div>
+
+              <div style="display:flex;gap:4px">
+                <input class="ed-inp" id="inpMsQueueAddUrl" placeholder="Ссылка на видео или плейлист YouTube..." style="flex:1;font-size:10.5px">
+                <button class="ed-btn apply-oneclick" id="btnMsQueueAddUrl" type="button" style="padding:3px 8px;font-size:10px" title="Добавить видео или весь YouTube-плейлист в очередь">➕</button>
+              </div>
+
+              ${(S.customVideoLibrary || []).length > 0 ? `
+                <div style="display:flex;gap:4px">
+                  <select class="ed-inp" id="selMsQueueLibVid" style="flex:1;font-size:10px">
+                    <option value="">+ Добавить в очередь из библиотеки...</option>
+                    ${(S.customVideoLibrary || []).map(v => `<option value="${v.id}">${v.url ? '🌐' : '🎬'} ${v.name}</option>`).join('')}
+                  </select>
+                </div>
+              ` : ''}
+
+              <div class="prop-row">
+                <label>Режим повтора</label>
+                <select class="ed-inp" id="inpMsLoopMode" style="flex:1">
+                  <option value="queue" ${(msd.loopMode || 'queue') === 'queue' ? 'selected' : ''}>🔁 Повтор всей очереди</option>
+                  <option value="one" ${msd.loopMode === 'one' ? 'selected' : ''}>🔂 Повтор 1 видео</option>
+                  <option value="none" ${msd.loopMode === 'none' ? 'selected' : ''}>➡ Без повтора</option>
+                </select>
+                <label style="margin-left:6px" title="Случайный порядок треков">🔀</label>
+                <input type="checkbox" id="inpMsShuffle" ${msd.shuffle ? 'checked' : ''}>
+              </div>
+
+              ${(msd.queue || []).length > 0 ? `
+                <div style="display:flex;flex-direction:column;gap:3px;max-height:145px;overflow-y:auto;background:#0b101c;border:1px solid #252f48;border-radius:7px;padding:4px">
+                  ${(msd.queue || []).map((qi, qIdx) => {
+                    const isCur = qIdx === (msd.queueIndex || 0);
+                    return `
+                      <div style="display:flex;align-items:center;gap:4px;padding:3px 5px;border-radius:5px;background:${isCur ? 'rgba(255,46,76,0.22)' : 'rgba(255,255,255,0.04)'};border:1px solid ${isCur ? '#ff2e4c' : 'transparent'}">
+                        <button class="ed-btn" data-ms-qplay="${qIdx}" type="button" style="flex:1;justify-content:flex-start;padding:1px 4px;font-size:10px;background:transparent;border:none;color:${isCur ? '#ffce3a' : '#e2e8f0'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${qi.title || qi.url}">
+                          ${isCur ? '▶ ' : `${qIdx + 1}. `}${qi.title || qi.url || 'Видео'}
+                        </button>
+                        <button class="ed-btn danger" data-ms-qdel="${qIdx}" type="button" style="padding:1px 5px;font-size:9.5px" title="Убрать из очереди">✕</button>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              ` : `<div style="font-size:10px;color:#64748b;text-align:center">Очередь пуста — вставь ссылку на видео или плейлист YouTube выше (или управляй прямо на экране по [TAB]!)</div>`}
+            </div>
+
+            <div style="border-top:1px dashed #283147;padding-top:6px;margin-top:4px;display:flex;flex-direction:column;gap:5px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+                <span style="font:800 10px var(--f);color:#00e676;text-transform:uppercase">
+                  📻 Источники звука (${getLinkedSpeakersCountForScreen(box.id)})
+                </span>
+                <button class="ed-btn apply-oneclick" id="btnMsPickSpeaker3D" type="button" style="padding:2px 7px;font-size:10px" title="Кликнуть по колонке или блоку в 3D-сцене">🎯 Выбрать в 3D</button>
+              </div>
+              <div id="msSpeakerDropZone" data-screen-speaker-drop="${box.id}"
+                   style="min-height:54px;border:2px dashed #38bdf8;border-radius:8px;background:rgba(16,24,42,0.75);padding:6px;display:flex;flex-direction:column;gap:4px;transition:border-color 0.15s,background 0.15s">
+                ${(() => {
+                  const spks = getLinkedSpeakersForScreen(box.id);
+                  if (spks.length === 0) {
+                    return `<div style="font-size:10.5px;color:#94a3b8;text-align:center;padding:8px 4px;pointer-events:none">
+                      ⬇️ Перетащи сюда <b>3D-Колонки</b> (или любые блоки) из <b>Иерархии</b> слева
+                    </div>`;
+                  }
+                  return spks.map(sp => `
+                    <div style="display:flex;align-items:center;gap:5px;background:#101420;border:1px solid #252f48;border-radius:6px;padding:4px 6px">
+                      <button class="ed-btn" data-ms-focus-spk="${sp.id}" type="button" style="flex:1;justify-content:flex-start;padding:2px 6px;font-size:10.5px;background:transparent;border:none;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Перейти к настройкам этой колонки">
+                        📻 ${sp.label || sp.id}
+                      </button>
+                      <button class="ed-btn danger" data-ms-unlink-spk="${sp.id}" type="button" style="padding:2px 6px;font-size:10px" title="Отвязать от экрана">✕</button>
+                    </div>
+                  `).join('') + `<div style="font-size:9.5px;color:#64748b;text-align:center;padding-top:2px;pointer-events:none">⬇️ Перетащи ещё из Иерархии (без лимита)</div>`;
+                })()}
+              </div>
+            </div>
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- 10.6. КОМПОНЕНТ: 📻 3D-КОЛОНКА (ПРОСТРАНСТВЕННЫЙ ЗВУК) -->
+      ${comps.soundEmitter?.enabled && sed ? `
+        <div class="ecs-comp-card" style="border-color:#00e676">
+          <div class="ecs-comp-head" data-comp-toggle="soundEmitter">
+            <div class="ecs-comp-title">
+              <span class="ecs-arrow">${comps.soundEmitter.collapsed ? '▶' : '▼'}</span>
+              <span>📻 3D-Колонка (${sed.mode === 'screen_link' ? '🔗 От Экрана' : '🎵 Свой звук'})</span>
+            </div>
+            <div class="ecs-comp-actions">
+              <button class="ecs-comp-del" data-comp-remove="soundEmitter" type="button" title="Удалить 3D-Колонку">🗑️</button>
+            </div>
+          </div>
+          <div class="ecs-comp-body" ${comps.soundEmitter.collapsed ? 'hidden' : ''}>
+            <div class="prop-row">
+              <label>Режим</label>
+              <select class="ed-inp" id="inpSeMode">
+                <option value="standalone" ${sed.mode !== 'screen_link' ? 'selected' : ''}>🎵 Свой звук (файл / ссылка / YouTube)</option>
+                <option value="screen_link" ${sed.mode === 'screen_link' ? 'selected' : ''}>📺 Привязать к Видео-Экрану</option>
+              </select>
+            </div>
+
+            ${sed.mode === 'screen_link' ? `
+              <div style="background:rgba(0,210,255,0.08);border:1px solid rgba(0,210,255,0.32);border-radius:7px;padding:6px;display:flex;flex-direction:column;gap:5px">
+                <div class="prop-row">
+                  <label>Экран</label>
+                  <select class="ed-inp" id="inpSeScreenId" style="flex:1">
+                    <option value="">-- Выбери Видео-Экран --</option>
+                    ${availableScreens.map(sc => `<option value="${sc.id}" ${sed.linkedScreenId === sc.id ? 'selected' : ''}>📺 ${sc.label} (${sc.id})</option>`).join('')}
+                  </select>
+                  <button class="ed-btn apply-oneclick" id="btnPickSpeakerScreen3D" type="button" title="Кликнуть по Экрану прямо в 3D-сцене">🎯 В 3D</button>
+                </div>
+                <div style="font-size:10px;color:#cbd5e1">
+                  К одному экрану можно привязать <b>сколько угодно колонок</b> — звук видео будет идти объёмно из каждой точки!
+                </div>
+              </div>
+            ` : `
+              <div class="prop-row">
+                <label>Источник</label>
+                <select class="ed-inp" id="inpSeSourceType">
+                  <option value="url" ${sed.sourceType !== 'library' ? 'selected' : ''}>🌐 Прямая ссылка / YouTube</option>
+                  <option value="library" ${sed.sourceType === 'library' ? 'selected' : ''}>🔊 Из библиотеки аудио (${(S.customAudioLibrary || []).length})</option>
+                </select>
+              </div>
+              ${sed.sourceType !== 'library' ? `
+                <div class="prop-row">
+                  <label>URL / YouTube</label>
+                  <input class="ed-inp" id="inpSeUrl" placeholder="https://youtu.be/... или .mp3/.ogg" value="${sed.url || ''}" style="flex:1">
+                </div>
+              ` : `
+                <div class="prop-row">
+                  <label>Аудиофайл</label>
+                  <select class="ed-inp" id="inpSeAudioId" style="flex:1">
+                    <option value="">-- Выбрать трек --</option>
+                    ${(S.customAudioLibrary || []).map(a => `<option value="${a.id}" ${sed.audioId === a.id ? 'selected' : ''}>${a.url ? '🌐' : '🔊'} ${a.name}</option>`).join('')}
+                  </select>
+                </div>
+              `}
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+                <button class="ed-btn apply-oneclick" id="btnSeUploadAud" type="button" style="justify-content:center;font-size:10px">📥 Загрузить .MP3/.WAV</button>
+                <button class="ed-btn" id="btnSeAddUrlLib" type="button" style="justify-content:center;font-size:10px;border-color:#56f0ff">🌐 Ссылку в библ.</button>
+              </div>
+            `}
+
+            <div style="display:flex;gap:4px;margin-top:2px">
+              <button class="ed-btn apply-oneclick" id="btnSePlayToggle" type="button" style="flex:1;justify-content:center">
+                ${sed.playing ? '⏸️ Выкл / Пауза' : '▶️ Вкл / Играть'}
+              </button>
+              <button class="ed-btn" id="btnSeReload" type="button" title="Перезапустить звук">🔄</button>
+            </div>
+
+            <div class="prop-row">
+              <label>Громкость</label>
+              <input type="range" min="0" max="2.0" step="0.05" id="inpSeVol" value="${sed.volume ?? 1.0}" style="flex:1">
+              <span id="txtSeVol" style="font-size:10px;width:36px;text-align:right">${Math.round((sed.volume ?? 1.0) * 100)}%</span>
+            </div>
+
+            <div class="prop-row">
+              <label title="На расстоянии до Ref звук 100%, к Max плавно затухает до 0">Полн. / Макс.(м)</label>
+              <div class="vec3" style="grid-template-columns:1fr 1fr">
+                <input type="number" step="1" min="0.5" max="80" class="ed-inp" id="inpSeRefDist" value="${sed.refDistance ?? 4}" title="Радиус 100% громкости (м)">
+                <input type="number" step="2" min="2" max="250" class="ed-inp" id="inpSeMaxDist" value="${sed.maxDistance ?? 36}" title="Макс. дальность слышимости (м)">
+              </div>
+            </div>
+
+            <div class="prop-row">
+              <label title="Чем выше значение, тем резче звук затухает при удалении">Затухание / 3D</label>
+              <input type="number" step="0.1" min="0.4" max="3.5" class="ed-inp" id="inpSeRolloff" value="${sed.rolloff ?? 1.35}" style="width:68px">
+              <label style="flex:1;text-align:right">3D-панорама</label>
+              <input type="checkbox" id="inpSeSpatial" ${sed.spatial3D !== false ? 'checked' : ''}>
+            </div>
+
+            <div class="prop-row">
+              <label>Автоплей</label>
+              <input type="checkbox" id="inpSeAutoplay" ${sed.autoplay !== false ? 'checked' : ''}>
+              <label style="margin-left:6px">Повтор</label>
+              <input type="checkbox" id="inpSeLoop" ${sed.loop !== false ? 'checked' : ''}>
+              <label style="flex:1;text-align:right">Вкл/Выкл [E]</label>
+              <input type="checkbox" id="inpSeKeyE" ${sed.interactKeyE !== false ? 'checked' : ''}>
+            </div>
+          </div>
+        </div>
+      ` : ''}
+
       <!-- 11. КОМПОНЕНТ: 🧩 СКРИПТ-АДДОН -->
       ${comps.script?.enabled ? renderScriptAddonInspectorCardHTML(
         box.scriptData || (box.scriptData = createDefaultScriptData('block')),
@@ -3707,6 +4049,10 @@ function _renderInspectorUICore() {
         } else if (key === 'sound') {
           if (!box.soundData) box.soundData = createDefaultSoundData();
           comps.sound.soundData = box.soundData;
+        } else if (key === 'mediaScreen') {
+          if (!box.mediaScreenData) box.mediaScreenData = createDefaultMediaScreenData();
+        } else if (key === 'soundEmitter') {
+          if (!box.soundEmitterData) box.soundEmitterData = createDefaultSoundEmitterData();
         } else if (key === 'script') {
           if (!box.scriptData) box.scriptData = createDefaultScriptData('block');
           box.scriptData.enabled = true;
@@ -3753,6 +4099,10 @@ function _renderInspectorUICore() {
           return;
         } else if (key === 'sound') {
           box.soundData = null;
+        } else if (key === 'mediaScreen') {
+          syncBlockMediaVisuals(box);
+        } else if (key === 'soundEmitter') {
+          syncBlockMediaVisuals(box);
         }
 
         sfx.oof();
@@ -4665,6 +5015,311 @@ function _renderInspectorUICore() {
             snd.soundId = 'custom:' + entry.id;
             _renderInspectorUICore();
           });
+        };
+      }
+    }
+
+    if (comps.mediaScreen?.enabled && msd) {
+      const syncMs = (rerender = false) => {
+        if ($('inpMsSourceType')) msd.sourceType = $('inpMsSourceType').value;
+        if ($('inpMsUrl')) msd.url = $('inpMsUrl').value.trim();
+        if ($('inpMsVideoId')) msd.videoId = $('inpMsVideoId').value;
+        if ($('inpMsFit')) msd.fitMode = $('inpMsFit').value;
+        if ($('inpMsFace')) msd.face = $('inpMsFace').value;
+        if ($('inpMsAudioOut')) msd.audioOutputMode = $('inpMsAudioOut').value;
+        if ($('inpMsVol')) msd.builtInVolume = clamp(+$('inpMsVol').value || 0.9, 0, 2.0);
+        if ($('inpMsMaxDist')) msd.builtInMaxDist = clamp(+$('inpMsMaxDist').value || 32, 4, 250);
+        if ($('inpMsBright')) msd.brightness = clamp(+$('inpMsBright').value || 1.0, 0.15, 2.5);
+        if ($('inpMsRate')) msd.playbackRate = clamp(+$('inpMsRate').value || 1.0, 0.25, 3.0);
+        if ($('inpMsAutoplay')) msd.autoplay = $('inpMsAutoplay').checked;
+        if ($('inpMsLoop')) msd.loop = $('inpMsLoop').checked;
+        if ($('inpMsKeyE')) msd.interactKeyE = $('inpMsKeyE').checked;
+
+        syncBlockMediaVisuals(box);
+        if (window.__debixSyncBlockUpsert && !S.isApplyingRemoteSync) {
+          window.__debixSyncBlockUpsert(box, false);
+        }
+        if (rerender) _renderInspectorUICore();
+      };
+
+      ['inpMsSourceType', 'inpMsVideoId', 'inpMsAudioOut'].forEach(id => {
+        if ($(id)) $(id).onchange = () => syncMs(true);
+      });
+      ['inpMsFit', 'inpMsFace', 'inpMsAutoplay', 'inpMsLoop', 'inpMsKeyE'].forEach(id => {
+        if ($(id)) $(id).onchange = () => syncMs(false);
+      });
+      ['inpMsVol', 'inpMsMaxDist', 'inpMsBright', 'inpMsRate'].forEach(id => {
+        if ($(id)) $(id).oninput = () => syncMs(false);
+      });
+      if ($('inpMsUrl')) {
+        const onMainUrlApply = async () => {
+          const val = $('inpMsUrl').value.trim();
+          if (/[?&]list=/.test(val)) {
+            showBanner('⏳ Обнаружен плейлист YouTube! Загружаем список видео...', '#56f0ff');
+            try {
+              await addUrlOrPlaylistToScreenQueue(box, val, { replaceQueue: true, playNow: true });
+              _renderInspectorUICore();
+              return;
+            } catch (err) {
+              showBanner('❌ ' + (err.message || 'Ошибка плейлиста'), '#ff4757');
+            }
+          }
+          syncMs(false);
+        };
+        $('inpMsUrl').onchange = onMainUrlApply;
+        $('inpMsUrl').addEventListener('keydown', e => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            onMainUrlApply();
+          }
+        });
+      }
+      if ($('inpMsLoopMode')) {
+        $('inpMsLoopMode').onchange = e => {
+          msd.loopMode = e.target.value;
+          msd.loop = msd.loopMode !== 'none';
+          syncMs(false);
+        };
+      }
+      if ($('inpMsShuffle')) {
+        $('inpMsShuffle').onchange = e => {
+          msd.shuffle = e.target.checked;
+          syncMs(false);
+        };
+      }
+      if ($('btnMsPrevTrack')) {
+        $('btnMsPrevTrack').onclick = () => { prevScreenTrack(box); _renderInspectorUICore(); };
+      }
+      if ($('btnMsNextTrack')) {
+        $('btnMsNextTrack').onclick = () => { nextScreenTrack(box); _renderInspectorUICore(); };
+      }
+      if ($('btnMsClearQueue')) {
+        $('btnMsClearQueue').onclick = () => { clearScreenQueue(box); _renderInspectorUICore(); };
+      }
+      if ($('btnMsQueueAddUrl')) {
+        const doAddQueueUrl = async () => {
+          const inp = $('inpMsQueueAddUrl');
+          const url = (inp?.value || '').trim();
+          if (!/^https?:\/\//i.test(url)) {
+            showBanner('⚠️ Вставь корректную http/https ссылку на видео или плейлист!', '#ffce3a');
+            return;
+          }
+          $('btnMsQueueAddUrl').disabled = true;
+          showBanner('⏳ Загружаем видео / плейлист...', '#56f0ff');
+          try {
+            await addUrlOrPlaylistToScreenQueue(box, url, { playNow: false });
+            if (inp) inp.value = '';
+            _renderInspectorUICore();
+          } catch (err) {
+            showBanner('❌ ' + (err.message || 'Не удалось добавить в очередь'), '#ff4757');
+          } finally {
+            if ($('btnMsQueueAddUrl')) $('btnMsQueueAddUrl').disabled = false;
+          }
+        };
+        $('btnMsQueueAddUrl').onclick = doAddQueueUrl;
+        if ($('inpMsQueueAddUrl')) {
+          $('inpMsQueueAddUrl').addEventListener('keydown', e => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              doAddQueueUrl();
+            }
+          });
+        }
+      }
+      if ($('selMsQueueLibVid')) {
+        $('selMsQueueLibVid').onchange = e => {
+          if (!e.target.value) return;
+          addLibraryVideoToScreenQueue(box, e.target.value, false);
+          _renderInspectorUICore();
+        };
+      }
+      cont.querySelectorAll('[data-ms-qplay]').forEach(btn => {
+        btn.onclick = () => { playScreenQueueIndex(box, +btn.dataset.msQplay); _renderInspectorUICore(); };
+      });
+      cont.querySelectorAll('[data-ms-qdel]').forEach(btn => {
+        btn.onclick = e => {
+          e.stopPropagation();
+          removeScreenQueueItem(box, +btn.dataset.msQdel);
+          _renderInspectorUICore();
+        };
+      });
+      if ($('btnMsPlayToggle')) {
+        $('btnMsPlayToggle').onclick = () => {
+          if ($('inpMsUrl')) msd.url = $('inpMsUrl').value.trim();
+          toggleBlockMediaPlayback(box, true);
+          _renderInspectorUICore();
+        };
+      }
+      if ($('btnMsReload')) {
+        $('btnMsReload').onclick = () => {
+          if ($('inpMsUrl')) msd.url = $('inpMsUrl').value.trim();
+          reloadBlockMedia(box);
+        };
+      }
+      if ($('btnMsPickSpeaker3D')) {
+        $('btnMsPickSpeaker3D').onclick = () => {
+          showBanner(`🎯 Кликни по 3D-Колонке или блоку в сцене, чтобы привязать к «${box.label}»!`, '#00e676');
+          S.pickingTargetCallback = targetBox => {
+            if (!targetBox || targetBox === box) return;
+            pushUndoState('Привязка колонки к экрану');
+            ensureBlockComponents(targetBox);
+            targetBox.components.soundEmitter.enabled = true;
+            if (!targetBox.soundEmitterData) targetBox.soundEmitterData = createDefaultSoundEmitterData();
+            targetBox.soundEmitterData.mode = 'screen_link';
+            targetBox.soundEmitterData.linkedScreenId = box.id;
+            targetBox.soundEmitterData.playing = true;
+            syncBlockComponentsState(targetBox);
+            syncBlockMediaVisuals(targetBox);
+            syncBlockMediaVisuals(box);
+            syncStudioMotionAndSignalHelpers();
+            if (window.__debixSyncBlockUpsert && !S.isApplyingRemoteSync) {
+              window.__debixSyncBlockUpsert(targetBox, false);
+            }
+            sfx.coil?.();
+            refreshHierarchyUI();
+            showBanner(`🔗 «${targetBox.label}» привязана к экрану «${box.label}»!`, '#00e676');
+            _renderInspectorUICore();
+          };
+        };
+      }
+      cont.querySelectorAll('[data-ms-focus-spk]').forEach(btn => {
+        btn.onclick = () => {
+          const spkBox = S.allBlocks.find(b => b && b.id === btn.dataset.msFocusSpk);
+          if (spkBox) selectEditorObject({ kind: 'block', box: spkBox });
+        };
+      });
+      cont.querySelectorAll('[data-ms-unlink-spk]').forEach(btn => {
+        btn.onclick = e => {
+          e.stopPropagation();
+          const spkBox = S.allBlocks.find(b => b && b.id === btn.dataset.msUnlinkSpk);
+          if (!spkBox || !spkBox.soundEmitterData) return;
+          pushUndoState('Отвязка колонки от экрана');
+          spkBox.soundEmitterData.linkedScreenId = '';
+          spkBox.soundEmitterData.mode = 'standalone';
+          syncBlockMediaVisuals(spkBox);
+          syncBlockMediaVisuals(box);
+          syncStudioMotionAndSignalHelpers();
+          if (window.__debixSyncBlockUpsert && !S.isApplyingRemoteSync) {
+            window.__debixSyncBlockUpsert(spkBox, false);
+          }
+          sfx.oof?.();
+          _renderInspectorUICore();
+        };
+      });
+      if ($('btnMsUploadVideo')) {
+        $('btnMsUploadVideo').onclick = () => {
+          promptUploadCustomVideo(entry => {
+            msd.sourceType = 'library';
+            msd.videoId = entry.id;
+            msd.playing = true;
+            if (!entry.isSessionOnly && window.__debixSyncCustomAsset) {
+              window.__debixSyncCustomAsset('video', entry);
+            }
+            syncMs(true);
+          });
+        };
+      }
+      if ($('btnMsAddUrlLib')) {
+        $('btnMsAddUrlLib').onclick = () => {
+          promptAddStreamVideo(entry => {
+            msd.sourceType = 'library';
+            msd.videoId = entry.id;
+            msd.playing = true;
+            if (window.__debixSyncCustomAsset) {
+              window.__debixSyncCustomAsset('video', entry);
+            }
+            syncMs(true);
+          });
+        };
+      }
+    }
+
+    if (comps.soundEmitter?.enabled && sed) {
+      const syncSe = (rerender = false) => {
+        if ($('inpSeMode')) sed.mode = $('inpSeMode').value;
+        if ($('inpSeScreenId')) sed.linkedScreenId = $('inpSeScreenId').value;
+        if ($('inpSeSourceType')) sed.sourceType = $('inpSeSourceType').value;
+        if ($('inpSeUrl')) sed.url = $('inpSeUrl').value.trim();
+        if ($('inpSeAudioId')) sed.audioId = $('inpSeAudioId').value;
+        if ($('inpSeVol')) {
+          sed.volume = clamp(+$('inpSeVol').value || 0, 0, 2.0);
+          if ($('txtSeVol')) $('txtSeVol').textContent = `${Math.round(sed.volume * 100)}%`;
+        }
+        if ($('inpSeRefDist')) sed.refDistance = clamp(+$('inpSeRefDist').value || 4, 0.5, 100);
+        if ($('inpSeMaxDist')) sed.maxDistance = clamp(+$('inpSeMaxDist').value || 36, 2, 250);
+        if ($('inpSeRolloff')) sed.rolloff = clamp(+$('inpSeRolloff').value || 1.35, 0.3, 4.0);
+        if ($('inpSeSpatial')) sed.spatial3D = $('inpSeSpatial').checked;
+        if ($('inpSeAutoplay')) sed.autoplay = $('inpSeAutoplay').checked;
+        if ($('inpSeLoop')) sed.loop = $('inpSeLoop').checked;
+        if ($('inpSeKeyE')) sed.interactKeyE = $('inpSeKeyE').checked;
+
+        syncBlockMediaVisuals(box);
+        syncStudioMotionAndSignalHelpers();
+        if (window.__debixSyncBlockUpsert && !S.isApplyingRemoteSync) {
+          window.__debixSyncBlockUpsert(box, false);
+        }
+        if (rerender) _renderInspectorUICore();
+      };
+
+      ['inpSeMode', 'inpSeScreenId', 'inpSeSourceType', 'inpSeAudioId'].forEach(id => {
+        if ($(id)) $(id).onchange = () => syncSe(true);
+      });
+      ['inpSeSpatial', 'inpSeAutoplay', 'inpSeLoop', 'inpSeKeyE'].forEach(id => {
+        if ($(id)) $(id).onchange = () => syncSe(false);
+      });
+      ['inpSeVol', 'inpSeRefDist', 'inpSeMaxDist', 'inpSeRolloff'].forEach(id => {
+        if ($(id)) $(id).oninput = () => syncSe(false);
+      });
+      if ($('inpSeUrl')) {
+        $('inpSeUrl').onchange = () => syncSe(false);
+      }
+      if ($('btnSePlayToggle')) {
+        $('btnSePlayToggle').onclick = () => {
+          toggleBlockMediaPlayback(box, true);
+          _renderInspectorUICore();
+        };
+      }
+      if ($('btnSeReload')) {
+        $('btnSeReload').onclick = () => reloadBlockMedia(box);
+      }
+      if ($('btnSeUploadAud')) {
+        $('btnSeUploadAud').onclick = () => {
+          promptUploadCustomAudio('sfx', entry => {
+            sed.sourceType = 'library';
+            sed.audioId = entry.id;
+            sed.playing = true;
+            if (window.__debixSyncCustomAsset) window.__debixSyncCustomAsset('audio', entry);
+            syncSe(true);
+          });
+        };
+      }
+      if ($('btnSeAddUrlLib')) {
+        $('btnSeAddUrlLib').onclick = () => {
+          promptAddCustomStreamAudio('sfx', entry => {
+            sed.sourceType = 'library';
+            sed.audioId = entry.id;
+            sed.playing = true;
+            if (window.__debixSyncCustomAsset) window.__debixSyncCustomAsset('audio', entry);
+            syncSe(true);
+          });
+        };
+      }
+      if ($('btnPickSpeakerScreen3D')) {
+        $('btnPickSpeakerScreen3D').onclick = () => {
+          showBanner('🎯 Кликни в 3D-сцене по Видео-Экрану, чтобы привязать к нему эту колонку!', '#56f0ff');
+          S.pickingTargetCallback = targetBox => {
+            if (!targetBox || targetBox === box) return;
+            if (!targetBox.components?.mediaScreen?.enabled) {
+              sfx.oof?.();
+              showBanner(`⚠️ «${targetBox.label}» не является Видео-Экраном! Добавь ему свойство «📺 Видео-Экран».`, '#ffce3a');
+              return;
+            }
+            sed.mode = 'screen_link';
+            sed.linkedScreenId = targetBox.id;
+            sfx.coil?.();
+            showBanner(`🔗 Колонка «${box.label}» привязана к экрану «${targetBox.label}»!`, '#00e676');
+            syncSe(true);
+          };
         };
       }
     }

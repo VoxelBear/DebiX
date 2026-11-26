@@ -1,7 +1,9 @@
 // lan-server.js — запуск: node lan-server.js
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
 const { WebSocketServer } = require('ws');
 
 const PORT = 8765;
@@ -47,8 +49,279 @@ const MIME_TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon'
+  '.ico': 'image/x-icon',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4'
 };
+
+/* ---------- МЕДИА-ПРОКСИ (CORS + RANGE) И РЕЗОЛВЕР YOUTUBE (YT-DLP) ---------- */
+const mediaResolveCache = new Map(); // `${kind}|${url}` -> { streamUrl, userAgent, expiresAt }
+const playlistResolveCache = new Map(); // rawUrl -> { payload, expiresAt }
+
+function resolvePlaylistViaYtDlp(rawUrl) {
+  return new Promise((resolve, reject) => {
+    const cached = playlistResolveCache.get(rawUrl);
+    if (cached && cached.expiresAt > Date.now()) {
+      resolve(cached.payload);
+      return;
+    }
+
+    // Прямые ссылки на файлы отдаём сразу без запуска yt-dlp
+    if (!isYtDlpNeededUrl(rawUrl)) {
+      const cleanName = decodeURIComponent((rawUrl.split('/').pop() || 'Видео').split('?')[0]).slice(0, 64) || 'Видео по ссылке';
+      const payload = {
+        ok: true,
+        isPlaylist: false,
+        title: cleanName,
+        startVideoId: '',
+        items: [{ url: rawUrl, title: cleanName, duration: 0 }]
+      };
+      resolve(payload);
+      return;
+    }
+
+    let startVideoId = '';
+    try {
+      const u = new URL(rawUrl);
+      startVideoId = u.searchParams.get('v') || '';
+    } catch (_) {}
+
+    const bin = findYtDlpBinary();
+    const args = [
+      '--flat-playlist',
+      '--dump-single-json',
+      '--no-warnings',
+      '--js-runtimes', 'node',
+      '--playlist-end', '100',
+      rawUrl
+    ];
+
+    execFile(bin, args, { timeout: 30000, maxBuffer: 12 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+      if (err) {
+        const msg = err.code === 'ENOENT'
+          ? 'yt-dlp не найден! Положи yt-dlp.exe рядом с lan-server.js (или в tools/).'
+          : (stderr || err.message || 'Ошибка чтения плейлиста').trim();
+        console.warn('⚠️ [PlaylistResolve]', msg);
+        reject(new Error(msg));
+        return;
+      }
+
+      let data = null;
+      try {
+        data = JSON.parse(String(stdout || '').trim());
+      } catch (parseErr) {
+        reject(new Error('Не удалось разобрать JSON плейлиста: ' + parseErr.message));
+        return;
+      }
+
+      const items = [];
+      const isPlaylist = data._type === 'playlist' && Array.isArray(data.entries);
+
+      if (isPlaylist) {
+        for (const ent of data.entries) {
+          if (!ent) continue;
+          const t = String(ent.title || '').trim();
+          if (t === '[Deleted video]' || t === '[Private video]') continue;
+          let itemUrl = ent.webpage_url || ent.url || '';
+          if (itemUrl && !/^https?:\/\//i.test(itemUrl)) {
+            const vidId = ent.id || itemUrl;
+            itemUrl = `https://www.youtube.com/watch?v=${vidId}`;
+          } else if (!itemUrl && ent.id) {
+            itemUrl = `https://www.youtube.com/watch?v=${ent.id}`;
+          }
+          if (!itemUrl) continue;
+          items.push({
+            url: itemUrl,
+            videoKey: ent.id || '',
+            title: (t || itemUrl).slice(0, 72),
+            duration: Number(ent.duration) || 0
+          });
+        }
+      } else {
+        items.push({
+          url: data.webpage_url || rawUrl,
+          videoKey: data.id || startVideoId || '',
+          title: String(data.title || 'Видео').slice(0, 72),
+          duration: Number(data.duration) || 0
+        });
+      }
+
+      const payload = {
+        ok: true,
+        isPlaylist,
+        title: String(data.title || (isPlaylist ? 'Плейлист' : 'Видео')).slice(0, 72),
+        startVideoId,
+        items
+      };
+      playlistResolveCache.set(rawUrl, { payload, expiresAt: Date.now() + 10 * 60 * 1000 });
+      console.log(`📋 [PlaylistResolve] «${payload.title}» — ${items.length} видео`);
+      resolve(payload);
+    });
+  });
+}
+
+function findYtDlpBinary() {
+  const candidates = [
+    path.join(__dirname, 'yt-dlp.exe'),
+    path.join(__dirname, 'tools', 'yt-dlp.exe'),
+    path.join(__dirname, 'yt-dlp'),
+    path.join(__dirname, 'tools', 'yt-dlp')
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return 'yt-dlp';
+}
+
+function isYtDlpNeededUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    const h = u.hostname.toLowerCase();
+    return (
+      h.includes('youtube.com') ||
+      h.includes('youtu.be') ||
+      h.includes('soundcloud.com') ||
+      h.includes('twitch.tv') ||
+      h.includes('vimeo.com') ||
+      h.includes('rutube.ru') ||
+      h.includes('vk.com') ||
+      h.includes('vkvideo.ru')
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
+function resolveStreamViaYtDlp(rawUrl, kind = 'video') {
+  return new Promise((resolve, reject) => {
+    const cacheKey = `${kind}|${rawUrl}`;
+    const cached = mediaResolveCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      resolve(cached);
+      return;
+    }
+
+    const bin = findYtDlpBinary();
+    // Исключаем HLS (m3u8) и DASH-сегменты: браузерный <video>/<audio> требует прямой HTTP-поток
+    const noHls = '[protocol^=http][protocol!*=m3u8][protocol!*=dash]';
+    const fmt = kind === 'audio'
+      ? `bestaudio${noHls}[ext=m4a]/bestaudio${noHls}[ext=webm]/bestaudio${noHls}/bestaudio/best`
+      : `best${noHls}[ext=mp4][acodec!=none][vcodec!=none]/18/best${noHls}[acodec!=none][vcodec!=none]/best${noHls}[ext=mp4][vcodec!=none]/best${noHls}[vcodec!=none]`;
+
+    const args = [
+      '--no-playlist',
+      '--no-warnings',
+      '--js-runtimes', 'node',
+      '-f', fmt,
+      '--print', '%(url)s',
+      '--print', '%(http_headers.User-Agent)s',
+      rawUrl
+    ];
+
+    execFile(bin, args, { timeout: 25000, windowsHide: true }, (err, stdout, stderr) => {
+      if (err) {
+        const msg = err.code === 'ENOENT'
+          ? 'yt-dlp не найден! Положи yt-dlp.exe рядом с lan-server.js (или в tools/).'
+          : (stderr || err.message || 'Ошибка yt-dlp').trim();
+        console.warn(`⚠️ [MediaResolve:${kind}]`, msg);
+        reject(new Error(msg));
+        return;
+      }
+      const lines = String(stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      const streamUrl = lines.find(s => /^https?:\/\//i.test(s));
+      if (!streamUrl) {
+        console.warn(`⚠️ [MediaResolve:${kind}] yt-dlp не вернул прямой URL:`, stdout, stderr);
+        reject(new Error('yt-dlp не вернул прямую ссылку на медиапоток'));
+        return;
+      }
+      const uaLine = lines.find(s => s !== streamUrl && s !== 'NA');
+      const result = {
+        streamUrl,
+        userAgent: uaLine || '',
+        expiresAt: Date.now() + 25 * 60 * 1000
+      };
+      mediaResolveCache.set(cacheKey, result);
+      console.log(`🎬 [MediaResolve:${kind}] Поток готов для ${rawUrl.slice(0, 60)}`);
+      resolve(result);
+    });
+  });
+}
+
+function proxyRemoteMedia(targetUrl, req, res, redirectCount = 0, customUA = '') {
+  if (redirectCount > 5) {
+    res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: 'Too many redirects' }));
+    return;
+  }
+  let parsed;
+  try {
+    parsed = new URL(targetUrl);
+  } catch (_) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: 'Invalid URL' }));
+    return;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: 'Only http/https URLs are allowed' }));
+    return;
+  }
+
+  const client = parsed.protocol === 'https:' ? https : http;
+  const headers = {
+    'User-Agent': customUA || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+  };
+  if (req.headers.range) headers.Range = req.headers.range;
+
+  const upstream = client.request(parsed, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', headers }, upRes => {
+    const code = upRes.statusCode || 200;
+    if (code >= 400) {
+      console.warn(`⚠️ [MediaProxy] Upstream вернул HTTP ${code} для ${parsed.hostname}`);
+    }
+    if ([301, 302, 303, 307, 308].includes(code) && upRes.headers.location) {
+      upRes.resume();
+      const nextUrl = new URL(upRes.headers.location, parsed).toString();
+      proxyRemoteMedia(nextUrl, req, res, redirectCount + 1, customUA);
+      return;
+    }
+
+    const outHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges, Content-Type',
+      'Cache-Control': 'no-store'
+    };
+    if (upRes.headers['content-type']) outHeaders['Content-Type'] = upRes.headers['content-type'];
+    if (upRes.headers['content-length']) outHeaders['Content-Length'] = upRes.headers['content-length'];
+    if (upRes.headers['content-range']) outHeaders['Content-Range'] = upRes.headers['content-range'];
+    outHeaders['Accept-Ranges'] = upRes.headers['accept-ranges'] || 'bytes';
+
+    res.writeHead(code, outHeaders);
+    if (req.method === 'HEAD') {
+      upRes.resume();
+      res.end();
+      return;
+    }
+    upRes.pipe(res);
+  });
+
+  upstream.on('error', err => {
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: err.message }));
+    } else {
+      res.end();
+    }
+  });
+
+  req.on('close', () => {
+    try { upstream.destroy(); } catch (_) {}
+  });
+  upstream.end();
+}
 
 function readJsonBody(req, callback) {
   let body = '';
@@ -69,8 +342,9 @@ function readJsonBody(req, callback) {
 
 const httpServer = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Content-Type');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -80,6 +354,62 @@ const httpServer = http.createServer((req, res) => {
 
   const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = parsedUrl.pathname;
+
+  // Прямой CORS-прокси для видео/аудио ссылок с поддержкой Range (перемотки)
+  if (pathname === '/api/media/proxy' && (req.method === 'GET' || req.method === 'HEAD')) {
+    const rawUrl = parsedUrl.searchParams.get('url');
+    if (!rawUrl) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: 'Missing url param' }));
+      return;
+    }
+    proxyRemoteMedia(rawUrl, req, res);
+    return;
+  }
+
+  // Потоковый резолвер YouTube и медиа-платформ (через yt-dlp) + прокси для прямых ссылок
+  if (pathname === '/api/media/stream' && (req.method === 'GET' || req.method === 'HEAD')) {
+    const rawUrl = parsedUrl.searchParams.get('url');
+    const kind = parsedUrl.searchParams.get('kind') === 'audio' ? 'audio' : 'video';
+    if (!rawUrl) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: 'Missing url param' }));
+      return;
+    }
+    if (!isYtDlpNeededUrl(rawUrl)) {
+      proxyRemoteMedia(rawUrl, req, res);
+      return;
+    }
+    resolveStreamViaYtDlp(rawUrl, kind)
+      .then(resolved => proxyRemoteMedia(resolved.streamUrl, req, res, 0, resolved.userAgent))
+      .catch(err => {
+        if (!res.headersSent) {
+          res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, error: err.message }));
+        }
+      });
+    return;
+  }
+
+  // Разбор плейлиста YouTube или метаданных одиночного видео в очередь
+  if (pathname === '/api/media/playlist' && req.method === 'GET') {
+    const rawUrl = parsedUrl.searchParams.get('url');
+    if (!rawUrl) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: 'Missing url param' }));
+      return;
+    }
+    resolvePlaylistViaYtDlp(rawUrl)
+      .then(payload => {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(payload));
+      })
+      .catch(err => {
+        res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      });
+    return;
+  }
 
   if (pathname === '/api/servers' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });

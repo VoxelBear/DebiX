@@ -214,6 +214,7 @@ export function serializeSceneState() {
     savedItemsLibrary: JSON.parse(JSON.stringify(S.savedItemsLibrary || [])),
     customPrefabsLibrary: JSON.parse(JSON.stringify(S.customPrefabsLibrary || [])),
     customAudioLibrary: JSON.parse(JSON.stringify(S.customAudioLibrary || [])),
+    customVideoLibrary: JSON.parse(JSON.stringify((S.customVideoLibrary || []).filter(v => v && !v.isSessionOnly))),
     customScriptsLibrary: (S.customScriptsLibrary || []).map(s => ({
       id: s.id,
       targetType: s.targetType || 'block',
@@ -339,6 +340,8 @@ export function serializeSceneState() {
         signalData: b.signalData ? JSON.parse(JSON.stringify(b.signalData)) : null,
         costData: b.costData ? Object.assign({}, JSON.parse(JSON.stringify(b.costData)), { unlocked: false }) : null,
         soundData: b.soundData ? JSON.parse(JSON.stringify(b.soundData)) : null,
+        mediaScreenData: b.mediaScreenData ? JSON.parse(JSON.stringify(b.mediaScreenData)) : null,
+        soundEmitterData: b.soundEmitterData ? JSON.parse(JSON.stringify(b.soundEmitterData)) : null,
         checkpointData: b.checkpointData ? JSON.parse(JSON.stringify(b.checkpointData)) : null,
         spawnerData: b.spawnerData ? JSON.parse(JSON.stringify(b.spawnerData)) : null,
         particleData: b.particleData ? JSON.parse(JSON.stringify(b.particleData)) : null,
@@ -444,6 +447,11 @@ export function loadSceneState(data, opts = {}) {
   if (Array.isArray(data.customAudioLibrary)) {
     S.customAudioLibrary = JSON.parse(JSON.stringify(data.customAudioLibrary));
   }
+  if (Array.isArray(data.customVideoLibrary)) {
+    S.customVideoLibrary = JSON.parse(JSON.stringify(data.customVideoLibrary));
+  } else {
+    S.customVideoLibrary = [];
+  }
   if (Array.isArray(data.customScriptsLibrary)) {
     S.customScriptsLibrary = JSON.parse(JSON.stringify(data.customScriptsLibrary));
   }
@@ -499,6 +507,8 @@ export function loadSceneState(data, opts = {}) {
       if (sb.signalData) box.signalData = JSON.parse(JSON.stringify(sb.signalData));
       if (sb.costData) box.costData = JSON.parse(JSON.stringify(sb.costData));
       if (sb.soundData) box.soundData = JSON.parse(JSON.stringify(sb.soundData));
+      if (sb.mediaScreenData) box.mediaScreenData = JSON.parse(JSON.stringify(sb.mediaScreenData));
+      if (sb.soundEmitterData) box.soundEmitterData = JSON.parse(JSON.stringify(sb.soundEmitterData));
 
       box.m.scale.set(sb.w || 1, sb.h || 1, sb.d || 1);
       if (sb.cy !== undefined) {
@@ -929,6 +939,8 @@ export async function exportPlayOnlyBuild() {
       texJs,
       particleJs,
       audioJs,
+      mediaSysJs,
+      mediaScreenUiJs,
       statusFxJs,
       weatherJs,
       surfaceWeatherVisJs,
@@ -947,6 +959,8 @@ export async function exportPlayOnlyBuild() {
       fetchText('./src/core/TextureFactory.js'),
       fetchText('./src/core/ParticleSystem.js'),
       fetchText('./src/core/AudioEngine.js'),
+      fetchText('./src/core/MediaSystem.js'),
+      fetchText('./src/core/MediaScreenUI.js'),
       fetchText('./src/core/StatusEffects.js'),
       fetchText('./src/core/WeatherAndClouds.js'),
       fetchText('./src/core/SurfaceWeatherVisuals.js'),
@@ -972,6 +986,8 @@ export async function exportPlayOnlyBuild() {
       texJs,
       particleJs,
       audioJs,
+      mediaSysJs,
+      mediaScreenUiJs,
       statusFxJs,
       weatherJs,
       surfaceWeatherVisJs,
@@ -999,6 +1015,8 @@ export async function exportPlayOnlyBuild() {
           if (data.customDefaultStudDataURL) S.customDefaultStudDataURL = data.customDefaultStudDataURL;
           if (Array.isArray(data.savedCosmeticsLibrary)) S.savedCosmeticsLibrary = data.savedCosmeticsLibrary;
           if (Array.isArray(data.savedItemsLibrary)) S.savedItemsLibrary = data.savedItemsLibrary;
+          if (Array.isArray(data.customAudioLibrary)) S.customAudioLibrary = data.customAudioLibrary;
+          if (Array.isArray(data.customVideoLibrary)) S.customVideoLibrary = data.customVideoLibrary;
           if (Array.isArray(data.blocks) && data.blocks.length > 0) {
             for (const b of S.allBlocks) {
               scene.remove(b.m);
@@ -1229,6 +1247,7 @@ export async function exportPlayOnlyBuild() {
           updateSurfaceWeatherLayer(dt);
           updateParticles(dt);
           updateAllPets(dt);
+          updateMediaSystem(dt);
           if (S.state === 'play' && S.player) {
             syncPlayCameraToPlayer(S.player, dt);
           } else {

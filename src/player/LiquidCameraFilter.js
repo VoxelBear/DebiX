@@ -12,6 +12,18 @@ let currentRgb = { r: 56, g: 159, b: 255 };
 let targetRgb = { r: 56, g: 159, b: 255 };
 
 const _vCamLocal = new THREE.Vector3();
+const _baseFogColTmp = new THREE.Color();
+const _medFogColTmp = new THREE.Color();
+
+function getActiveAirFog() {
+  const wr = S.weatherRuntime;
+  const ws = S.worldSettings || {};
+  const color = (wr && wr.effectiveFogColor) ? wr.effectiveFogColor : (ws.fogColor || '#88ccff');
+  const density = (wr && typeof wr.effectiveFogDensity === 'number')
+    ? wr.effectiveFogDensity
+    : (ws.fogDensity ?? 0.0038);
+  return { color, density };
+}
 
 // Пул пузырьков для жидкости
 const BUBBLE_COUNT = 18;
@@ -88,8 +100,9 @@ export function resetLiquidCameraFilter() {
   activeMediumType = null;
   if (filterCv) filterCv.style.display = 'none';
   if (scene.fog && S.worldSettings) {
-    scene.fog.color.set(S.worldSettings.fogColor);
-    scene.fog.density = S.worldSettings.fogDensity;
+    const airFog = getActiveAirFog();
+    scene.fog.color.set(airFog.color);
+    scene.fog.density = airFog.density;
   }
 }
 
@@ -101,6 +114,7 @@ function getMediumBlockUnderCamera() {
 
   for (let i = 0; i < S.allBlocks.length; i++) {
     const b = S.allBlocks[i];
+    if (!b || b.isDisabled || b._depletedDisabled || b._evaporated) continue;
     const st = b.matterState;
     if (st !== 'liquid' && st !== 'gas') continue;
 
@@ -168,8 +182,9 @@ export function updateLiquidCameraFilter(player, dt = 0.016) {
     cv.style.display = 'none';
     activeMediumType = null;
     if (scene.fog && S.worldSettings) {
-      scene.fog.color.set(S.worldSettings.fogColor);
-      scene.fog.density = S.worldSettings.fogDensity;
+      const airFog = getActiveAirFog();
+      scene.fog.color.set(airFog.color);
+      scene.fog.density = airFog.density;
     }
     return;
   }
@@ -194,14 +209,15 @@ export function updateLiquidCameraFilter(player, dt = 0.016) {
 
   // 1. Трехмерный объемный туман сцены (Scene Fog) под цвет жидкости или газа
   if (scene.fog && S.worldSettings) {
-    const baseFogCol = new THREE.Color(S.worldSettings.fogColor);
-    const medFogCol = new THREE.Color(r / 255, g / 255, b / 255);
-    scene.fog.color.copy(baseFogCol).lerp(medFogCol, mediaBlend * 0.9);
+    const airFog = getActiveAirFog();
+    _baseFogColTmp.set(airFog.color);
+    _medFogColTmp.setRGB(r / 255, g / 255, b / 255);
+    scene.fog.color.copy(_baseFogColTmp).lerp(_medFogColTmp, mediaBlend * 0.9);
 
     const targetFogDens = isGas ? 0.052 : (isLava ? 0.062 : 0.04);
     scene.fog.density =
-      S.worldSettings.fogDensity +
-      (targetFogDens - S.worldSettings.fogDensity) * mediaBlend;
+      airFog.density +
+      (targetFogDens - airFog.density) * mediaBlend;
   }
 
   // 2. Отрисовка экранного фильтра

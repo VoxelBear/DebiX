@@ -109,12 +109,14 @@ export const S = {
     sfxVolume: 0.85,
     musicVolume: 0.42,
     ambienceVolume: 0.45,
+    mediaVolume: 0.9,
     worldScriptData: null
   },
   savedCosmeticsLibrary: [],
   savedItemsLibrary: [],
   customPrefabsLibrary: [], // Пользовательские префабы блоков/предметов/NPC
-  customAudioLibrary: [],   // Пользовательские загруженные звуки и музыка (.mp3/.wav/.ogg в DataURL)
+  customAudioLibrary: [],   // Пользовательские звуки/музыка (.mp3/.wav/.ogg в DataURL или ссылки/YouTube)
+  customVideoLibrary: [],   // Пользовательские видеофайлы и ссылки на видео/YouTube для 3D-экранов
   customScriptsLibrary: [], // Пользовательские скрипт-аддоны (DebiX Script)
   scriptLogs: [],           // Логи выполнения скриптов-аддонов
   scriptModalOpen: false,   // Открыта ли модалка Script Studio IDE

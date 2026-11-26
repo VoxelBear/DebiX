@@ -16,6 +16,11 @@ import {
   clearSurfaceWeatherLayer,
   resetSurfaceWeatherLayer
 } from './SurfaceWeatherLayer.js';
+import {
+  syncBlockMediaVisuals,
+  clearAllMediaRuntime,
+  resetAllMediaRuntime
+} from './MediaSystem.js';
 
 const MAX_ACTIVE_POINT_LIGHTS = 12;
 const pointLightPool = [];
@@ -39,6 +44,7 @@ export function syncSceneVisibilityForMode(mode = S.state) {
     const vis = !isOff && !(isEdit && b.editorHidden);
     b.m.visible = vis;
     if (b.bbmodelGroup) b.bbmodelGroup.visible = vis;
+    if (b._screenGroup) b._screenGroup.visible = vis;
     if (b.cpVisualGroup) b.cpVisualGroup.visible = vis;
     if (b.haloSprite) b.haloSprite.visible = vis;
     if (b.emptyPivotHelper) {
@@ -383,10 +389,18 @@ export function ensureBlockComponents(box, opts = {}) {
       script: {
         enabled: Boolean(box.scriptData && box.scriptData.enabled),
         collapsed: false
+      },
+      mediaScreen: {
+        enabled: Boolean(box.mediaScreenData),
+        collapsed: false
+      },
+      soundEmitter: {
+        enabled: Boolean(box.soundEmitterData),
+        collapsed: false
       }
     };
   } else {
-    const keys = ['geometry', 'visual', 'physics', 'interaction', 'motion', 'signal', 'cost', 'item', 'spawner', 'script'];
+    const keys = ['geometry', 'visual', 'physics', 'interaction', 'motion', 'signal', 'cost', 'item', 'spawner', 'sound', 'script', 'mediaScreen', 'soundEmitter'];
     for (const k of keys) {
       if (!box.components[k]) {
         box.components[k] = { enabled: false, collapsed: false };
@@ -649,6 +663,7 @@ export function syncBlockComponentsState(box) {
   if (box.cpVisualGroup) box.cpVisualGroup.visible = vis;
   if (box.haloSprite) box.haloSprite.visible = vis;
   if (box.emptyPivotHelper) box.emptyPivotHelper.visible = isEdit && vis && !hasGeo;
+  syncBlockMediaVisuals(box);
 }
 
 function ensurePointLightPool() {
@@ -914,6 +929,7 @@ export function clearWorld() {
   clearAllParticles();
   clearAllStatusEffectVisuals();
   clearSurfaceWeatherLayer();
+  clearAllMediaRuntime();
   clearStudioMotionHelpers();
   for (const pl of pointLightPool) {
     pl.intensity = 0;
@@ -982,6 +998,8 @@ export function addSceneBlock(opts) {
     costData = null,
     components = null,
     scriptData = null,
+    mediaScreenData = null,
+    soundEmitterData = null,
     bbmodelData = null,
     isRawEmpty = false,
     isRawPrimitive = false,
@@ -1108,6 +1126,8 @@ export function addSceneBlock(opts) {
     signalData: signalData ? JSON.parse(JSON.stringify(signalData)) : null,
     costData: costData ? JSON.parse(JSON.stringify(costData)) : null,
     scriptData: scriptData ? JSON.parse(JSON.stringify(scriptData)) : createDefaultScriptData('block'),
+    mediaScreenData: mediaScreenData ? JSON.parse(JSON.stringify(mediaScreenData)) : null,
+    soundEmitterData: soundEmitterData ? JSON.parse(JSON.stringify(soundEmitterData)) : null,
     bbmodelData: bbmodelData ? JSON.parse(JSON.stringify(bbmodelData)) : null,
     components: components ? JSON.parse(JSON.stringify(components)) : null,
     logicRuntime: {
@@ -1493,8 +1513,12 @@ export function syncStudioMotionAndSignalHelpers() {
   const hasMotion = Boolean(comps.motion?.enabled);
   const hasSignal = Boolean(comps.signal?.enabled && box.signalData?.targetTag);
   const hasTpTarget = Boolean(comps.interaction?.enabled && box.interactionData?.actionType === 'teleport' && box.interactionData?.tpMode === 'target' && box.interactionData?.tpTargetTag);
+  const hasSpeakerLink = Boolean(comps.soundEmitter?.enabled && box.soundEmitterData?.mode === 'screen_link' && box.soundEmitterData?.linkedScreenId);
+  const linkedSpeakers = comps.mediaScreen?.enabled
+    ? S.allBlocks.filter(b => b !== box && b.components?.soundEmitter?.enabled && b.soundEmitterData?.mode === 'screen_link' && b.soundEmitterData?.linkedScreenId === box.id)
+    : [];
 
-  if (!hasMotion && !hasSignal && !hasTpTarget) return;
+  if (!hasMotion && !hasSignal && !hasTpTarget && !hasSpeakerLink && linkedSpeakers.length === 0) return;
 
   studioMotionHelperGroup = new THREE.Group();
   studioMotionHelperGroup.name = 'StudioMotionAndSignalHelpers';
@@ -1668,6 +1692,30 @@ export function syncStudioMotionAndSignalHelpers() {
     }
   }
 
+  const addMediaArc = (fromBox, toBox) => {
+    if (!fromBox?.m || !toBox?.m) return;
+    const p1 = fromBox.m.position.clone();
+    const p2 = toBox.m.position.clone();
+    const mid = p1.clone().lerp(p2, 0.5);
+    mid.y += 1.4;
+    const curve = new THREE.QuadraticBezierCurve3(p1, mid, p2);
+    const arc = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(curve.getPoints(24)),
+      new THREE.LineBasicMaterial({ color: 0x56f0ff, depthTest: false, transparent: true, opacity: 0.95 })
+    );
+    arc.renderOrder = 996;
+    arc.userData.noCollider = true;
+    studioMotionHelperGroup.add(arc);
+  };
+
+  if (hasSpeakerLink) {
+    const scrBox = S.allBlocks.find(b => b && b.id === box.soundEmitterData.linkedScreenId);
+    addMediaArc(box, scrBox);
+  }
+  for (let i = 0; i < linkedSpeakers.length; i++) {
+    addMediaArc(box, linkedSpeakers[i]);
+  }
+
   scene.add(studioMotionHelperGroup);
 }
 
@@ -1721,6 +1769,21 @@ export function resetAllLogicRuntime(reanchorCurrentAsBase = false) {
     box._externalTorqueZ = 0;
     box._depletedDisabled = false;
     box._interactionDisabled = false;
+    box._evaporated = false;
+    box._boilProgress = 0;
+    box._boilPartAccum = 0;
+    if (box.matterState === 'liquid' && box.m && box.m.material) {
+      const mats = Array.isArray(box.m.material) ? box.m.material : [box.m.material];
+      const baseHex = box.colorHex || '#38bdf8';
+      for (let mi = 0; mi < mats.length; mi++) {
+        if (mats[mi]?.color) mats[mi].color.set(baseHex);
+        if (box._swvSkyEmissiveApplied && mats[mi]?.emissive) {
+          mats[mi].emissive.setHex(0x000000);
+          mats[mi].emissiveIntensity = 0;
+        }
+      }
+      box._swvSkyEmissiveApplied = false;
+    }
     delete box._weatherBaseH;
     delete box._weatherBaseY0;
     box._weatherRunoffAccum = 0;
@@ -1754,6 +1817,7 @@ export function resetAllLogicRuntime(reanchorCurrentAsBase = false) {
     S.gmodTool.firstHit = null;
   }
   resetSurfaceWeatherLayer(false);
+  resetAllMediaRuntime();
   resetAllStatusEffectsRuntime();
   resetAllScriptsRuntime();
 }

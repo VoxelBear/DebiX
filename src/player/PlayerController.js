@@ -68,6 +68,7 @@ import {
 import { isEntityFrozen, isItemFrozen, updatePlayerStatusHUD } from '../core/StatusEffects.js';
 import { updateWeatherAndClouds } from '../core/WeatherAndClouds.js';
 import { updateSurfaceWeatherLayer } from '../core/SurfaceWeatherLayer.js';
+import { updateMediaSystem, toggleBlockMediaPlayback } from '../core/MediaSystem.js';
 import { initPaintStudio2D, isPaintModalOpen } from '../studio/PaintStudio2D.js';
 import {
   initMultiplayerSystem,
@@ -471,6 +472,28 @@ export function handleActionKeyE() {
       showBanner(`⚙️ Активирован спавнер «${nearest.label}»!`, '#56f0ff');
       return;
     }
+  }
+
+  // 3.5. Взаимодействие [E] с ближайшим Видео-Экраном или 3D-Колонкой (Пауза / Плей)
+  let bestMediaBlk = null;
+  let bestMediaDist = 5.2;
+  for (let i = 0; i < S.allBlocks.length; i++) {
+    const b = S.allBlocks[i];
+    if (!b || !b.m || b.isDisabled || b._depletedDisabled) continue;
+    const canScr = b.components?.mediaScreen?.enabled && b.mediaScreenData?.interactKeyE !== false;
+    const canSpk = b.components?.soundEmitter?.enabled && b.soundEmitterData?.interactKeyE !== false;
+    if (!canScr && !canSpk) continue;
+    const dx = b.x0 > -99999 ? Math.max(0, b.x0 - player.x, player.x - b.x1) : Math.abs(b.m.position.x - player.x);
+    const dy = b.y0 > -99999 ? Math.max(0, b.y0 - (player.y + 1.2), (player.y + 1.2) - b.y1) : Math.abs(b.m.position.y - (player.y + 1.2));
+    const dz = b.z0 > -99999 ? Math.max(0, b.z0 - player.z, player.z - b.z1) : Math.abs(b.m.position.z - player.z);
+    const dist = Math.hypot(dx, dy, dz);
+    if (dist < bestMediaDist) {
+      bestMediaDist = dist;
+      bestMediaBlk = b;
+    }
+  }
+  if (bestMediaBlk && toggleBlockMediaPlayback(bestMediaBlk, true)) {
+    return;
   }
 
   if (S.gameMode && S.gameMode.onActionKeyE) {
@@ -1137,7 +1160,7 @@ export function initInputControls() {
         if ((e.buttons & 1) && !S.lmbDown) setPlayLMBState(true);
         else if (!(e.buttons & 1) && (S.lmbDown || S.isChargingThrow)) setPlayLMBState(false);
       }
-      if (document.pointerLockElement === cv || e.buttons) {
+      if ((document.pointerLockElement === cv || e.buttons) && !S._isDraggingMediaScreenUI) {
         if (S.playerDead && S.worldSettings.respawnMode === 'spectator') {
           S.spectatorYaw -= (e.movementX || 0) * 0.003;
           S.spectatorPitch = clamp(S.spectatorPitch - (e.movementY || 0) * 0.003, -1.45, 1.45);
@@ -1280,6 +1303,7 @@ export function loop(now) {
   try { updateSurfaceWeatherLayer(dt); } catch (err) { console.error('Ошибка SurfaceWeatherLayer:', err); }
   try { updateParticles(dt); } catch (err) { console.error('Ошибка Particles:', err); }
   try { updateAllPets(dt); } catch (err) { console.error('Ошибка Pets:', err); }
+  try { updateMediaSystem(dt); } catch (err) { console.error('Ошибка MediaSystem:', err); }
   render(dt);
 }
 

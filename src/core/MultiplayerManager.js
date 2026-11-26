@@ -1515,6 +1515,8 @@ function serializeSingleBlockForNet(b) {
     signalData: b.signalData ? JSON.parse(JSON.stringify(b.signalData)) : null,
     costData: b.costData ? JSON.parse(JSON.stringify(b.costData)) : null,
     soundData: b.soundData ? JSON.parse(JSON.stringify(b.soundData)) : null,
+    mediaScreenData: b.mediaScreenData ? JSON.parse(JSON.stringify(b.mediaScreenData)) : null,
+    soundEmitterData: b.soundEmitterData ? JSON.parse(JSON.stringify(b.soundEmitterData)) : null,
     checkpointData: b.checkpointData ? JSON.parse(JSON.stringify(b.checkpointData)) : null,
     spawnerData: b.spawnerData ? JSON.parse(JSON.stringify(b.spawnerData)) : null,
     particleData: b.particleData ? JSON.parse(JSON.stringify(b.particleData)) : null,
@@ -1782,6 +1784,12 @@ function handleWorldOpPacket(pkt) {
       if (sb.signalData) box.signalData = JSON.parse(JSON.stringify(sb.signalData));
       if (sb.costData) box.costData = JSON.parse(JSON.stringify(sb.costData));
       if (sb.soundData) box.soundData = JSON.parse(JSON.stringify(sb.soundData));
+      if (sb.mediaScreenData !== undefined) {
+        box.mediaScreenData = sb.mediaScreenData ? JSON.parse(JSON.stringify(sb.mediaScreenData)) : null;
+      }
+      if (sb.soundEmitterData !== undefined) {
+        box.soundEmitterData = sb.soundEmitterData ? JSON.parse(JSON.stringify(sb.soundEmitterData)) : null;
+      }
       if (sb.lightData) box.lightData = JSON.parse(JSON.stringify(sb.lightData));
       if (sb.particleData) box.particleData = JSON.parse(JSON.stringify(sb.particleData));
       if (sb.checkpointData) box.checkpointData = JSON.parse(JSON.stringify(sb.checkpointData));
@@ -1941,6 +1949,12 @@ function handleWorldOpPacket(pkt) {
         if (idx >= 0) S.customPrefabsLibrary[idx] = ad;
         else S.customPrefabsLibrary.push(ad);
         refreshPrefabDockUI();
+      } else if (pkt.assetType === 'video') {
+        if (!Array.isArray(S.customVideoLibrary)) S.customVideoLibrary = [];
+        const idx = S.customVideoLibrary.findIndex(v => v.id === ad.id);
+        if (idx >= 0) S.customVideoLibrary[idx] = ad;
+        else S.customVideoLibrary.push(ad);
+        showBanner(`🎬 Подгружено видео в сессии: «${ad.name}»!`, '#56f0ff');
       } else if (pkt.assetType === 'audio') {
         const idx = S.customAudioLibrary.findIndex(a => a.id === ad.id);
         if (idx >= 0) S.customAudioLibrary[idx] = ad;

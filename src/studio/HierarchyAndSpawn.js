@@ -25,7 +25,8 @@ import {
   createBlockPivotHelperMesh,
   ensureBlockComponents,
   syncBlockComponentsState,
-  syncSceneVisibilityForMode
+  syncSceneVisibilityForMode,
+  syncStudioMotionAndSignalHelpers
 } from '../core/WorldRegistry.js';
 import {
   spawnCustomNPC,
@@ -46,8 +47,13 @@ import {
   closeItemStudio3D,
   syncItemStudioPreview
 } from './StudioController.js';
-import { syncLibraryItemIfEditing } from './InspectorPanel.js';
+import { syncLibraryItemIfEditing, renderInspectorUI } from './InspectorPanel.js';
 import { isPaintModalOpen } from './PaintStudio2D.js';
+import {
+  createDefaultMediaScreenData,
+  createDefaultSoundEmitterData,
+  syncBlockMediaVisuals
+} from '../core/MediaSystem.js';
 
 /* ---------- КАТАЛОГ БАЗОВЫХ ПРЕФАБОВ И КАТЕГОРИЙ (UNITY PROJECT DOCK) ---------- */
 
@@ -74,6 +80,8 @@ export const BUILTIN_PREFAB_CATALOG = [
   { key: 'vip_gate', title: 'VIP-Ворота за R$', category: 'logic', border: '#ffce3a' },
   { key: 'shop_pad', title: 'Магазин за R$', category: 'logic', border: '#00e676' },
   { key: 'spawner', title: 'Спавнер Объектов', category: 'logic', border: '#9b59b6' },
+  { key: 'media_screen', title: 'Видео-Экран (TV)', category: 'logic', border: '#00d2ff' },
+  { key: 'media_speaker', title: '3D-Колонка (Звук)', category: 'logic', border: '#00e676' },
 
   { key: 'item_sword', title: 'Алмазный Меч', category: 'weapons', border: '#ff6b6b' },
   { key: 'item_blaster', title: 'Импульсный Бластер', category: 'weapons', border: '#ff6b6b' },
@@ -1258,6 +1266,35 @@ function buildPrefabPreviewModel(spawnKey) {
     coin.rotation.x = Math.PI / 2;
     coin.position.y = 1.05;
     g.add(pad, coin);
+  } else if (spawnKey === 'media_screen') {
+    const frame = new THREE.Mesh(
+      new THREE.BoxGeometry(3.6, 2.2, 0.35),
+      new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.35, metalness: 0.4 })
+    );
+    const display = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.2, 1.85),
+      new THREE.MeshBasicMaterial({ color: 0x00d2ff })
+    );
+    display.position.z = 0.19;
+    g.add(frame, display);
+  } else if (spawnKey === 'media_speaker') {
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(1.6, 2.4, 1.4),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.45 })
+    );
+    const woofer = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.55, 0.55, 0.12, 20),
+      new THREE.MeshStandardMaterial({ color: 0x00e676, emissive: 0x00a850, emissiveIntensity: 0.45 })
+    );
+    woofer.rotation.x = Math.PI / 2;
+    woofer.position.set(0, -0.35, 0.68);
+    const tweeter = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.3, 0.3, 0.12, 18),
+      new THREE.MeshStandardMaterial({ color: 0x56f0ff, emissive: 0x00a2ff, emissiveIntensity: 0.45 })
+    );
+    tweeter.rotation.x = Math.PI / 2;
+    tweeter.position.set(0, 0.55, 0.68);
+    g.add(body, woofer, tweeter);
   } else {
     const m = new THREE.Mesh(
       new THREE.BoxGeometry(2, 2, 2),
@@ -1695,6 +1732,8 @@ function serializeBlockSnapshotForPrefab(b, originPos = null) {
     signalData: b.signalData ? JSON.parse(JSON.stringify(b.signalData)) : null,
     costData: b.costData ? JSON.parse(JSON.stringify(b.costData)) : null,
     soundData: b.soundData ? JSON.parse(JSON.stringify(b.soundData)) : null,
+    mediaScreenData: b.mediaScreenData ? JSON.parse(JSON.stringify(b.mediaScreenData)) : null,
+    soundEmitterData: b.soundEmitterData ? JSON.parse(JSON.stringify(b.soundEmitterData)) : null,
     checkpointData: b.checkpointData ? JSON.parse(JSON.stringify(b.checkpointData)) : null,
     spawnerData: b.spawnerData ? JSON.parse(JSON.stringify(b.spawnerData)) : null,
     particleData: b.particleData ? JSON.parse(JSON.stringify(b.particleData)) : null,
@@ -1826,6 +1865,8 @@ export function saveSelectedObjectAsPrefab() {
 /* ---------- ДРЕВОВИДНАЯ ИЕРАРХИЯ СЦЕНЫ (UNITY PARENT-CHILD TREE) ---------- */
 
 function getBlockHierarchyIcon(b) {
+  if (b.components?.mediaScreen?.enabled) return '📺';
+  if (b.components?.soundEmitter?.enabled) return '📻';
   if (b.components && !b.components.geometry?.enabled && !b.components.item?.enabled) return '🎯';
   if (b.components && b.components.item?.enabled) return b.components.item.itemData?.icon || '🗡️';
   if (b.checkpointData && b.checkpointData.enabled) return '⭐';
@@ -3540,6 +3581,28 @@ export function spawnPrefabFromCard(st, dropWorldPos = null, openForEdit = false
       spawnerData: { mode: 'timer', interval: 5, timer: 2, spawnType: 'coin' },
       isCustom: true
     });
+  } else if (st === 'media_screen') {
+    const scrNum = S.allBlocks.filter(b => b.components?.mediaScreen?.enabled).length + 1;
+    box = addSceneBlock({
+      x: sp.x, y: topY(4.5), z: sp.z,
+      w: 8.0, h: 4.5, d: 0.4,
+      colorHex: '#111827',
+      surfaceType: 'smooth',
+      label: `Видео-Экран #${scrNum}`,
+      mediaScreenData: createDefaultMediaScreenData(),
+      isCustom: true
+    });
+  } else if (st === 'media_speaker') {
+    const spkNum = S.allBlocks.filter(b => b.components?.soundEmitter?.enabled).length + 1;
+    box = addSceneBlock({
+      x: sp.x, y: topY(2.2), z: sp.z,
+      w: 1.4, h: 2.2, d: 1.4,
+      colorHex: '#1e293b',
+      surfaceType: 'smooth',
+      label: `3D-Колонка #${spkNum}`,
+      soundEmitterData: createDefaultSoundEmitterData(),
+      isCustom: true
+    });
   }
 
   if (box) {
@@ -3792,7 +3855,9 @@ function createPreviewGhost3D(dragState) {
     shop_pad:   { shape: 'box', w: 3.4, h: 0.7, d: 3.4, col: 0x00e676 },
     kill:       { shape: 'box', w: 4.6, h: 0.4, d: 0.8, col: 0xff3e3e },
     trampoline: { shape: 'box', w: 4, h: 0.8, d: 4, col: 0x00e676 },
-    spawner:    { shape: 'box', w: 3.5, h: 0.8, d: 3.5, col: 0x9b59b6 }
+    spawner:    { shape: 'box', w: 3.5, h: 0.8, d: 3.5, col: 0x9b59b6 },
+    media_screen:  { shape: 'box', w: 8.0, h: 4.5, d: 0.4, col: 0x00d2ff },
+    media_speaker: { shape: 'box', w: 1.4, h: 2.2, d: 1.4, col: 0x00e676 }
   };
 
   if (st === 'teleport') {
@@ -4536,6 +4601,10 @@ export function initHierarchyAndSpawn() {
       .forEach(el => {
         el.classList.remove('drag-over', 'drag-over-parent', 'drop-before', 'drop-after');
       });
+    document.querySelectorAll('[data-screen-speaker-drop]').forEach(el => {
+      el.style.borderColor = '#38bdf8';
+      el.style.background = 'rgba(16,24,42,0.75)';
+    });
   };
 
   const clearActiveDrag = () => {
@@ -4642,9 +4711,13 @@ export function initHierarchyAndSpawn() {
         const dropFolderEl = underEl && underEl.closest('.folder-item[data-custom-folder="1"]');
         if (dropFolderEl) dropFolderEl.classList.add('drag-over');
       } else if (activeDrag.kind === 'hier_item') {
+        const dropScreenZone = underEl && underEl.closest('[data-screen-speaker-drop]');
         const dropHierItem = underEl && underEl.closest('.hier-item[data-hkey]');
         const dropRootZone = underEl && underEl.closest('#hierRootDropZone');
-        if (dropHierItem && dropHierItem !== activeDrag.el) {
+        if (dropScreenZone) {
+          dropScreenZone.style.borderColor = '#00e676';
+          dropScreenZone.style.background = 'rgba(0,230,118,0.18)';
+        } else if (dropHierItem && dropHierItem !== activeDrag.el) {
           const rect = dropHierItem.getBoundingClientRect();
           const relY = (e.clientY - rect.top) / Math.max(1, rect.height);
           // Верхние 28% -> синяя линия СВЕРХУ (before), нижние 28% -> синяя линия СНИЗУ (after), середина -> ВЛОЖЕНИЕ В РОДИТЕЛЯ (inside)
@@ -4699,8 +4772,46 @@ export function initHierarchyAndSpawn() {
       return;
     }
 
-    // 1. Смена порядка (before/after) или вложенность (inside) в Иерархии Сцены
+    // 1. Привязка колонки к Видео-Экрану (Drag & Drop из Иерархии в Инспектор) или перестановка в Иерархии
     if (state.kind === 'hier_item') {
+      const dropScreenZone = underEl && underEl.closest('[data-screen-speaker-drop]');
+      if (dropScreenZone) {
+        const screenId = dropScreenZone.dataset.screenSpeakerDrop;
+        if (!state.key || !state.key.startsWith('block:')) {
+          sfx.oof?.();
+          showBanner('⚠️ К экрану можно привязать только 3D-Колонку или блок из Иерархии!', '#ffce3a');
+          return;
+        }
+        const speakerId = state.key.slice(6);
+        const screenBox = S.allBlocks.find(b => b && b.id === screenId);
+        const speakerBox = S.allBlocks.find(b => b && b.id === speakerId);
+        if (!screenBox || !speakerBox) return;
+        if (speakerBox === screenBox) {
+          sfx.oof?.();
+          showBanner('⚠️ Нельзя привязать экран к самому себе!', '#ffce3a');
+          return;
+        }
+        pushUndoState('Привязка колонки к экрану');
+        ensureBlockComponents(speakerBox);
+        speakerBox.components.soundEmitter.enabled = true;
+        if (!speakerBox.soundEmitterData) speakerBox.soundEmitterData = createDefaultSoundEmitterData();
+        speakerBox.soundEmitterData.mode = 'screen_link';
+        speakerBox.soundEmitterData.linkedScreenId = screenBox.id;
+        speakerBox.soundEmitterData.playing = true;
+        syncBlockComponentsState(speakerBox);
+        syncBlockMediaVisuals(speakerBox);
+        syncBlockMediaVisuals(screenBox);
+        syncStudioMotionAndSignalHelpers();
+        if (window.__debixSyncBlockUpsert && !S.isApplyingRemoteSync) {
+          window.__debixSyncBlockUpsert(speakerBox, false);
+        }
+        sfx.coil?.();
+        refreshHierarchyUI();
+        renderInspectorUI();
+        showBanner(`🔗 Источник «${speakerBox.label}» привязан к экрану «${screenBox.label}»!`, '#00e676');
+        return;
+      }
+
       const dropHierItem = underEl && underEl.closest('.hier-item[data-hkey]');
       const dropRootZone = underEl && underEl.closest('#hierRootDropZone,.ed-sec-title');
       if (dropHierItem && dropHierItem.dataset.hkey !== state.key) {

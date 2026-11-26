@@ -1,6 +1,6 @@
 // src/core/WeatherAndClouds.js
 import { S, clamp, rnd } from './State.js';
-import { scene, camera } from './SceneManager.js';
+import { scene, camera, hemi, setAtmosphericSkybox, getEffectiveSkyColors } from './SceneManager.js';
 import { updateWeatherAudio, sfx } from './AudioEngine.js';
 import { emitParticleBurst } from './ParticleSystem.js';
 import {
@@ -64,6 +64,59 @@ let _mistEmitAccum = 0;
 const _fogColorTarget = new THREE.Color();
 const _mistColorTmp = new THREE.Color();
 const _cloudTintTmp = new THREE.Color();
+const _weatherCloudColorTmp = new THREE.Color();
+const _atmoFogColorTmp = new THREE.Color();
+const _smoothedFogColor = new THREE.Color('#88ccff');
+let _smoothedFogDensity = 0.0038;
+let _fogSmoothInited = false;
+const _skyMidSyncTmp = new THREE.Color();
+const _skyHorizSyncTmp = new THREE.Color();
+const _hemiSkyBaseTmp = new THREE.Color();
+const _hemiGndBaseTmp = new THREE.Color();
+
+// Цветовые палитры атмосферного скайбокса и туч по типу осадков
+const WEATHER_ATMOSPHERE_PALETTES = {
+  water: {
+    skyTop: '#1e293b',
+    skyMid: '#475569',
+    skyBot: '#64748b',
+    cloudColor: '#5b6472',
+    cloudEmissive: '#2c3340',
+    cloudEmissiveInt: 0.32,
+    fogTint: '#64748b'
+  },
+  blood: {
+    skyTop: '#2b060a',
+    skyMid: '#7f1d1d',
+    skyBot: '#b91c1c',
+    cloudColor: '#b91c2c',
+    cloudEmissive: '#6e0d18',
+    cloudEmissiveInt: 0.55,
+    fogTint: '#991b1b'
+  },
+  acid: {
+    skyTop: '#062614',
+    skyMid: '#15803d',
+    skyBot: '#34d399',
+    cloudColor: '#1ea84c',
+    cloudEmissive: '#0e5928',
+    cloudEmissiveInt: 0.48,
+    fogTint: '#15803d'
+  },
+  lava: {
+    skyTop: '#09070f',
+    skyMid: '#241432',
+    skyBot: '#4a4352',
+    cloudColor: '#2a1f36',
+    cloudEmissive: '#1e122b',
+    cloudEmissiveInt: 0.40,
+    fogTint: '#362b3f'
+  }
+};
+
+let _atmoAlphaSmooth = 0;
+let _atmoActiveSubstance = 'water';
+let _cloudWeatherBoostSmooth = 0;
 
 function resolvePrecipitationState(substance, effTemp) {
   if (substance === 'none') {
@@ -262,6 +315,23 @@ let _overcastMat = null;
 const _cloudSeeds = [];
 const _cloudDummy = new THREE.Object3D();
 
+function createRadialOvercastAlphaMap() {
+  const cv = document.createElement('canvas');
+  cv.width = 128;
+  cv.height = 128;
+  const ctx = cv.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 14, 64, 64, 64);
+  g.addColorStop(0.0, '#ffffff');
+  g.addColorStop(0.55, '#ffffff');
+  g.addColorStop(0.82, '#666666');
+  g.addColorStop(1.0, '#000000');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.needsUpdate = true;
+  return tex;
+}
+
 function initCloudsSystem() {
   if (_cloudMesh) return;
   const geo = new THREE.BoxGeometry(1, 1, 1);
@@ -269,7 +339,8 @@ function initCloudsSystem() {
     color: 0xffffff,
     transparent: true,
     opacity: 0.92,
-    depthWrite: true
+    depthWrite: true,
+    fog: false
   });
   _cloudMesh = new THREE.InstancedMesh(geo, _cloudMat, CLOUD_COUNT);
   _cloudMesh.frustumCulled = false;
@@ -278,15 +349,17 @@ function initCloudsSystem() {
   _cloudMesh.userData.noCollider = true;
   scene.add(_cloudMesh);
 
-  // Верхний сплошной слой для полной облачности (coverage 0.78..1.0)
-  const overGeo = new THREE.PlaneGeometry(920, 920);
+  // Верхний сплошной слой для полной облачности с мягким радиальным затуханием к горизонту
+  const overGeo = new THREE.PlaneGeometry(960, 960);
   overGeo.rotateX(Math.PI / 2);
   _overcastMat = new THREE.MeshBasicMaterial({
     color: 0xffffff,
+    alphaMap: createRadialOvercastAlphaMap(),
     side: THREE.DoubleSide,
     transparent: true,
     opacity: 0,
-    depthWrite: false
+    depthWrite: false,
+    fog: false
   });
   _overcastMesh = new THREE.Mesh(overGeo, _overcastMat);
   _overcastMesh.visible = false;
@@ -316,7 +389,7 @@ function initCloudsSystem() {
   }
 }
 
-function updateClouds(dt, anchorX, anchorZ) {
+function updateClouds(dt, anchorX, anchorZ, substance, intensity) {
   initCloudsSystem();
   const cs = S.worldSettings?.cloudsSettings;
   if (!cs || cs.enabled === false || S.itemStudioOpen) {
@@ -325,17 +398,35 @@ function updateClouds(dt, anchorX, anchorZ) {
     return;
   }
 
+  const effSub = substance !== undefined
+    ? substance
+    : normalizeWeatherSubstance(S.worldSettings?.weatherSettings?.type);
+  const effInt = intensity !== undefined
+    ? intensity
+    : clamp(Number(S.worldSettings?.weatherSettings?.intensity) ?? 0.75, 0.1, 1.0);
+
+  if (effSub !== 'none') _atmoActiveSubstance = effSub;
+
+  // Плавная инерция плотности облачности от интенсивности осадков
+  const targetBoost = effSub !== 'none' ? clamp(effInt, 0.05, 1.0) : 0;
+  _cloudWeatherBoostSmooth += (targetBoost - _cloudWeatherBoostSmooth) * Math.min(1, dt * 1.6);
+
   // Плавная автоматическая смена кучности облаков (если включено)
+  let baseCov;
   if (cs.dynamicCoverage) {
     const spd = clamp(Number(cs.dynamicSpeed) || 0.04, 0.005, 0.5);
     const t = (S.time || 0) * spd;
     const wave = 0.5 + 0.36 * Math.sin(t) + 0.14 * Math.sin(t * 2.37 + 1.1);
-    S._effectiveCloudCoverage = clamp(wave, 0, 1);
+    baseCov = clamp(wave, 0, 1);
   } else {
-    S._effectiveCloudCoverage = clamp(Number(cs.coverage) ?? 0.35, 0, 1);
+    baseCov = clamp(Number(cs.coverage) ?? 0.35, 0, 1);
   }
 
-  const cov = S._effectiveCloudCoverage;
+  // Чем сильнее осадки — тем больше облаков затягивает небо
+  const precipCovFill = _cloudWeatherBoostSmooth * 0.86;
+  const cov = clamp(baseCov + (1 - baseCov) * precipCovFill, 0, 1);
+  S._effectiveCloudCoverage = cov;
+
   if (cov <= 0.005) {
     _cloudMesh.visible = false;
     _overcastMesh.visible = false;
@@ -345,12 +436,35 @@ function updateClouds(dt, anchorX, anchorZ) {
   const cloudHeight = clamp(Number(cs.height) ?? 72, 16, 260);
   const colHex = cs.color || '#ffffff';
   _cloudMat.color.set(colHex);
+
+  // Плотность (непрозрачность), диффузный цвет и emissive-подсветка снизу (пробивает синий hemi.groundColor)
+  const wBoost = _cloudWeatherBoostSmooth;
+  _cloudMat.opacity = clamp(0.60 + wBoost * 0.38, 0.58, 0.98);
+
+  if (wBoost > 0.01) {
+    const palKey = effSub !== 'none' ? effSub : _atmoActiveSubstance;
+    const pal = WEATHER_ATMOSPHERE_PALETTES[palKey] || WEATHER_ATMOSPHERE_PALETTES.water;
+    _weatherCloudColorTmp.set(pal.cloudColor);
+    const colorBlend = clamp(0.28 + Math.pow(wBoost, 0.85) * 0.70, 0, 0.98);
+    _cloudMat.color.lerp(_weatherCloudColorTmp, colorBlend);
+
+    _cloudMat.emissive.set(pal.cloudEmissive || pal.cloudColor);
+    _cloudMat.emissiveIntensity = (pal.cloudEmissiveInt ?? 0.45) * clamp(0.25 + wBoost * 0.75, 0, 1);
+  } else {
+    _cloudMat.emissive.setHex(0x000000);
+    _cloudMat.emissiveIntensity = 0;
+  }
+
   if (S.weatherRuntime?.hasMist && S.weatherRuntime.mistColor && S.weatherRuntime.mistDensity > 0.15) {
     _cloudTintTmp.set(S.weatherRuntime.mistColor);
-    const tintAmt = clamp(S.weatherRuntime.mistDensity * 0.65, 0.15, 0.72);
+    const tintAmt = clamp(S.weatherRuntime.mistDensity * 0.42, 0.12, 0.50);
     _cloudMat.color.lerp(_cloudTintTmp, tintAmt);
   }
   _overcastMat.color.copy(_cloudMat.color);
+  if (wBoost > 0.01) {
+    // Чуть затемняем верхний unlit-слой overcast, чтобы он сливался с нижней стороной 3D-облаков
+    _overcastMat.color.multiplyScalar(0.84);
+  }
 
   const halfSpan = CLOUD_SPAN * 0.5;
   const windShift = (S.time || 0) * 2.2;
@@ -366,10 +480,13 @@ function updateClouds(dt, anchorX, anchorZ) {
     const appear = clamp((cov - c.threshold) / 0.12, 0.05, 1.0);
     let rx = ((c.x + windShift * c.driftSpd - anchorX + halfSpan) % CLOUD_SPAN + CLOUD_SPAN) % CLOUD_SPAN - halfSpan;
     let rz = ((c.z - anchorZ + halfSpan) % CLOUD_SPAN + CLOUD_SPAN) % CLOUD_SPAN - halfSpan;
+    const edgeFade = clamp(1.0 - (Math.hypot(rx, rz) - halfSpan * 0.72) / (halfSpan * 0.28), 0, 1);
+    if (edgeFade <= 0.02) continue;
 
+    const visScale = appear * edgeFade;
     _cloudDummy.position.set(anchorX + rx, cloudHeight + c.yOff, anchorZ + rz);
     _cloudDummy.rotation.set(0, 0, 0);
-    _cloudDummy.scale.set(c.w * appear * expandScale, c.h * appear, c.d * appear * expandScale);
+    _cloudDummy.scale.set(c.w * visScale * expandScale, c.h * visScale, c.d * visScale * expandScale);
     _cloudDummy.updateMatrix();
     _cloudMesh.setMatrixAt(activeCount, _cloudDummy.matrix);
     activeCount++;
@@ -379,9 +496,10 @@ function updateClouds(dt, anchorX, anchorZ) {
   _cloudMesh.visible = activeCount > 0;
   _cloudMesh.instanceMatrix.needsUpdate = true;
 
-  // Сплошная облачность при кучности > 0.78 полностью закрывает небо
-  if (cov > 0.78) {
-    const overAlpha = clamp((cov - 0.78) / 0.22, 0, 0.96);
+  // Сплошная облачность при кучности > 0.72 (или плотных осадках) закрывает небо
+  const overThreshold = 0.78 - _cloudWeatherBoostSmooth * 0.12;
+  if (cov > overThreshold) {
+    const overAlpha = clamp(((cov - overThreshold) / Math.max(0.12, 1 - overThreshold)) * (0.82 + _cloudWeatherBoostSmooth * 0.18), 0, 0.98);
     _overcastMesh.visible = true;
     _overcastMesh.position.set(anchorX, cloudHeight + 4.5, anchorZ);
     _overcastMat.opacity = overAlpha;
@@ -392,9 +510,174 @@ function updateClouds(dt, anchorX, anchorZ) {
 
 /* ---------- 3. ОСАДКИ И ПОГОДА (INSTANCED MESH С ОБРЕЗКОЙ ПО КРЫШАМ) ---------- */
 
-const MAX_WEATHER_DROPS = 1100;
-const WEATHER_AREA_R = 34;
+const MAX_WEATHER_DROPS = 1200;
+const WEATHER_AREA_R = 38;
 const WEATHER_SKY_OFFSET = 32;
+
+// Дальняя оптимизированная 3-слойная завеса осадков (убирает видимую границу радиуса вокруг игрока)
+let _distantPrecipGroup = null;
+let _distantPrecipLayers = [];
+let _distantRainTex = null;
+let _distantSnowTex = null;
+
+function createDistantPrecipTexture(mode = 'rain') {
+  const cv = document.createElement('canvas');
+  cv.width = 256;
+  cv.height = 256;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, 256, 256);
+
+  let seed = mode === 'snow' ? 9187 : 4219;
+  const rand = () => {
+    seed = (seed * 16807) % 2147483647;
+    return (seed - 1) / 2147483646;
+  };
+
+  if (mode === 'snow') {
+    for (let i = 0; i < 240; i++) {
+      const x = rand() * 256;
+      const y = rand() * 256;
+      const r = 1.2 + rand() * 2.4;
+      const a = 0.25 + rand() * 0.65;
+      ctx.fillStyle = `rgba(255,255,255,${a.toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      if (x < r + 1) { ctx.beginPath(); ctx.arc(x + 256, y, r, 0, Math.PI * 2); ctx.fill(); }
+      if (y < r + 1) { ctx.beginPath(); ctx.arc(x, y + 256, r, 0, Math.PI * 2); ctx.fill(); }
+    }
+  } else {
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 210; i++) {
+      const x = rand() * 256;
+      const y = rand() * 256;
+      const len = 14 + rand() * 28;
+      const tilt = 1.5 + rand() * 2.5;
+      const a = 0.16 + rand() * 0.52;
+      ctx.strokeStyle = `rgba(255,255,255,${a.toFixed(2)})`;
+      ctx.lineWidth = 1.0 + rand() * 1.1;
+      const drawStreak = (ox, oy) => {
+        ctx.beginPath();
+        ctx.moveTo(x + ox, y + oy);
+        ctx.lineTo(x + ox + tilt, y + oy + len);
+        ctx.stroke();
+      };
+      drawStreak(0, 0);
+      if (y + len > 256) drawStreak(0, -256);
+      if (x + tilt > 256) drawStreak(-256, 0);
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function initDistantPrecipSheets() {
+  if (_distantPrecipGroup) return;
+  _distantRainTex = createDistantPrecipTexture('rain');
+  _distantSnowTex = createDistantPrecipTexture('snow');
+
+  _distantPrecipGroup = new THREE.Group();
+  _distantPrecipGroup.visible = false;
+  _distantPrecipGroup.userData.noCollider = true;
+
+  const specs = [
+    { radius: 36,  height: 76,  repX: 14, repY: 3.6, opScale: 0.42, speedMul: 1.00 },
+    { radius: 74,  height: 102, repX: 22, repY: 4.4, opScale: 0.34, speedMul: 0.86 },
+    { radius: 122, height: 132, repX: 30, repY: 5.0, opScale: 0.25, speedMul: 0.72 }
+  ];
+
+  for (let i = 0; i < specs.length; i++) {
+    const sp = specs[i];
+    const geo = new THREE.CylinderGeometry(sp.radius, sp.radius, sp.height, 32, 1, true);
+    const uScroll = { value: new THREE.Vector2(i * 0.31, i * 0.17) };
+    const uRepeat = { value: new THREE.Vector2(sp.repX, sp.repY) };
+
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      map: _distantRainTex,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      fog: true
+    });
+    mat.customProgramCacheKey = () => `debix_dist_precip_v1_${i}`;
+    mat.onBeforeCompile = shader => {
+      shader.uniforms.uPrecipScroll = uScroll;
+      shader.uniforms.uPrecipRepeat = uRepeat;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec2 vPrecipRawUv;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvPrecipRawUv = uv;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          '#include <common>\nvarying vec2 vPrecipRawUv;\nuniform vec2 uPrecipScroll;\nuniform vec2 uPrecipRepeat;'
+        )
+        .replace(
+          '#include <map_fragment>',
+          `
+          #ifdef USE_MAP
+            vec2 pUv = fract(vPrecipRawUv * uPrecipRepeat + uPrecipScroll);
+            vec4 sampledDiffuseColor = texture2D( map, pUv );
+            float vFade = smoothstep(0.0, 0.16, vPrecipRawUv.y) * smoothstep(1.0, 0.82, vPrecipRawUv.y);
+            sampledDiffuseColor.a *= vFade;
+            diffuseColor *= sampledDiffuseColor;
+          #endif
+          `
+        );
+    };
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 2;
+    mesh.userData.noCollider = true;
+    _distantPrecipGroup.add(mesh);
+    _distantPrecipLayers.push({ mesh, mat, spec: sp, uScroll, uRepeat });
+  }
+
+  scene.add(_distantPrecipGroup);
+}
+
+function updateDistantPrecipSheets(dt, anchorPos, prof, intensity, cloudHeight, visible) {
+  initDistantPrecipSheets();
+  if (!visible || !prof || prof.speed <= 0 || prof.dropW <= 0) {
+    _distantPrecipGroup.visible = false;
+    return;
+  }
+
+  _distantPrecipGroup.visible = true;
+  const isFlake = prof.kind === 'snow';
+  const targetTex = isFlake ? _distantSnowTex : _distantRainTex;
+  const scrollYRate = (prof.speed / 24.0) * (isFlake ? 0.55 : 0.92);
+  const scrollXRate = (prof.drift / 48.0);
+  const tNow = S.time || 0;
+
+  for (let i = 0; i < _distantPrecipLayers.length; i++) {
+    const layer = _distantPrecipLayers[i];
+    if (layer.mat.map !== targetTex) {
+      layer.mat.map = targetTex;
+      layer.mat.needsUpdate = true;
+    }
+    layer.mat.color.set(prof.color);
+
+    const baseOp = clamp((prof.opacity ?? 0.78) * (0.28 + intensity * 0.72) * layer.spec.opScale, 0.04, 0.52);
+    layer.mat.opacity = baseOp;
+
+    const maxCenterY = cloudHeight - layer.spec.height * 0.44;
+    const desiredCenterY = Math.min(anchorPos.y + layer.spec.height * 0.18, maxCenterY);
+    layer.mesh.position.set(anchorPos.x, desiredCenterY, anchorPos.z);
+
+    layer.uScroll.value.y = (layer.uScroll.value.y + scrollYRate * layer.spec.speedMul * dt) % 1.0;
+    const sway = isFlake ? Math.sin(tNow * 0.9 + i * 1.7) * 0.08 * dt : scrollXRate * dt;
+    layer.uScroll.value.x = (layer.uScroll.value.x + sway + 1.0) % 1.0;
+  }
+}
 
 let _weatherMesh = null;
 let _weatherMat = null;
@@ -435,8 +718,10 @@ function initWeatherDrops() {
 }
 
 function respawnDrop(i, anchorX, anchorY, anchorZ, skyTopY, randomFillY = false) {
-  _dropX[i] = anchorX + rnd(-WEATHER_AREA_R, WEATHER_AREA_R);
-  _dropZ[i] = anchorZ + rnd(-WEATHER_AREA_R, WEATHER_AREA_R);
+  const ang = Math.random() * Math.PI * 2;
+  const rad = Math.pow(Math.random(), 0.65) * WEATHER_AREA_R;
+  _dropX[i] = anchorX + Math.cos(ang) * rad;
+  _dropZ[i] = anchorZ + Math.sin(ang) * rad;
   const roofY = sampleRoofHeightAt(_dropX[i], _dropZ[i]);
   const floorY = Math.max(anchorY - 14, roofY);
   if (randomFillY && skyTopY > floorY + 1) {
@@ -502,22 +787,74 @@ function updateWeatherMistScreenOverlay(resolved, intensity, anchorPos) {
   _mistScreenEl.style.opacity = targetOp.toFixed(3);
 }
 
-function updateWeatherAtmosphereAndMist(dt, anchorPos, resolved, intensity) {
-  // 1. Выраженная модуляция объёмного тумана сцены (пар, кровавый/кислотный туман, смог от пепла)
+function updateWeatherAtmosphereAndMist(dt, anchorPos, substance, resolved, intensity) {
+  // 0. Атмосферный скайбокс поверх основного (альфа и цвет зависят от плотности и типа осадков)
+  const wantAtmo = substance !== 'none' && !S.itemStudioOpen && S.state !== 'menu';
+  if (wantAtmo) _atmoActiveSubstance = substance;
+  const targetAtmoAlpha = wantAtmo
+    ? clamp(0.16 + Math.pow(intensity, 1.1) * 0.76, 0.14, 0.92)
+    : 0;
+  _atmoAlphaSmooth += (targetAtmoAlpha - _atmoAlphaSmooth) * Math.min(1, dt * 1.65);
+
+  const pal = WEATHER_ATMOSPHERE_PALETTES[_atmoActiveSubstance] || WEATHER_ATMOSPHERE_PALETTES.water;
+  setAtmosphericSkybox(pal.skyTop, pal.skyMid, pal.skyBot, _atmoAlphaSmooth);
+
+  // 1. Точное согласование тумана с цветом горизонта неба (убирает резкую синюю полосу на стыке с водой)
+  getEffectiveSkyColors(_skyMidSyncTmp, _skyHorizSyncTmp);
+
   if (scene.fog && scene.fog.density !== undefined) {
     const baseDensity = Number(S.worldSettings?.fogDensity) ?? 0.0038;
     const baseCol = S.worldSettings?.fogColor || '#88ccff';
-    const extraDensity = resolved.hasMist ? (resolved.mistDensity * 0.036 * intensity) : 0;
-    const targetDensity = baseDensity + extraDensity;
-    scene.fog.density += (targetDensity - scene.fog.density) * Math.min(1, dt * 1.8);
+    const atmoFogExtra = _atmoAlphaSmooth * 0.0052;
+    const mistFogExtra = resolved.hasMist ? (resolved.mistDensity * 0.036 * intensity) : 0;
+    const targetDensity = baseDensity + atmoFogExtra + mistFogExtra;
 
     _fogColorTarget.set(baseCol);
+    if (_atmoAlphaSmooth > 0.005) {
+      // Туман стремится точно к цвету атмосферного горизонта, чтобы вода и небо сливались без шва
+      _fogColorTarget.lerp(_skyHorizSyncTmp, clamp(_atmoAlphaSmooth * 1.05, 0, 0.96));
+    }
     if (resolved.hasMist && resolved.mistColor) {
       const mistBlend = clamp(resolved.mistDensity * 0.82 * intensity, 0, 0.85);
       _mistColorTmp.set(resolved.mistColor);
       _fogColorTarget.lerp(_mistColorTmp, mistBlend);
     }
-    scene.fog.color.lerp(_fogColorTarget, Math.min(1, dt * 1.8));
+
+    if (!_fogSmoothInited) {
+      _fogSmoothInited = true;
+      _smoothedFogColor.copy(_fogColorTarget);
+      _smoothedFogDensity = targetDensity;
+    } else {
+      const k = Math.min(1, dt * 2.2);
+      _smoothedFogColor.lerp(_fogColorTarget, k);
+      _smoothedFogDensity += (targetDensity - _smoothedFogDensity) * k;
+    }
+
+    if (S.weatherRuntime) {
+      S.weatherRuntime.effectiveFogColor = '#' + _smoothedFogColor.getHexString();
+      S.weatherRuntime.effectiveFogDensity = _smoothedFogDensity;
+    }
+
+    // Не перебиваем подводный фильтр, если камера под водой
+    const camInLiquid = Boolean(S.player?.inLiquid && S.player?.currentLiquidBlock && camera.position.y < S.player.currentLiquidBlock.y1);
+    if (!camInLiquid) {
+      scene.fog.color.copy(_smoothedFogColor);
+      scene.fog.density = _smoothedFogDensity;
+    }
+  }
+
+  // 1.5. Мягкая адаптация рассеянного света (HemisphereLight) под атмосферу осадков
+  if (hemi) {
+    const ss = S.worldSettings?.sunSettings;
+    _hemiSkyBaseTmp.set(ss?.hemiSkyColor || '#ffffff');
+    _hemiGndBaseTmp.set(ss?.hemiGroundColor || '#5588bb');
+    if (_atmoAlphaSmooth > 0.005) {
+      hemi.color.copy(_hemiSkyBaseTmp).lerp(_skyMidSyncTmp, clamp(_atmoAlphaSmooth * 0.42, 0, 0.42));
+      hemi.groundColor.copy(_hemiGndBaseTmp).lerp(_skyHorizSyncTmp, clamp(_atmoAlphaSmooth * 0.55, 0, 0.55));
+    } else {
+      hemi.color.copy(_hemiSkyBaseTmp);
+      hemi.groundColor.copy(_hemiGndBaseTmp);
+    }
   }
 
   // 2. Мягкая атмосферная дымка экрана в густом паре/тумане
@@ -742,20 +1079,15 @@ export function updateWeatherAndClouds(dt) {
     ? { x: S.player.x, y: S.player.y, z: S.player.z }
     : { x: camera.position.x, y: camera.position.y, z: camera.position.z };
 
-  // 1. Облака
-  updateClouds(dt, anchorPos.x, anchorPos.z);
-
-  // 2. Погода и фазовая матрица
-  initWeatherDrops();
   const ws = S.worldSettings?.weatherSettings;
   const substance = normalizeWeatherSubstance(ws?.type);
   const intensity = clamp(Number(ws?.intensity) ?? 0.75, 0.1, 1.0);
 
-  // Динамическое влияние длительности осадков на температуру мира
+  // 1. Погода и фазовая матрица (вычисляем до облаков, чтобы тучи реагировали на осадки без лага в 1 кадр)
+  initWeatherDrops();
   updateWeatherTempOffset(dt, substance, intensity);
   const effTemp = getEffectiveWorldTemperatureKey();
 
-  // Периодическая переброска вероятностных фаз (70/30, 50/50)
   if (substance !== 'none') {
     _phaseCycleTimer -= dt;
     if (_phaseCycleTimer <= 0) {
@@ -779,14 +1111,25 @@ export function updateWeatherAndClouds(dt) {
     S.weatherRuntime.mistDensity = resolved.mistDensity;
   }
 
-  // Туман и частицы пара/смога (при substance === 'none' плавно возвращают базовый туман)
-  updateWeatherAtmosphereAndMist(dt, anchorPos, resolved, intensity);
+  // 2. Облака (кучность, плотность и цвет зависят от осадков)
+  updateClouds(dt, anchorPos.x, anchorPos.z, substance, intensity);
+
+  // 3. Атмосферный скайбокс, туман и частицы пара/смога
+  updateWeatherAtmosphereAndMist(dt, anchorPos, substance, resolved, intensity);
+
+  const cloudH = S.worldSettings?.cloudsSettings?.enabled !== false
+    ? clamp(Number(S.worldSettings?.cloudsSettings?.height) ?? 72, 16, 260)
+    : anchorPos.y + WEATHER_SKY_OFFSET + 28;
 
   if (substance === 'none' || S.itemStudioOpen) {
     _weatherMesh.visible = false;
+    updateDistantPrecipSheets(dt, anchorPos, null, 0, cloudH, false);
     updateWeatherAudio('none', 0, false);
     return;
   }
+
+  // Дальняя 3-слойная завеса осадков до горизонта
+  updateDistantPrecipSheets(dt, anchorPos, prof, intensity, cloudH, true);
 
   // Периодически обновляем 2D-карту крыш и стен
   _roofRebuildTimer -= dt;
@@ -807,9 +1150,6 @@ export function updateWeatherAndClouds(dt) {
     _weatherMat.color.set(prof.color);
     _weatherMat.opacity = prof.opacity ?? 0.78;
 
-    const cloudH = S.worldSettings?.cloudsSettings?.enabled !== false
-      ? clamp(Number(S.worldSettings?.cloudsSettings?.height) ?? 72, 16, 260)
-      : anchorPos.y + WEATHER_SKY_OFFSET;
     const skyTopY = Math.min(anchorPos.y + WEATHER_SKY_OFFSET, cloudH);
     const activeDrops = Math.max(80, Math.floor(MAX_WEATHER_DROPS * intensity * (prof.isHail ? 0.55 : 1.0)));
     const isDrifting = prof.kind === 'snow';

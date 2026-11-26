@@ -60,7 +60,93 @@ const skyMat = new THREE.MeshBasicMaterial({
   fog: false
 });
 export const skyDome = new THREE.Mesh(skyGeo, skyMat);
+skyDome.renderOrder = -2;
 scene.add(skyDome);
+
+/* ---------- Atmospheric Weather Skybox Overlay ---------- */
+const atmoSkyCanvas = document.createElement('canvas');
+atmoSkyCanvas.width = 64;
+atmoSkyCanvas.height = 256;
+const atmoSkyCtx = atmoSkyCanvas.getContext('2d');
+const atmoSkyTex = new THREE.CanvasTexture(atmoSkyCanvas);
+const atmoSkyGeo = new THREE.SphereGeometry(492, 32, 24);
+const atmoSkyMat = new THREE.MeshBasicMaterial({
+  map: atmoSkyTex,
+  side: THREE.BackSide,
+  transparent: true,
+  opacity: 0,
+  depthWrite: false,
+  fog: false
+});
+export const atmoSkyDome = new THREE.Mesh(atmoSkyGeo, atmoSkyMat);
+atmoSkyDome.renderOrder = -1;
+atmoSkyDome.visible = false;
+atmoSkyDome.frustumCulled = false;
+atmoSkyDome.userData.noCollider = true;
+skyDome.add(atmoSkyDome);
+
+let atmoSkyPaletteSig = '';
+let _atmoSkyMidHex = '#475569';
+let _atmoSkyBotHex = '#64748b';
+let _atmoSkyOpacity = 0;
+
+const _skyBaseMidTmp = new THREE.Color();
+const _skyBaseBotTmp = new THREE.Color();
+const _skyAtmoMidTmp = new THREE.Color();
+const _skyAtmoBotTmp = new THREE.Color();
+
+export function setAtmosphericSkybox(topHex, midHex, botHex, opacity = 0) {
+  const op = Math.max(0, Math.min(1, Number(opacity) || 0));
+  _atmoSkyOpacity = op;
+  if (midHex) _atmoSkyMidHex = midHex;
+  if (botHex) _atmoSkyBotHex = botHex;
+
+  if (op <= 0.004) {
+    atmoSkyMat.opacity = 0;
+    atmoSkyDome.visible = false;
+    return;
+  }
+
+  const sig = `${topHex}|${midHex}|${botHex}`;
+  if (sig !== atmoSkyPaletteSig) {
+    atmoSkyPaletteSig = sig;
+    const grad = atmoSkyCtx.createLinearGradient(0, 0, 0, 256);
+    grad.addColorStop(0.0, topHex || '#1f2937');
+    grad.addColorStop(0.52, midHex || '#475569');
+    grad.addColorStop(1.0, botHex || '#64748b');
+    atmoSkyCtx.fillStyle = grad;
+    atmoSkyCtx.fillRect(0, 0, 64, 256);
+    atmoSkyTex.needsUpdate = true;
+  }
+
+  atmoSkyMat.opacity = op;
+  atmoSkyDome.visible = true;
+}
+
+/**
+ * Возвращает итоговый цвет отражения неба (основной скайбокс + атмосферный слой погоды).
+ */
+export function getEffectiveSkyColors(outMid = new THREE.Color(), outHorizon = new THREE.Color()) {
+  const ws = S.worldSettings || {};
+  _skyBaseMidTmp.set(ws.skyMid || '#62b6ff');
+  _skyBaseBotTmp.set(ws.skyBot || '#dff4ff');
+
+  outMid.copy(_skyBaseMidTmp);
+  outHorizon.copy(_skyBaseMidTmp).lerp(_skyBaseBotTmp, 0.65);
+
+  if (_atmoSkyOpacity > 0.004) {
+    _skyAtmoMidTmp.set(_atmoSkyMidHex || '#475569');
+    _skyAtmoBotTmp.set(_atmoSkyBotHex || '#64748b');
+    outMid.lerp(_skyAtmoMidTmp, _atmoSkyOpacity);
+    _skyAtmoMidTmp.lerp(_skyAtmoBotTmp, 0.55);
+    outHorizon.lerp(_skyAtmoMidTmp, _atmoSkyOpacity);
+  }
+  return outMid;
+}
+
+export function getEffectiveSkyColor(outColor = new THREE.Color()) {
+  return getEffectiveSkyColors(outColor, _skyBaseBotTmp);
+}
 
 export const celestialGroup = new THREE.Group();
 skyDome.add(celestialGroup);
