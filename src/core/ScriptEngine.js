@@ -31,6 +31,20 @@ import {
   isPointExposedToSky,
   normalizeWeatherSubstance
 } from './WeatherAndClouds.js';
+import {
+  toggleBlockMediaPlayback,
+  syncBlockMediaVisuals,
+  seekScreenTime,
+  setScreenMasterVolume,
+  nextScreenTrack,
+  prevScreenTrack,
+  nextSpeakerTrack,
+  prevSpeakerTrack,
+  addUrlOrPlaylistToScreenQueue,
+  addUrlOrPlaylistToSpeakerQueue,
+  getBlockAudioLevel,
+  getCurrentScreenTrackInfo
+} from './MediaSystem.js';
 
 const MAX_LOOP_ITERATIONS_PER_CALL = 5000;
 const MAX_FRAME_BUDGET_MS = 3.5;
@@ -210,9 +224,45 @@ export function onTick(self, dt, api) {
     );
   }
 }`
+    },
+    {
+      id: 'tpl_blk_music_lights',
+      name: '🌈 Цветомузыка (Реакция на бас)',
+      code: `// Меняет цвет, высоту и частицы блока в такт басам указанного Экрана или 3D-Колонки
+export const params = {
+  mediaSource: { type: 'string', default: 'Видео-Экран #1', label: 'Имя, тег или ID экрана/колонки' },
+  idleColor: { type: 'color', default: '#1e293b', label: 'Цвет в тишине' },
+  bassColor: { type: 'color', default: '#ff2e4c', label: 'Цвет на пике баса' },
+  pulseScale: { type: 'number', default: 1.6, min: 0, max: 5, step: 0.1, label: 'Усиление пульсации' },
+  spawnSparks: { type: 'boolean', default: true, label: 'Искры на сильных ударах' }
+};
+
+export function onStart(self, api) {
+  const sc = self.getScale();
+  self.setState('baseSX', sc.x);
+  self.setState('baseSY', sc.y);
+  self.setState('baseSZ', sc.z);
+}
+
+export function onTick(self, dt, api) {
+  const bass = api.media.getAudioLevel(self.params.mediaSource);
+  const col = api.math.lerpColor(self.params.idleColor, self.params.bassColor, api.math.clamp(bass * 1.4, 0, 1));
+  self.setColor(col);
+
+  const bx = self.getState('baseSX', 2);
+  const by = self.getState('baseSY', 2);
+  const bz = self.getState('baseSZ', 2);
+  const addH = bass * (self.params.pulseScale || 1.6);
+  self.setScale(bx, by + addH, bz);
+
+  if (self.params.spawnSparks && bass > 0.72 && api.time > self.getState('sparkCd', 0)) {
+    self.setState('sparkCd', api.time + 0.25);
+    const p = self.getPosition();
+    api.world.spawnParticles(p.x, p.y + (by + addH) * 0.5, p.z, 6, { color: self.params.bassColor, speed: 4.5 });
+  }
+}`
     }
   ],
-
   npc: [
     {
       id: 'tpl_npc_boss_phases',
@@ -1044,6 +1094,10 @@ function createBlockFacade(box, scriptData = null, compiled = null) {
       clearTargetStatusEffects(box);
     },
 
+    getAudioLevel() {
+      return getBlockAudioLevel(box.id);
+    },
+
     sendSignal(targetTag, action = 'toggle_motion') {
       if (!targetTag || typeof window.__debixActivateBlockMotionByTag !== 'function') return;
       window.__debixActivateBlockMotionByTag(box, String(targetTag), String(action));
@@ -1208,6 +1262,19 @@ function createEntityFacade(ent, scriptData = null, compiled = null) {
 
 let _particleTokens = 12;
 let _lastTokenRefill = 0;
+const _scriptEnqueueLastAt = new Map();
+
+function findMediaBlockByQuery(query) {
+  if (!query) return null;
+  const q = String(query).trim().toLowerCase();
+  return S.allBlocks.find(
+    b => b && !b.isDisabled && !b._depletedDisabled && (
+      (b.id && b.id.toLowerCase() === q) ||
+      (b.signalData?.tag && b.signalData.tag.toLowerCase() === q) ||
+      (b.label && b.label.toLowerCase() === q)
+    )
+  ) || null;
+}
 
 function createEngineApiBridge(sourceLabel, dt = 0.016) {
   const now = performance.now() * 0.001;
@@ -1460,6 +1527,133 @@ function createEngineApiBridge(sourceLabel, dt = 0.016) {
         } else {
           playSoundId(clean, pos ? { pos } : {});
         }
+      }
+    }),
+
+    media: Object.freeze({
+      play(query) {
+        const b = findMediaBlockByQuery(query);
+        if (!b) return false;
+        if (b.components?.mediaScreen?.enabled && b.mediaScreenData) {
+          b.mediaScreenData.playing = true;
+          syncBlockMediaVisuals(b);
+          if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(b);
+          return true;
+        }
+        if (b.components?.soundEmitter?.enabled && b.soundEmitterData) {
+          b.soundEmitterData.playing = true;
+          syncBlockMediaVisuals(b);
+          return true;
+        }
+        return false;
+      },
+      pause(query) {
+        const b = findMediaBlockByQuery(query);
+        if (!b) return false;
+        if (b.components?.mediaScreen?.enabled && b.mediaScreenData) {
+          b.mediaScreenData.playing = false;
+          syncBlockMediaVisuals(b);
+          if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(b);
+          return true;
+        }
+        if (b.components?.soundEmitter?.enabled && b.soundEmitterData) {
+          b.soundEmitterData.playing = false;
+          syncBlockMediaVisuals(b);
+          return true;
+        }
+        return false;
+      },
+      toggle(query) {
+        const b = findMediaBlockByQuery(query);
+        return b ? toggleBlockMediaPlayback(b, true) : false;
+      },
+      seek(query, sec = 0) {
+        const b = findMediaBlockByQuery(query);
+        if (!b || !b.components?.mediaScreen?.enabled) return false;
+        seekScreenTime(b, safeNum(sec, 0, 0, 86400));
+        if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(b);
+        return true;
+      },
+      next(query) {
+        const b = findMediaBlockByQuery(query);
+        if (!b) return false;
+        if (b.components?.mediaScreen?.enabled) {
+          nextScreenTrack(b);
+          if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(b);
+          return true;
+        }
+        if (b.components?.soundEmitter?.enabled) {
+          nextSpeakerTrack(b);
+          return true;
+        }
+        return false;
+      },
+      prev(query) {
+        const b = findMediaBlockByQuery(query);
+        if (!b) return false;
+        if (b.components?.mediaScreen?.enabled) {
+          prevScreenTrack(b);
+          if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(b);
+          return true;
+        }
+        if (b.components?.soundEmitter?.enabled) {
+          prevSpeakerTrack(b);
+          return true;
+        }
+        return false;
+      },
+      setVolume(query, vol = 1.0) {
+        const b = findMediaBlockByQuery(query);
+        if (!b) return false;
+        if (b.components?.mediaScreen?.enabled) {
+          setScreenMasterVolume(b, safeNum(vol, 1.0, 0, 1.5));
+          return true;
+        }
+        if (b.components?.soundEmitter?.enabled && b.soundEmitterData) {
+          b.soundEmitterData.volume = safeNum(vol, 1.0, 0, 2.0);
+          return true;
+        }
+        return false;
+      },
+      enqueue(query, url, playNow = false) {
+        const b = findMediaBlockByQuery(query);
+        const cleanUrl = String(url || '').trim();
+        if (!b || !/^https?:\/\//i.test(cleanUrl)) return false;
+        const nowMs = performance.now();
+        if (nowMs - (_scriptEnqueueLastAt.get(b.id) || 0) < 2500) return false;
+        _scriptEnqueueLastAt.set(b.id, nowMs);
+
+        if (b.components?.mediaScreen?.enabled) {
+          addUrlOrPlaylistToScreenQueue(b, cleanUrl, { playNow: Boolean(playNow) }).catch(() => {});
+          return true;
+        }
+        if (b.components?.soundEmitter?.enabled) {
+          addUrlOrPlaylistToSpeakerQueue(b, cleanUrl, { playNow: Boolean(playNow) }).catch(() => {});
+          return true;
+        }
+        return false;
+      },
+      getAudioLevel(query) {
+        const b = findMediaBlockByQuery(query);
+        return b ? getBlockAudioLevel(b.id) : 0;
+      },
+      getTrackTitle(query) {
+        const b = findMediaBlockByQuery(query);
+        if (!b) return '';
+        if (b.components?.mediaScreen?.enabled) return getCurrentScreenTrackInfo(b).title;
+        if (b.components?.soundEmitter?.enabled) {
+          const q = b.soundEmitterData?.queue || [];
+          const idx = b.soundEmitterData?.queueIndex || 0;
+          return q[idx]?.title || b.label || '';
+        }
+        return '';
+      },
+      isPlaying(query) {
+        const b = findMediaBlockByQuery(query);
+        if (!b) return false;
+        if (b.components?.mediaScreen?.enabled) return Boolean(b.mediaScreenData?.playing);
+        if (b.components?.soundEmitter?.enabled) return Boolean(b.soundEmitterData?.playing);
+        return false;
       }
     }),
 
@@ -2135,6 +2329,8 @@ const API_CHEATSHEET_ITEMS = [
   { label: '🌦️ Осадки и Облака', snippet: "api.world.setWeather('water', 0.85); // none|water|blood|acid|lava\napi.world.setClouds({ coverage: 0.9, color: '#64748b' });" },
   { label: '💧 Влажность игрока', snippet: "if (api.player) api.player.applyWetness(35, 'water');" },
   { label: '🌡️ Температура мира', snippet: "api.world.setTemperature('freezing'); // freezing|cold|cool|normal|warm|hot|hell" },
+  { label: '📺 Управление Экраном / Колонкой', snippet: "api.media.toggle('Видео-Экран #1'); // play|pause|next|prev|seek|enqueue" },
+  { label: '🎵 Уровень баса (Цветомузыка)', snippet: "const bass = api.media.getAudioLevel('Видео-Экран #1'); // 0..1" },
   { label: '📝 Вывод в консоль', snippet: "api.log('Текущее время:', api.time.toFixed(1));" }
 ];
 

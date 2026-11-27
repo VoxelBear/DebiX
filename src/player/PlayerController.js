@@ -69,6 +69,7 @@ import { isEntityFrozen, isItemFrozen, updatePlayerStatusHUD } from '../core/Sta
 import { updateWeatherAndClouds } from '../core/WeatherAndClouds.js';
 import { updateSurfaceWeatherLayer } from '../core/SurfaceWeatherLayer.js';
 import { updateMediaSystem, toggleBlockMediaPlayback } from '../core/MediaSystem.js';
+import { exitCinemaMode, updateCinemaModeCamera } from '../core/MediaScreenUI.js';
 import { initPaintStudio2D, isPaintModalOpen } from '../studio/PaintStudio2D.js';
 import {
   initMultiplayerSystem,
@@ -531,6 +532,8 @@ export function render(dt) {
       );
       camera.position.copy(S.spectatorPos);
       camera.lookAt(lookTarget);
+    } else if (S.cinemaMode?.active) {
+      updateCinemaModeCamera(dt);
     } else {
       syncPlayCameraToPlayer(player, dt);
     }
@@ -573,8 +576,14 @@ export function initInputControls() {
   addEventListener('keydown', e => {
     if (e.target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
     S.keys[e.code] = true;
+    if (e.code === 'Escape' && S.cinemaMode?.active) {
+      e.preventDefault();
+      exitCinemaMode();
+      return;
+    }
     if (e.code === 'F2') {
       e.preventDefault();
+      if (S.cinemaMode?.active) exitCinemaMode();
       resetAllLogicRuntime(false);
       toggleStudioMode();
       return;
@@ -1329,6 +1338,7 @@ export function bootstrapGame(defaultTemplateId = 'heaven_queue') {
     setTimeout(() => {
       setProgress(75, 'Настройка физики и сохранений...');
       initSerializerEvents();
+      window.__debixUpdateShopUI = updateShopUI;
       initInputControls();
       initEmotesHUD();
       initMultiplayerSystem();

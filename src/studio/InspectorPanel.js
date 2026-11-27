@@ -32,7 +32,15 @@ import {
   nextScreenTrack,
   prevScreenTrack,
   removeScreenQueueItem,
-  clearScreenQueue
+  clearScreenQueue,
+  startScreenShareForBlock,
+  stopScreenShareForBlock,
+  addUrlOrPlaylistToSpeakerQueue,
+  playSpeakerQueueIndex,
+  nextSpeakerTrack,
+  prevSpeakerTrack,
+  removeSpeakerQueueItem,
+  clearSpeakerQueue
 } from '../core/MediaSystem.js';
 import {
   MAX_COSMETIC_PARTS,
@@ -3496,6 +3504,11 @@ function _renderInspectorUICore() {
                 <option value="forward_motion" ${sg.signalAction === 'forward_motion' ? 'selected' : ''}>▶ Движение цели: Запустить вперёд (Открыть)</option>
                 <option value="reverse_motion" ${sg.signalAction === 'reverse_motion' ? 'selected' : ''}>◀ Движение цели: Вернуть в старт (Закрыть)</option>
                 <option value="trigger_target" ${sg.signalAction === 'trigger_target' ? 'selected' : ''}>⚡ Сработать эффект взаимодействия цели</option>
+                <option value="media_toggle" ${sg.signalAction === 'media_toggle' ? 'selected' : ''}>📺 Медиа цели: Плей / Пауза</option>
+                <option value="media_play" ${sg.signalAction === 'media_play' ? 'selected' : ''}>▶ Медиа цели: Включить</option>
+                <option value="media_pause" ${sg.signalAction === 'media_pause' ? 'selected' : ''}>⏸ Медиа цели: Поставить на паузу</option>
+                <option value="media_next" ${sg.signalAction === 'media_next' ? 'selected' : ''}>⏭ Медиа цели: Следующий трек</option>
+                <option value="media_prev" ${sg.signalAction === 'media_prev' ? 'selected' : ''}>⏮ Медиа цели: Предыдущий трек</option>
               </select>
             </div>
 
@@ -3752,6 +3765,7 @@ function _renderInspectorUICore() {
                 ${msd.playing ? '⏸️ Пауза' : '▶️ Воспроизвести'}
               </button>
               <button class="ed-btn" id="btnMsReload" type="button" title="Перезагрузить поток">🔄</button>
+              <button class="ed-btn" id="btnMsScreenShare" type="button" style="border-color:#00e676;color:#00e676" title="Транслировать окно или экран ПК на этот 3D-экран">🖥️ Экран ПК</button>
             </div>
 
             <div class="prop-row">
@@ -3807,6 +3821,18 @@ function _renderInspectorUICore() {
               <input type="checkbox" id="inpMsLoop" ${msd.loop !== false ? 'checked' : ''}>
               <label style="flex:1;text-align:right">Пауза [E]</label>
               <input type="checkbox" id="inpMsKeyE" ${msd.interactKeyE !== false ? 'checked' : ''}>
+            </div>
+            <div class="prop-row">
+              <label title="Динамический цветной свет от картинки видео">🌈 Ambilight</label>
+              <input type="checkbox" id="inpMsAmbi" ${msd.ambilight !== false ? 'checked' : ''}>
+              <input type="number" step="0.2" min="0.2" max="5" class="ed-inp" id="inpMsAmbiInt" value="${msd.ambilightIntensity ?? 1.8}" style="width:52px" title="Яркость Ambilight">
+              <input type="number" step="2" min="4" max="60" class="ed-inp" id="inpMsAmbiDist" value="${msd.ambilightDistance ?? 22}" style="width:52px" title="Радиус Ambilight (м)">
+            </div>
+            <div class="prop-row">
+              <label title="В мультиплеере ставить на паузу, перематывать и менять очередь сможет только Хост">🔒 Только Хост</label>
+              <input type="checkbox" id="inpMsHostOnly" ${msd.hostOnly ? 'checked' : ''}>
+              <label style="flex:1;text-align:right" title="Цена в R$ за заказ видео в очередь (0 = бесплатно)">💰 Заказ R$</label>
+              <input type="number" step="5" min="0" max="9999" class="ed-inp" id="inpMsQueueCost" value="${msd.queueCost ?? 0}" style="width:58px">
             </div>
 
             <div style="border-top:1px dashed #283147;padding-top:6px;margin-top:4px;display:flex;flex-direction:column;gap:5px">
@@ -3993,6 +4019,47 @@ function _renderInspectorUICore() {
               <label style="flex:1;text-align:right">Вкл/Выкл [E]</label>
               <input type="checkbox" id="inpSeKeyE" ${sed.interactKeyE !== false ? 'checked' : ''}>
             </div>
+            <div class="prop-row">
+              <label title="Приглушать звук низкочастотным фильтром, если между колонкой и игроком стена">🧱 Глушить за стеной</label>
+              <input type="checkbox" id="inpSeOcclusion" ${sed.occlusion !== false ? 'checked' : ''}>
+              <label style="flex:1;text-align:right" title="Неоновое кольцо на колонке пульсирует в такт басам">🎵 Бас-кольцо</label>
+              <input type="checkbox" id="inpSeReactive" ${sed.audioReactive !== false ? 'checked' : ''}>
+            </div>
+            <button class="ed-btn" id="btnSeMakeBoombox" type="button" style="justify-content:center;font-size:10px;border-color:#ffce3a;color:#ffce3a" title="Включает физику (5 кг) — колонку можно поднять на [E] и носить с собой!">
+              📻 Сделать переносным бумбоксом (Rigidbody 5 кг)
+            </button>
+
+            ${sed.mode !== 'screen_link' ? `
+              <div style="border-top:1px dashed #283147;padding-top:6px;margin-top:4px;display:flex;flex-direction:column;gap:5px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:4px">
+                  <span style="font:800 10px var(--f);color:#00e676;text-transform:uppercase">📋 Очередь / Плейлист (${(sed.queue || []).length})</span>
+                  <div style="display:flex;gap:3px">
+                    <button class="ed-btn" id="btnSePrevTrack" type="button" style="padding:2px 6px;font-size:10px">⏮</button>
+                    <button class="ed-btn" id="btnSeNextTrack" type="button" style="padding:2px 6px;font-size:10px">⏭</button>
+                    ${(sed.queue || []).length > 0 ? `<button class="ed-btn danger" id="btnSeClearQueue" type="button" style="padding:2px 6px;font-size:10px">🗑️</button>` : ''}
+                  </div>
+                </div>
+                <div style="display:flex;gap:4px">
+                  <input class="ed-inp" id="inpSeQueueAddUrl" placeholder="Ссылка на трек или YouTube-плейлист..." style="flex:1;font-size:10.5px">
+                  <button class="ed-btn apply-oneclick" id="btnSeQueueAddUrl" type="button" style="padding:3px 8px;font-size:10px">➕</button>
+                </div>
+                ${(sed.queue || []).length > 0 ? `
+                  <div style="display:flex;flex-direction:column;gap:3px;max-height:130px;overflow-y:auto;background:#0b101c;border:1px solid #252f48;border-radius:7px;padding:4px">
+                    ${(sed.queue || []).map((qi, qIdx) => {
+                      const isCur = qIdx === (sed.queueIndex || 0);
+                      return `
+                        <div style="display:flex;align-items:center;gap:4px;padding:3px 5px;border-radius:5px;background:${isCur ? 'rgba(0,230,118,0.2)' : 'rgba(255,255,255,0.04)'};border:1px solid ${isCur ? '#00e676' : 'transparent'}">
+                          <button class="ed-btn" data-se-qplay="${qIdx}" type="button" style="flex:1;justify-content:flex-start;padding:1px 4px;font-size:10px;background:transparent;border:none;color:${isCur ? '#00e676' : '#e2e8f0'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                            ${isCur ? '▶ ' : `${qIdx + 1}. `}${qi.title || qi.url || 'Трек'}
+                          </button>
+                          <button class="ed-btn danger" data-se-qdel="${qIdx}" type="button" style="padding:1px 5px;font-size:9.5px">✕</button>
+                        </div>
+                      `;
+                    }).join('')}
+                  </div>
+                ` : ''}
+              </div>
+            ` : ''}
           </div>
         </div>
       ` : ''}
@@ -5034,6 +5101,11 @@ function _renderInspectorUICore() {
         if ($('inpMsAutoplay')) msd.autoplay = $('inpMsAutoplay').checked;
         if ($('inpMsLoop')) msd.loop = $('inpMsLoop').checked;
         if ($('inpMsKeyE')) msd.interactKeyE = $('inpMsKeyE').checked;
+        if ($('inpMsAmbi')) msd.ambilight = $('inpMsAmbi').checked;
+        if ($('inpMsAmbiInt')) msd.ambilightIntensity = clamp(+$('inpMsAmbiInt').value || 1.8, 0.2, 5.0);
+        if ($('inpMsAmbiDist')) msd.ambilightDistance = clamp(+$('inpMsAmbiDist').value || 22, 4, 65);
+        if ($('inpMsHostOnly')) msd.hostOnly = $('inpMsHostOnly').checked;
+        if ($('inpMsQueueCost')) msd.queueCost = Math.max(0, +$('inpMsQueueCost').value || 0);
 
         syncBlockMediaVisuals(box);
         if (window.__debixSyncBlockUpsert && !S.isApplyingRemoteSync) {
@@ -5045,12 +5117,15 @@ function _renderInspectorUICore() {
       ['inpMsSourceType', 'inpMsVideoId', 'inpMsAudioOut'].forEach(id => {
         if ($(id)) $(id).onchange = () => syncMs(true);
       });
-      ['inpMsFit', 'inpMsFace', 'inpMsAutoplay', 'inpMsLoop', 'inpMsKeyE'].forEach(id => {
+      ['inpMsFit', 'inpMsFace', 'inpMsAutoplay', 'inpMsLoop', 'inpMsKeyE', 'inpMsAmbi', 'inpMsHostOnly'].forEach(id => {
         if ($(id)) $(id).onchange = () => syncMs(false);
       });
-      ['inpMsVol', 'inpMsMaxDist', 'inpMsBright', 'inpMsRate'].forEach(id => {
+      ['inpMsVol', 'inpMsMaxDist', 'inpMsBright', 'inpMsRate', 'inpMsAmbiInt', 'inpMsAmbiDist', 'inpMsQueueCost'].forEach(id => {
         if ($(id)) $(id).oninput = () => syncMs(false);
       });
+      if ($('btnMsScreenShare')) {
+        $('btnMsScreenShare').onclick = () => startScreenShareForBlock(box);
+      }
       if ($('inpMsUrl')) {
         const onMainUrlApply = async () => {
           const val = $('inpMsUrl').value.trim();
@@ -5252,6 +5327,8 @@ function _renderInspectorUICore() {
         if ($('inpSeAutoplay')) sed.autoplay = $('inpSeAutoplay').checked;
         if ($('inpSeLoop')) sed.loop = $('inpSeLoop').checked;
         if ($('inpSeKeyE')) sed.interactKeyE = $('inpSeKeyE').checked;
+        if ($('inpSeOcclusion')) sed.occlusion = $('inpSeOcclusion').checked;
+        if ($('inpSeReactive')) sed.audioReactive = $('inpSeReactive').checked;
 
         syncBlockMediaVisuals(box);
         syncStudioMotionAndSignalHelpers();
@@ -5264,8 +5341,68 @@ function _renderInspectorUICore() {
       ['inpSeMode', 'inpSeScreenId', 'inpSeSourceType', 'inpSeAudioId'].forEach(id => {
         if ($(id)) $(id).onchange = () => syncSe(true);
       });
-      ['inpSeSpatial', 'inpSeAutoplay', 'inpSeLoop', 'inpSeKeyE'].forEach(id => {
+      ['inpSeSpatial', 'inpSeAutoplay', 'inpSeLoop', 'inpSeKeyE', 'inpSeOcclusion', 'inpSeReactive'].forEach(id => {
         if ($(id)) $(id).onchange = () => syncSe(false);
+      });
+      if ($('btnSeMakeBoombox')) {
+        $('btnSeMakeBoombox').onclick = () => {
+          pushUndoState('Превращение колонки в переносной бумбокс');
+          ensureBlockComponents(box);
+          box.components.physics.enabled = true;
+          box.matterState = 'solid';
+          box.isDynamicPhysics = true;
+          box.weight = 5;
+          box.components.physics.isDynamicPhysics = true;
+          box.components.physics.weight = 5;
+          syncBlockComponentsState(box);
+          rebuildPhysicsArrays();
+          if (window.__debixSyncBlockUpsert && !S.isApplyingRemoteSync) {
+            window.__debixSyncBlockUpsert(box, false);
+          }
+          sfx.coil?.();
+          showBanner(`📻 «${box.label}» теперь переносной бумбокс (5 кг)! В игре подними на [E].`, '#00e676');
+          _renderInspectorUICore();
+        };
+      }
+      if ($('btnSePrevTrack')) $('btnSePrevTrack').onclick = () => { prevSpeakerTrack(box); _renderInspectorUICore(); };
+      if ($('btnSeNextTrack')) $('btnSeNextTrack').onclick = () => { nextSpeakerTrack(box); _renderInspectorUICore(); };
+      if ($('btnSeClearQueue')) $('btnSeClearQueue').onclick = () => { clearSpeakerQueue(box); _renderInspectorUICore(); };
+      if ($('btnSeQueueAddUrl')) {
+        const doAddSpkUrl = async () => {
+          const inp = $('inpSeQueueAddUrl');
+          const url = (inp?.value || '').trim();
+          if (!/^https?:\/\//i.test(url)) {
+            showBanner('⚠️ Вставь http/https ссылку на трек или плейлист!', '#ffce3a');
+            return;
+          }
+          $('btnSeQueueAddUrl').disabled = true;
+          showBanner('⏳ Загружаем трек / плейлист в колонку...', '#56f0ff');
+          try {
+            await addUrlOrPlaylistToSpeakerQueue(box, url, { playNow: false });
+            if (inp) inp.value = '';
+            _renderInspectorUICore();
+          } catch (err) {
+            showBanner('❌ ' + (err.message || 'Ошибка загрузки'), '#ff4757');
+          } finally {
+            if ($('btnSeQueueAddUrl')) $('btnSeQueueAddUrl').disabled = false;
+          }
+        };
+        $('btnSeQueueAddUrl').onclick = doAddSpkUrl;
+        if ($('inpSeQueueAddUrl')) {
+          $('inpSeQueueAddUrl').addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); doAddSpkUrl(); }
+          });
+        }
+      }
+      cont.querySelectorAll('[data-se-qplay]').forEach(btn => {
+        btn.onclick = () => { playSpeakerQueueIndex(box, +btn.dataset.seQplay); _renderInspectorUICore(); };
+      });
+      cont.querySelectorAll('[data-se-qdel]').forEach(btn => {
+        btn.onclick = e => {
+          e.stopPropagation();
+          removeSpeakerQueueItem(box, +btn.dataset.seQdel);
+          _renderInspectorUICore();
+        };
       });
       ['inpSeVol', 'inpSeRefDist', 'inpSeMaxDist', 'inpSeRolloff'].forEach(id => {
         if ($(id)) $(id).oninput = () => syncSe(false);

@@ -164,12 +164,79 @@ function resolvePlaylistViaYtDlp(rawUrl) {
   });
 }
 
+const searchResolveCache = new Map(); // query -> { items, expiresAt }
+
+function searchYouTubeViaYtDlp(query, limit = 6) {
+  return new Promise((resolve, reject) => {
+    const cleanQ = String(query || '').trim().slice(0, 120);
+    if (!cleanQ) {
+      resolve([]);
+      return;
+    }
+    const cacheKey = `${limit}|${cleanQ.toLowerCase()}`;
+    const cached = searchResolveCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      resolve(cached.items);
+      return;
+    }
+
+    const bin = findYtDlpBinary();
+    const args = [
+      '--flat-playlist',
+      '--dump-single-json',
+      '--no-warnings',
+      '--js-runtimes', 'node',
+      `ytsearch${Math.min(10, Math.max(1, limit))}:${cleanQ}`
+    ];
+
+    execFile(bin, args, { timeout: 25000, maxBuffer: 6 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+      if (err) {
+        const msg = err.code === 'ENOENT'
+          ? 'yt-dlp не найден! Положи yt-dlp.exe рядом с lan-server.js.'
+          : (stderr || err.message || 'Ошибка поиска YouTube').trim();
+        console.warn('⚠️ [MediaSearch]', msg);
+        reject(new Error(msg));
+        return;
+      }
+      let data = null;
+      try {
+        data = JSON.parse(String(stdout || '').trim());
+      } catch (parseErr) {
+        reject(new Error('Ошибка разбора ответа поиска: ' + parseErr.message));
+        return;
+      }
+      const entries = Array.isArray(data?.entries) ? data.entries : [];
+      const items = [];
+      for (const ent of entries) {
+        if (!ent) continue;
+        let url = ent.webpage_url || ent.url || '';
+        if (url && !/^https?:\/\//i.test(url)) {
+          url = `https://www.youtube.com/watch?v=${ent.id || url}`;
+        } else if (!url && ent.id) {
+          url = `https://www.youtube.com/watch?v=${ent.id}`;
+        }
+        if (!url) continue;
+        items.push({
+          id: ent.id || '',
+          url,
+          title: String(ent.title || 'Видео').slice(0, 80),
+          channel: String(ent.channel || ent.uploader || '').slice(0, 40),
+          duration: Number(ent.duration) || 0
+        });
+      }
+      searchResolveCache.set(cacheKey, { items, expiresAt: Date.now() + 10 * 60 * 1000 });
+      console.log(`🔍 [MediaSearch] «${cleanQ}» -> ${items.length} результатов`);
+      resolve(items);
+    });
+  });
+}
+
 function findYtDlpBinary() {
   const candidates = [
-    path.join(__dirname, 'yt-dlp.exe'),
     path.join(__dirname, 'tools', 'yt-dlp.exe'),
-    path.join(__dirname, 'yt-dlp'),
-    path.join(__dirname, 'tools', 'yt-dlp')
+    path.join(__dirname, 'yt-dlp.exe'),
+    path.join(__dirname, 'tools', 'yt-dlp'),
+    path.join(__dirname, 'yt-dlp')
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) return p;
@@ -403,6 +470,27 @@ const httpServer = http.createServer((req, res) => {
       .then(payload => {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(payload));
+      })
+      .catch(err => {
+        res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      });
+    return;
+  }
+
+  // Поиск видео на YouTube прямо из игры (ytsearch)
+  if (pathname === '/api/media/search' && req.method === 'GET') {
+    const q = parsedUrl.searchParams.get('q');
+    const limit = parseInt(parsedUrl.searchParams.get('limit') || '6', 10) || 6;
+    if (!q || !q.trim()) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: 'Missing q param' }));
+      return;
+    }
+    searchYouTubeViaYtDlp(q, limit)
+      .then(items => {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, items }));
       })
       .catch(err => {
         res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });

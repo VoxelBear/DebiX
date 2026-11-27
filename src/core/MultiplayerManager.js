@@ -8,6 +8,13 @@ import {
   setWorldAmbience
 } from './AudioEngine.js';
 import {
+  getActiveScreenRuntimes,
+  getScreenSyncState,
+  applyScreenSyncState,
+  attachRemoteMediaStreamToScreen,
+  stopScreenShareForBlock
+} from './MediaSystem.js';
+import {
   createRobloxRig,
   makeTagSprite,
   pushEntityChatBubble,
@@ -76,7 +83,12 @@ let discoveryWs = null;
 let syncAccumulator = 0;
 let fullSyncAccumulator = 0;
 let hostBeaconAccumulator = 0;
+let mediaSyncAccumulator = 0;
 let serverDiscoveryTimer = null;
+
+const remoteScreenCursors = new Map(); // senderId -> { blockId, uvX, uvY, name, color, ts }
+const activeOutgoingScreenShares = new Map(); // blockId -> { stream, calls: Map<peerId, MediaConnection> }
+const CURSOR_COLORS = ['#ffce3a', '#00e676', '#ff6b6b', '#a29bfe', '#ff9f43', '#56f0ff'];
 
 // Реестр найденных активных серверов: roomId -> serverInfo
 const discoveredServers = new Map();
@@ -1991,6 +2003,34 @@ function toPeerIdFromRoom(roomCode) {
   return 'debix-ugc-room-' + (clean || 'DEFAULT');
 }
 
+function bindPeerIncomingMediaCalls(peer) {
+  if (!peer) return;
+  peer.on('call', call => {
+    try {
+      call.answer();
+      call.on('stream', remoteStream => {
+        const blockId = call.metadata?.blockId;
+        if (blockId && remoteStream) {
+          attachRemoteMediaStreamToScreen(blockId, remoteStream);
+        }
+      });
+    } catch (err) {
+      console.warn('Incoming screen share error:', err);
+    }
+  });
+}
+
+function sendActiveSharesToPeer(peerId) {
+  if (!peerInstance || !peerId) return;
+  for (const [blockId, entry] of activeOutgoingScreenShares.entries()) {
+    if (!entry?.stream) continue;
+    try {
+      const call = peerInstance.call(peerId, entry.stream, { metadata: { type: 'screen_share', blockId } });
+      if (call) entry.calls.set(peerId, call);
+    } catch (_) {}
+  }
+}
+
 function setupPeerConnectionHandlers(conn, autoDownloadWorld = false) {
   if (!conn) return;
   conn.on('open', () => {
@@ -2004,6 +2044,7 @@ function setupPeerConnectionHandlers(conn, autoDownloadWorld = false) {
       showBanner(`🌐 Игрок подключился к серверу «${S.mpState.roomCode}»! Отправляем карту...`, '#00e676');
       sendWorldSnapshotToPeer(conn.peer);
       broadcastHostServerBeacon();
+      sendActiveSharesToPeer(conn.peer);
     } else if (autoDownloadWorld) {
       requestWorldSnapshotFromHost();
     }
@@ -2066,6 +2107,7 @@ export function startPeerHost(roomCode = 'RADMIN-1', autoEnterPlay = false) {
     }
   });
 
+  bindPeerIncomingMediaCalls(peerInstance);
   peerInstance.on('open', () => {
     S.mpState.connected = true;
     S.mpState.isHost = true;
@@ -2118,6 +2160,7 @@ export function joinPeerRoom(roomCode = 'RADMIN-1', autoDownloadWorld = true) {
     }
   });
 
+  bindPeerIncomingMediaCalls(peerInstance);
   peerInstance.on('open', () => {
     const conn = peerInstance.connect(hostPeerId, { reliable: true });
     setupPeerConnectionHandlers(conn, autoDownloadWorld);
@@ -2700,6 +2743,31 @@ function handleIncomingPacket(pkt, fromConnPeerId = null) {
       sfx.click?.();
       refreshEntityTagWithHP(npc);
     }
+  } else if (pkt.type === 'media_sync' && Array.isArray(pkt.screens)) {
+    for (let i = 0; i < pkt.screens.length; i++) {
+      const st = pkt.screens[i];
+      if (!st || !st.blockId) continue;
+      const box = S.allBlocks.find(b => b && b.id === st.blockId && b.components?.mediaScreen?.enabled);
+      if (box) applyScreenSyncState(box, st);
+    }
+  } else if (pkt.type === 'media_cursor' && pkt.blockId) {
+    if (!pkt.visible) {
+      remoteScreenCursors.delete(pkt.senderId);
+    } else {
+      let hash = 0;
+      for (let i = 0; i < pkt.senderId.length; i++) hash = (hash * 31 + pkt.senderId.charCodeAt(i)) | 0;
+      remoteScreenCursors.set(pkt.senderId, {
+        blockId: pkt.blockId,
+        uvX: clamp(Number(pkt.uvX) || 0.5, 0, 1),
+        uvY: clamp(Number(pkt.uvY) || 0.5, 0, 1),
+        name: pkt.senderName || 'Игрок',
+        color: CURSOR_COLORS[Math.abs(hash) % CURSOR_COLORS.length],
+        ts: performance.now()
+      });
+    }
+  } else if (pkt.type === 'media_share_stop' && pkt.blockId) {
+    const box = S.allBlocks.find(b => b && b.id === pkt.blockId);
+    if (box) stopScreenShareForBlock(box, false);
   }
 }
 
@@ -2746,6 +2814,21 @@ export function updateMultiplayerRuntime(dt) {
     if (hostBeaconAccumulator >= 3.0) {
       hostBeaconAccumulator = 0;
       broadcastHostServerBeacon();
+    }
+
+    if (Object.keys(S.remotePlayers || {}).length > 0) {
+      mediaSyncAccumulator += dt;
+      if (mediaSyncAccumulator >= 2.0) {
+        mediaSyncAccumulator = 0;
+        const states = [];
+        for (const rt of getActiveScreenRuntimes().values()) {
+          const st = getScreenSyncState(rt.box);
+          if (st) states.push(st);
+        }
+        if (states.length > 0) {
+          broadcastMultiplayerPacket({ type: 'media_sync', screens: states });
+        }
+      }
     }
   }
 
@@ -2995,6 +3078,39 @@ export function initMultiplayerSystem() {
   window.__debixOpenUgcHub = openFloatingUgcHubModal;
   window.__debixPublishDockCardToHub = publishDockCardToUgcHub;
   window.__debixPublishSelectedToHub = publishSelectedToUgcHub;
+  window.__debixRemoteScreenCursors = remoteScreenCursors;
+
+  window.__debixBroadcastMediaSync = box => {
+    const st = getScreenSyncState(box);
+    if (!st) return;
+    broadcastMultiplayerPacket({ type: 'media_sync', screens: [st] });
+  };
+  window.__debixBroadcastMediaCursor = (blockId, uvX, uvY, visible) => {
+    if (Object.keys(S.remotePlayers || {}).length === 0) return;
+    broadcastMultiplayerPacket({ type: 'media_cursor', blockId, uvX, uvY, visible: Boolean(visible) });
+  };
+  window.__debixBroadcastScreenShare = (blockId, stream) => {
+    const calls = new Map();
+    activeOutgoingScreenShares.set(blockId, { stream, calls });
+    if (peerInstance) {
+      for (const pid of peerConnections.keys()) {
+        try {
+          const call = peerInstance.call(pid, stream, { metadata: { type: 'screen_share', blockId } });
+          if (call) calls.set(pid, call);
+        } catch (_) {}
+      }
+    }
+  };
+  window.__debixStopScreenShare = blockId => {
+    const entry = activeOutgoingScreenShares.get(blockId);
+    if (entry) {
+      for (const c of entry.calls.values()) {
+        try { c.close(); } catch (_) {}
+      }
+      activeOutgoingScreenShares.delete(blockId);
+    }
+    broadcastMultiplayerPacket({ type: 'media_share_stop', blockId });
+  };
 
   ensureUgcHubInitialized();
   requestUgcHubCatalogRefresh();

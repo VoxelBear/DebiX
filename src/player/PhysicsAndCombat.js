@@ -76,6 +76,14 @@ import {
   sampleSurfaceWeatherAt,
   stampSnowFootprint
 } from '../core/SurfaceWeatherLayer.js';
+import {
+  toggleBlockMediaPlayback,
+  syncBlockMediaVisuals,
+  nextScreenTrack,
+  prevScreenTrack,
+  nextSpeakerTrack,
+  prevSpeakerTrack
+} from '../core/MediaSystem.js';
 
 const _vLocal = new THREE.Vector3();
 const _vNormal = new THREE.Vector3();
@@ -910,10 +918,48 @@ export function activateBlockMotion(targetBox, command = 'toggle_motion', ignore
   return false;
 }
 
+export function triggerBlockMediaSignal(targetBox, command = 'media_toggle') {
+  if (!targetBox || targetBox.isDisabled || targetBox._depletedDisabled) return false;
+  const hasScr = Boolean(targetBox.components?.mediaScreen?.enabled && targetBox.mediaScreenData);
+  const hasSpk = Boolean(targetBox.components?.soundEmitter?.enabled && targetBox.soundEmitterData);
+  if (!hasScr && !hasSpk) return false;
+
+  const cmd = String(command || 'media_toggle');
+  if (cmd === 'media_next') {
+    if (hasScr) nextScreenTrack(targetBox);
+    else nextSpeakerTrack(targetBox);
+  } else if (cmd === 'media_prev') {
+    if (hasScr) prevScreenTrack(targetBox);
+    else prevSpeakerTrack(targetBox);
+  } else if (cmd === 'media_play') {
+    if (hasScr) targetBox.mediaScreenData.playing = true;
+    if (hasSpk) targetBox.soundEmitterData.playing = true;
+    syncBlockMediaVisuals(targetBox);
+    sfx.click?.();
+  } else if (cmd === 'media_pause') {
+    if (hasScr) targetBox.mediaScreenData.playing = false;
+    if (hasSpk) targetBox.soundEmitterData.playing = false;
+    syncBlockMediaVisuals(targetBox);
+    sfx.click?.();
+  } else {
+    toggleBlockMediaPlayback(targetBox, true);
+  }
+
+  if (hasScr && window.__debixBroadcastMediaSync) {
+    window.__debixBroadcastMediaSync(targetBox);
+  }
+  return true;
+}
+
 window.__debixActivateBlockMotionByTag = (sourceBox, targetTag, action) => {
   const targets = findTargetBlocksByTag(sourceBox, targetTag);
+  const act = action || 'toggle_motion';
   for (const tb of targets) {
-    activateBlockMotion(tb, action || 'toggle_motion');
+    if (act.startsWith('media_')) {
+      triggerBlockMediaSignal(tb, act);
+    } else if (!activateBlockMotion(tb, act)) {
+      triggerBlockMediaSignal(tb, 'media_toggle');
+    }
   }
 };
 window.__debixScriptDealDamage = (target, amount) => {
@@ -1222,6 +1268,13 @@ export function triggerBlockLogic(box, triggerSource = 'keyE', actor = S.player)
       }
     }
 
+    // 3.2. Если сигнал пришёл на Видео-Экран или 3D-Колонку — переключаем воспроизведение
+    if (triggerSource === 'signal' && (comps.mediaScreen?.enabled || comps.soundEmitter?.enabled)) {
+      if (triggerBlockMediaSignal(box, 'media_toggle')) {
+        didAnything = true;
+      }
+    }
+
     // 3.5. Если к объекту подключён компонент «🔊 3D Звук (sound)» в режиме триггера
     if (comps.sound?.enabled && box.soundData?.mode !== 'zone_loop' && box.soundData?.soundId) {
       playSoundId(box.soundData.soundId, {
@@ -1243,12 +1296,16 @@ export function triggerBlockLogic(box, triggerSource = 'keyE', actor = S.player)
       }
       if (sg.targetTag) {
         const targets = findTargetBlocksByTag(box, sg.targetTag);
+        const sigAct = sg.signalAction || 'toggle_motion';
         for (const tb of targets) {
           if (tb === box || _activeLogicCallStack.has(tb)) continue;
-          if (sg.signalAction === 'trigger_target') {
+          if (sigAct.startsWith('media_')) {
+            triggerBlockMediaSignal(tb, sigAct);
+          } else if (sigAct === 'trigger_target') {
             triggerBlockLogic(tb, 'signal', ent);
-          } else {
-            activateBlockMotion(tb, sg.signalAction || 'toggle_motion');
+          } else if (!activateBlockMotion(tb, sigAct)) {
+            // Если у целевого блока нет Движения, но это Экран/Колонка — кнопка всё равно переключит воспроизведение
+            triggerBlockMediaSignal(tb, 'media_toggle');
           }
           didAnything = true;
         }

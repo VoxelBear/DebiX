@@ -17,12 +17,22 @@ import {
   toggleScreenShuffle,
   cycleScreenPlaybackRate,
   addUrlOrPlaylistToScreenQueue,
-  getCurrentScreenTrackInfo
+  getCurrentScreenTrackInfo,
+  searchYouTubeVideos,
+  canLocalPlayerControlScreen,
+  tryPayScreenQueueCost,
+  startScreenShareForBlock,
+  stopScreenShareForBlock
 } from './MediaSystem.js';
 
 const _msuiRaycaster = new THREE.Raycaster();
 const _msuiNdc = new THREE.Vector2();
 const _msuiSpeeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+const _msuiCinCenter = new THREE.Vector3();
+const _msuiCinNormal = new THREE.Vector3();
+const _msuiCinTargetPos = new THREE.Vector3();
+let _msuiLastCursorSendAt = 0;
+let _msuiLastSentScreenId = '';
 
 let _msuiEventsBound = false;
 let _msuiHoveredRt = null;
@@ -75,6 +85,12 @@ function truncateCanvasText(ctx, text, maxW) {
 
 function openScreenAddQueueModal(box) {
   if (!box || !box.mediaScreenData) return;
+  if (!canLocalPlayerControlScreen(box)) {
+    sfx.oof?.();
+    showBanner('🔒 Управлять этим экраном может только Хост!', '#ffce3a');
+    return;
+  }
+
   let modal = $('debixMediaAddModal');
   if (!modal) {
     modal = document.createElement('div');
@@ -84,63 +100,121 @@ function openScreenAddQueueModal(box) {
     document.body.appendChild(modal);
   }
 
+  const sdCost = Math.max(0, Number(box.mediaScreenData.queueCost) || 0);
+  const compCost = (box.components?.cost?.enabled && box.costData) ? Math.max(0, Number(box.costData.amount) || 0) : 0;
+  const price = sdCost > 0 ? sdCost : compCost;
+  const priceHint = price > 0 ? ` <span style="color:#ffce3a">(💰 Заказ: ${price} R$)</span>` : '';
+
   modal.hidden = false;
   modal.innerHTML = `
-    <div style="width:min(490px,92vw);background:#101726;border:2px solid #56f0ff;border-radius:14px;padding:16px 18px;box-shadow:0 18px 48px rgba(0,0,0,0.78);display:flex;flex-direction:column;gap:10px">
+    <div style="width:min(560px,94vw);max-height:86vh;background:#101726;border:2px solid #56f0ff;border-radius:14px;padding:16px 18px;box-shadow:0 18px 48px rgba(0,0,0,0.78);display:flex;flex-direction:column;gap:10px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-        <b style="font-size:14px;color:#56f0ff">📺 ${box.label || 'Видео-Экран'} — Добавить видео или плейлист</b>
+        <b style="font-size:14px;color:#56f0ff">📺 ${box.label || 'Видео-Экран'} — Поиск YouTube / Ссылка${priceHint}</b>
         <button type="button" id="btnCloseMediaAddModal" style="background:#ef4444;color:#fff;border:none;border-radius:7px;padding:4px 9px;font:800 12px Montserrat,sans-serif;cursor:pointer">✕</button>
       </div>
       <div style="font-size:11.5px;color:#94a3b8;line-height:1.4">
-        Вставь ссылку на <b>видео YouTube</b>, целый <b>плейлист YouTube</b> (<code>list=...</code>) или прямой <code>.mp4/.webm</code> файл:
+        Введи <b>название видео для поиска на YouTube</b> ИЛИ вставь прямую ссылку на ролик / плейлист (<code>list=...</code>):
       </div>
-      <input type="text" id="inpMediaAddModalUrl" placeholder="https://www.youtube.com/playlist?list=... или https://youtu.be/..."
-             style="width:100%;box-sizing:border-box;background:#0b101c;border:1.5px solid #38bdf8;border-radius:8px;color:#fff;padding:9px 11px;font:700 12px Montserrat,sans-serif;outline:none">
+      <div style="display:flex;gap:6px">
+        <input type="text" id="inpMediaAddModalUrl" placeholder="Например: lofi hip hop radio  ИЛИ  https://youtu.be/..."
+               style="flex:1;box-sizing:border-box;background:#0b101c;border:1.5px solid #38bdf8;border-radius:8px;color:#fff;padding:9px 11px;font:700 12px Montserrat,sans-serif;outline:none">
+        <button type="button" id="btnMediaSearchYt" style="background:linear-gradient(135deg,#ff2e4c,#d91b38);color:#fff;border:none;border-radius:8px;padding:0 14px;font:800 12px Montserrat,sans-serif;cursor:pointer;white-space:nowrap">🔍 Найти</button>
+      </div>
       <div id="txtMediaAddModalStatus" style="font-size:11px;color:#fbbf24;min-height:16px"></div>
+      <div id="mediaSearchResultsBox" style="display:none;flex-direction:column;gap:6px;max-height:260px;overflow-y:auto;padding-right:2px"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <button type="button" id="btnMediaAddQueueEnd" style="background:linear-gradient(135deg,#00a2ff,#0066ff);color:#fff;border:none;border-radius:9px;padding:9px;font:800 12px Montserrat,sans-serif;cursor:pointer">➕ Добавить в очередь</button>
-        <button type="button" id="btnMediaAddPlayNow" style="background:linear-gradient(135deg,#00e676,#00b862);color:#062012;border:none;border-radius:9px;padding:9px;font:900 12px Montserrat,sans-serif;cursor:pointer">▶ Играть сейчас</button>
+        <button type="button" id="btnMediaAddQueueEnd" style="background:linear-gradient(135deg,#00a2ff,#0066ff);color:#fff;border:none;border-radius:9px;padding:9px;font:800 12px Montserrat,sans-serif;cursor:pointer">➕ В очередь по ссылке</button>
+        <button type="button" id="btnMediaAddPlayNow" style="background:linear-gradient(135deg,#00e676,#00b862);color:#062012;border:none;border-radius:9px;padding:9px;font:900 12px Montserrat,sans-serif;cursor:pointer">▶ Играть сразу</button>
       </div>
     </div>
   `;
 
   const inp = $('inpMediaAddModalUrl');
   const statusEl = $('txtMediaAddModalStatus');
+  const resBox = $('mediaSearchResultsBox');
   const close = () => { modal.hidden = true; };
 
   $('btnCloseMediaAddModal').onclick = close;
   modal.onclick = e => { if (e.target === modal) close(); };
 
-  const submit = async playNow => {
-    const rawUrl = (inp.value || '').trim();
-    if (!/^https?:\/\//i.test(rawUrl)) {
-      statusEl.textContent = '⚠️ Ссылка должна начинаться с http:// или https://';
-      return;
-    }
+  const addUrl = async (rawUrl, playNow) => {
+    if (!tryPayScreenQueueCost(box)) return;
     statusEl.textContent = '⏳ Загружаем видео / плейлист с сервера...';
-    $('btnMediaAddQueueEnd').disabled = true;
-    $('btnMediaAddPlayNow').disabled = true;
     try {
       const added = await addUrlOrPlaylistToScreenQueue(box, rawUrl, { playNow, replaceQueue: false });
       if (added > 0) {
+        if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(box);
         close();
       } else {
         statusEl.textContent = '⚠️ Не удалось получить видео по этой ссылке.';
       }
     } catch (err) {
       statusEl.textContent = '❌ ' + (err.message || 'Ошибка загрузки');
-    } finally {
-      if ($('btnMediaAddQueueEnd')) $('btnMediaAddQueueEnd').disabled = false;
-      if ($('btnMediaAddPlayNow')) $('btnMediaAddPlayNow').disabled = false;
     }
   };
 
-  $('btnMediaAddQueueEnd').onclick = () => submit(false);
-  $('btnMediaAddPlayNow').onclick = () => submit(true);
+  const doSearch = async () => {
+    const q = (inp.value || '').trim();
+    if (!q) return;
+    if (/^https?:\/\//i.test(q)) {
+      await addUrl(q, false);
+      return;
+    }
+    statusEl.textContent = `🔍 Ищем «${q}» на YouTube...`;
+    resBox.style.display = 'none';
+    $('btnMediaSearchYt').disabled = true;
+    try {
+      const items = await searchYouTubeVideos(q, 6);
+      if (items.length === 0) {
+        statusEl.textContent = '😕 Ничего не найдено. Попробуй другой запрос.';
+        return;
+      }
+      statusEl.textContent = `✅ Найдено ${items.length} видео — выбери нужное:`;
+      resBox.style.display = 'flex';
+      resBox.innerHTML = items.map((it, idx) => `
+        <div style="display:flex;align-items:center;gap:8px;background:#0b101c;border:1px solid #252f48;border-radius:9px;padding:7px 9px">
+          <div style="flex:1;min-width:0">
+            <div style="font:800 11.5px Montserrat,sans-serif;color:#f1f5f9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${it.title}">${it.title}</div>
+            <div style="font-size:10px;color:#94a3b8;margin-top:2px">${it.channel || 'YouTube'}${it.duration > 0 ? ' · ⏱️ ' + formatMediaTime(it.duration) : ''}</div>
+          </div>
+          <button type="button" data-sr-add="${idx}" style="background:#00a2ff;color:#fff;border:none;border-radius:7px;padding:5px 9px;font:800 11px Montserrat,sans-serif;cursor:pointer" title="Добавить в очередь">➕</button>
+          <button type="button" data-sr-play="${idx}" style="background:#00e676;color:#062012;border:none;border-radius:7px;padding:5px 9px;font:900 11px Montserrat,sans-serif;cursor:pointer" title="Включить сразу">▶</button>
+        </div>
+      `).join('');
+
+      resBox.querySelectorAll('[data-sr-add]').forEach(btn => {
+        btn.onclick = () => addUrl(items[+btn.dataset.srAdd].url, false);
+      });
+      resBox.querySelectorAll('[data-sr-play]').forEach(btn => {
+        btn.onclick = () => addUrl(items[+btn.dataset.srPlay].url, true);
+      });
+    } catch (err) {
+      statusEl.textContent = '❌ ' + (err.message || 'Ошибка поиска');
+    } finally {
+      if ($('btnMediaSearchYt')) $('btnMediaSearchYt').disabled = false;
+    }
+  };
+
+  $('btnMediaSearchYt').onclick = doSearch;
+  $('btnMediaAddQueueEnd').onclick = () => {
+    const val = (inp.value || '').trim();
+    if (/^https?:\/\//i.test(val)) addUrl(val, false);
+    else doSearch();
+  };
+  $('btnMediaAddPlayNow').onclick = () => {
+    const val = (inp.value || '').trim();
+    if (/^https?:\/\//i.test(val)) addUrl(val, true);
+    else doSearch();
+  };
   inp.addEventListener('keydown', e => {
     e.stopPropagation();
-    if (e.key === 'Enter') submit(false);
-    else if (e.key === 'Escape') close();
+    if (e.key === 'Enter') {
+      const val = (inp.value || '').trim();
+      if (/^https?:\/\//i.test(val)) addUrl(val, false);
+      else doSearch();
+    } else if (e.key === 'Escape') {
+      close();
+    }
   });
   setTimeout(() => inp.focus(), 20);
 }
@@ -252,23 +326,43 @@ function drawScreenPlayerUI(rt, uvX, uvY, faceW, faceH) {
   const queue = Array.isArray(sd.queue) ? sd.queue : [];
   const qLen = queue.length;
 
-  const btnAddW = 166;
-  const btnQueueW = 136;
+  const btnShareW = 114;
+  const btnAddW = 152;
+  const btnQueueW = 130;
   const topBtnY = 14;
   const topBtnH = 36;
   const btnQueueX = W - 18 - btnQueueW;
-  const btnAddX = btnQueueX - 10 - btnAddW;
+  const btnAddX = btnQueueX - 8 - btnAddW;
+  const btnShareX = btnAddX - 8 - btnShareW;
 
   // Название текущего видео
-  ctx.font = '800 21px Montserrat, sans-serif';
+  ctx.font = '800 20px Montserrat, sans-serif';
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  const titlePrefix = qLen > 0 ? `[${(sd.queueIndex || 0) + 1}/${qLen}] ` : '';
-  const maxTitleW = Math.max(120, btnAddX - 32);
+  const titlePrefix = rt.isScreenShare
+    ? '🔴 ЭФИР ПК · '
+    : (rt.isRemoteShare ? '🔴 ТРАНСЛЯЦИЯ · ' : (qLen > 0 ? `[${(sd.queueIndex || 0) + 1}/${qLen}] ` : ''));
+  const maxTitleW = Math.max(100, btnShareX - 30);
   ctx.fillText(truncateCanvasText(ctx, titlePrefix + info.title, maxTitleW), 20, 32);
 
-  // Кнопка «➕ URL / Плейлист»
+  // Кнопка «🖥️ Экран ПК» (трансляция окна/экрана через getDisplayMedia + WebRTC)
+  const shareHover = isHit(btnShareX, topBtnY, btnShareW, topBtnH);
+  drawRoundedRect(ctx, btnShareX, topBtnY, btnShareW, topBtnH, 9);
+  ctx.fillStyle = rt.isScreenShare
+    ? '#ef4444'
+    : (shareHover ? '#00e676' : 'rgba(15, 23, 42, 0.85)');
+  ctx.fill();
+  ctx.strokeStyle = rt.isScreenShare ? '#fca5a5' : '#00e676';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = (shareHover && !rt.isScreenShare) ? '#062012' : '#ffffff';
+  ctx.font = '800 12.5px Montserrat, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(rt.isScreenShare ? '⏹ Стоп ПК' : '🖥️ Экран ПК', btnShareX + btnShareW * 0.5, topBtnY + topBtnH * 0.5 + 1);
+  pushZone('screen_share', btnShareX, topBtnY, btnShareW, topBtnH);
+
+  // Кнопка «🔍 Поиск / URL»
   const addHover = isHit(btnAddX, topBtnY, btnAddW, topBtnH);
   drawRoundedRect(ctx, btnAddX, topBtnY, btnAddW, topBtnH, 9);
   ctx.fillStyle = addHover ? '#00a2ff' : 'rgba(15, 23, 42, 0.85)';
@@ -277,9 +371,9 @@ function drawScreenPlayerUI(rt, uvX, uvY, faceW, faceH) {
   ctx.lineWidth = 2;
   ctx.stroke();
   ctx.fillStyle = '#ffffff';
-  ctx.font = '800 13px Montserrat, sans-serif';
+  ctx.font = '800 12.5px Montserrat, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('➕ Видео / Плейлист', btnAddX + btnAddW * 0.5, topBtnY + topBtnH * 0.5 + 1);
+  ctx.fillText('🔍 Поиск / URL', btnAddX + btnAddW * 0.5, topBtnY + topBtnH * 0.5 + 1);
   pushZone('add_modal', btnAddX, topBtnY, btnAddW, topBtnH);
 
   // Кнопка «📋 Очередь»
@@ -579,14 +673,17 @@ function drawScreenPlayerUI(rt, uvX, uvY, faceW, faceH) {
     rx -= 8;
   };
 
+  const inCinema = Boolean(S.cinemaMode?.active && S.cinemaMode.box === box);
+  drawRightBtn('cinema', inCinema ? '↙ Выйти' : '⛶', inCinema ? 84 : 42, inCinema);
+
   const rateVal = Number(sd.playbackRate) || 1.0;
-  drawRightBtn('speed', `${rateVal}x`, 54, Math.abs(rateVal - 1.0) > 0.05);
+  drawRightBtn('speed', `${rateVal}x`, 52, Math.abs(rateVal - 1.0) > 0.05);
 
   const loopMode = sd.loopMode || (sd.loop !== false ? 'queue' : 'none');
   const loopLabel = loopMode === 'one' ? '🔂 1' : (loopMode === 'queue' ? '🔁 Все' : '➡ Выкл');
-  drawRightBtn('loop', loopLabel, 78, loopMode !== 'none');
+  drawRightBtn('loop', loopLabel, 74, loopMode !== 'none');
 
-  drawRightBtn('shuffle', '🔀', 42, Boolean(sd.shuffle));
+  drawRightBtn('shuffle', '🔀', 40, Boolean(sd.shuffle));
 
   // Поглощаем клики в нижней полосе, чтобы случайный промах рядом с кнопкой не ставил видео на паузу
   pushZone('bottom_bar_bg', 0, H - botH, W, botH);
@@ -594,6 +691,45 @@ function drawScreenPlayerUI(rt, uvX, uvY, faceW, faceH) {
   pushZone('video_area', 0, 0, W, H);
 
   rt.uiZones = zones;
+
+  // --- КУРСОРЫ ДРУЗЕЙ ПО МУЛЬТИПЛЕЕРУ НА ЭКРАНЕ ---
+  const remCursors = window.__debixRemoteScreenCursors;
+  if (remCursors && remCursors.size > 0) {
+    const nowTs = performance.now();
+    for (const rc of remCursors.values()) {
+      if (!rc || rc.blockId !== box.id || nowTs - rc.ts > 3000) continue;
+      const rcx = clamp(rc.uvX * W, 0, W);
+      const rcy = clamp((1 - rc.uvY) * H, 0, H);
+      ctx.save();
+      ctx.translate(rcx, rcy);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, 18);
+      ctx.lineTo(5, 14);
+      ctx.lineTo(9, 21);
+      ctx.lineTo(13, 19);
+      ctx.lineTo(9, 12);
+      ctx.lineTo(14, 11);
+      ctx.closePath();
+      ctx.fillStyle = rc.color || '#ffce3a';
+      ctx.fill();
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = '#090d16';
+      ctx.stroke();
+
+      const tagTxt = String(rc.name || 'Игрок').slice(0, 14);
+      ctx.font = '800 11px Montserrat, sans-serif';
+      const tw = ctx.measureText(tagTxt).width + 10;
+      drawRoundedRect(ctx, 14, 12, tw, 18, 5);
+      ctx.fillStyle = 'rgba(9, 13, 22, 0.85)';
+      ctx.fill();
+      ctx.fillStyle = rc.color || '#ffce3a';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(tagTxt, 19, 21);
+      ctx.restore();
+    }
+  }
 
   // --- ВИРТУАЛЬНЫЙ КУРСОР НА САМОЙ ПОВЕРХНОСТИ 3D-ЭКРАНА ---
   const activeZone = zones.find(z => isHit(z.x, z.y, z.w, z.h));
@@ -711,12 +847,15 @@ function applyDragValue(rt, uvX) {
 function handleZoneClick(rt, zone, uvX) {
   if (!rt || !zone) return;
   const box = rt.box;
-  if (zone.id === 'seekbar') {
-    _msuiDragMode = 'seek';
-    _msuiDragRt = rt;
-    S._isDraggingMediaScreenUI = true;
-    applyDragValue(rt, uvX);
-    sfx.gizmoTick?.();
+
+  // Локальные действия доступны всем игрокам даже при включённом «Только Хост»
+  if (zone.id === 'cinema') {
+    toggleCinemaMode(box);
+    return;
+  }
+  if (zone.id === 'toggle_queue') {
+    rt.uiQueueOpen = !rt.uiQueueOpen;
+    sfx.click?.();
     return;
   }
   if (zone.id === 'volbar') {
@@ -726,32 +865,66 @@ function handleZoneClick(rt, zone, uvX) {
     applyDragValue(rt, uvX);
     return;
   }
+  if (zone.id === 'mute') {
+    toggleScreenMute(box);
+    return;
+  }
+  if (zone.id === 'bottom_bar_bg' || zone.id === 'queue_panel_bg') {
+    return;
+  }
+
+  if (!canLocalPlayerControlScreen(box)) {
+    sfx.oof?.();
+    showBanner('🔒 Управлять этим экраном может только Хост!', '#ffce3a');
+    return;
+  }
+
+  if (zone.id === 'seekbar') {
+    _msuiDragMode = 'seek';
+    _msuiDragRt = rt;
+    S._isDraggingMediaScreenUI = true;
+    applyDragValue(rt, uvX);
+    if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(box);
+    sfx.gizmoTick?.();
+    return;
+  }
+  if (zone.id === 'screen_share') {
+    if (rt.isScreenShare) {
+      stopScreenShareForBlock(box, true);
+      showBanner('⏹ Трансляция экрана остановлена.', '#ffce3a');
+    } else {
+      startScreenShareForBlock(box);
+    }
+    return;
+  }
   if (zone.id === 'play_pause' || zone.id === 'video_area') {
     toggleBlockMediaPlayback(box, true);
+    if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(box);
   } else if (zone.id === 'prev') {
     prevScreenTrack(box);
+    if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(box);
   } else if (zone.id === 'next') {
     nextScreenTrack(box);
-  } else if (zone.id === 'mute') {
-    toggleScreenMute(box);
+    if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(box);
   } else if (zone.id === 'loop') {
     cycleScreenLoopMode(box);
   } else if (zone.id === 'shuffle') {
     toggleScreenShuffle(box);
   } else if (zone.id === 'speed') {
     cycleScreenPlaybackRate(box, _msuiSpeeds);
-  } else if (zone.id === 'toggle_queue') {
-    rt.uiQueueOpen = !rt.uiQueueOpen;
-    sfx.click?.();
+    if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(box);
   } else if (zone.id === 'add_modal') {
     sfx.click?.();
     openScreenAddQueueModal(box);
   } else if (zone.id === 'clear_queue') {
     clearScreenQueue(box);
+    if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(box);
   } else if (zone.id === 'queue_play') {
     playScreenQueueIndex(box, zone.extra);
+    if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(box);
   } else if (zone.id === 'queue_del') {
     removeScreenQueueItem(box, zone.extra);
+    if (window.__debixBroadcastMediaSync) window.__debixBroadcastMediaSync(box);
   }
 }
 
@@ -804,6 +977,9 @@ function ensureScreenPointerHooks() {
 
   document.addEventListener('pointerup', () => {
     if (_msuiDragMode) {
+      if (_msuiDragMode === 'seek' && _msuiDragRt?.box && window.__debixBroadcastMediaSync) {
+        window.__debixBroadcastMediaSync(_msuiDragRt.box);
+      }
       _msuiDragMode = null;
       _msuiDragRt = null;
       S._isDraggingMediaScreenUI = false;
@@ -883,10 +1059,100 @@ export function updateMediaScreenUI(dt) {
     _msuiHoverFaceW = hit.faceW;
     _msuiHoverFaceH = hit.faceH;
 
+    const nowTs = performance.now();
+    if (window.__debixBroadcastMediaCursor && nowTs - _msuiLastCursorSendAt > 75) {
+      _msuiLastCursorSendAt = nowTs;
+      _msuiLastSentScreenId = hit.rt.blockId;
+      window.__debixBroadcastMediaCursor(hit.rt.blockId, hit.uvX, hit.uvY, true);
+    }
+
     _msuiRedrawAccum += dt;
     if (uvMoved || prevHovered !== _msuiHoveredRt || _msuiRedrawAccum >= 0.08) {
       _msuiRedrawAccum = 0;
       drawScreenPlayerUI(hit.rt, hit.uvX, hit.uvY, hit.faceW, hit.faceH);
     }
+  } else if (_msuiLastSentScreenId && window.__debixBroadcastMediaCursor) {
+    window.__debixBroadcastMediaCursor(_msuiLastSentScreenId, 0, 0, false);
+    _msuiLastSentScreenId = '';
   }
+}
+
+/* ---------- РЕЖИМ «КИНОТЕАТР» (АВТО-КАМЕРА НА ЭКРАН + СКРЫТИЕ HUD) ---------- */
+
+export function toggleCinemaMode(box) {
+  if (S.cinemaMode?.active && (!box || S.cinemaMode.box === box)) {
+    exitCinemaMode();
+    return false;
+  }
+  if (!box || !box.m) return false;
+  S.cinemaMode = { active: true, box };
+  S.cursorUnlockedByTab = true;
+  try {
+    if (document.pointerLockElement === cv) document.exitPointerLock();
+  } catch (_) {}
+
+  if ($('topbar')) $('topbar').hidden = true;
+  if ($('hotbar')) $('hotbar').hidden = true;
+  if ($('shopPanel')) $('shopPanel').hidden = true;
+  if ($('crosshairHUD')) $('crosshairHUD').hidden = true;
+  if ($('mpChatWidget')) $('mpChatWidget').hidden = true;
+
+  sfx.coil?.();
+  showBanner('🎬 Режим Кинотеатра ВКЛ! Нажми [ESC] или ↙ Выйти на экране для выхода.', '#56f0ff');
+  return true;
+}
+
+export function exitCinemaMode() {
+  if (!S.cinemaMode?.active) return;
+  S.cinemaMode.active = false;
+  S.cinemaMode.box = null;
+
+  if (S.state === 'play') {
+    if ($('topbar')) $('topbar').hidden = false;
+    if ($('hotbar')) $('hotbar').hidden = false;
+    if ($('mpChatWidget')) $('mpChatWidget').hidden = false;
+  }
+  sfx.click?.();
+}
+
+export function updateCinemaModeCamera(dt) {
+  const cm = S.cinemaMode;
+  if (!cm || !cm.active) return false;
+  const box = cm.box;
+  if (!box || !box.m || !box.m.visible || box.isDisabled || !box.components?.mediaScreen?.enabled) {
+    exitCinemaMode();
+    return false;
+  }
+
+  const sd = box.mediaScreenData || {};
+  box.m.updateMatrixWorld(true);
+  box.m.getWorldPosition(_msuiCinCenter);
+
+  // Вычисляем нормаль выбранной стороны экрана и идеальную дистанцию, чтобы экран занимал ~82% высоты/ширины кадра
+  let faceW = box.w || 8;
+  let faceH = box.h || 4.5;
+  let halfDepth = (box.d || 0.4) * 0.5;
+  if (sd.face === 'back') {
+    _msuiCinNormal.set(0, 0, -1);
+  } else if (sd.face === 'top') {
+    _msuiCinNormal.set(0, 1, 0);
+    faceW = box.w || 8;
+    faceH = box.d || 4.5;
+    halfDepth = (box.h || 0.4) * 0.5;
+  } else {
+    _msuiCinNormal.set(0, 0, 1);
+  }
+  _msuiCinNormal.applyQuaternion(box.m.quaternion).normalize();
+
+  const vFovRad = THREE.MathUtils.degToRad(camera.fov || 60);
+  const aspect = camera.aspect || (window.innerWidth / Math.max(1, window.innerHeight));
+  const distV = (faceH * 0.5) / Math.tan(vFovRad * 0.5);
+  const distH = (faceW * 0.5) / (Math.tan(vFovRad * 0.5) * aspect);
+  const idealDist = Math.max(distV, distH) * 1.18 + halfDepth;
+
+  _msuiCinTargetPos.copy(_msuiCinCenter).addScaledVector(_msuiCinNormal, idealDist);
+  const lerpAlpha = 1 - Math.exp(-9 * Math.min(0.05, dt || 0.016));
+  camera.position.lerp(_msuiCinTargetPos, lerpAlpha);
+  camera.lookAt(_msuiCinCenter);
+  return true;
 }

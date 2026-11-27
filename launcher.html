@@ -380,6 +380,19 @@
             <ul id="deltaList" class="delta-list">
                 <li class="delta-item" style="color: var(--text-muted);">Ожидание сверки SHA-256...</li>
             </ul>
+            <div style="margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border-clr); display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                <div style="min-width: 0;">
+                    <div style="font-size: 10px; font-weight: 800; color: var(--text-muted); text-transform: uppercase;">
+                        🎬 YouTube-модуль (yt-dlp • Unlicense)
+                    </div>
+                    <div id="ytDlpStatusText" style="font-size: 11px; font-weight: 700; color: #cbd5e1; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        Проверка...
+                    </div>
+                </div>
+                <button id="btnYtDlp" class="btn btn-secondary" style="padding: 7px 11px; font-size: 11px; flex-shrink: 0;" title="Загрузить официальный yt-dlp с github.com/yt-dlp/yt-dlp (с проверкой SHA-256)">
+                    ⬇️ yt-dlp
+                </button>
+            </div>
         </div>
     </div>
 
@@ -467,9 +480,29 @@
             });
         }
 
-        const isBusy = st.status === 'checking' || st.status === 'updating';
+        const isBusy = st.status === 'checking' || st.status === 'updating' || Boolean(st.ytDlpBusy);
         $('btnCheck').disabled = isBusy;
         $('btnUpdate').disabled = isBusy;
+        $('btnYtDlp').disabled = isBusy;
+
+        const ytEl = $('ytDlpStatusText');
+        if (st.ytDlpBusy || st.ytDlpStatus === 'downloading') {
+            ytEl.style.color = '#60a5fa';
+            ytEl.textContent = '⏳ Загрузка с github.com/yt-dlp/yt-dlp...';
+            $('btnYtDlp').textContent = '⏳ ...';
+        } else if (st.ytDlpStatus === 'ready') {
+            ytEl.style.color = '#34d399';
+            ytEl.textContent = `✅ Установлен (${st.ytDlpVersion || 'ok'})`;
+            $('btnYtDlp').textContent = '🔄 Обновить';
+        } else if (st.ytDlpStatus === 'error') {
+            ytEl.style.color = '#fbbf24';
+            ytEl.textContent = '⚠️ Не загружен (YouTube недоступен офлайн)';
+            $('btnYtDlp').textContent = '⬇️ Повторить';
+        } else {
+            ytEl.style.color = '#fbbf24';
+            ytEl.textContent = 'Не установлен (докачается автоматически)';
+            $('btnYtDlp').textContent = '⬇️ Скачать';
+        }
 
         if (st.status === 'update_available' || changes.length > 0) {
             $('btnUpdate').style.display = 'inline-flex';
@@ -503,6 +536,12 @@
     $('btnUpdate').addEventListener('click', async () => {
         $('btnUpdate').disabled = true;
         await fetch('/api/launcher/update', { method: 'POST' });
+        await fetchStatus();
+    });
+
+    $('btnYtDlp').addEventListener('click', async () => {
+        $('btnYtDlp').disabled = true;
+        await fetch('/api/launcher/ytdlp', { method: 'POST' });
         await fetchStatus();
     });
 

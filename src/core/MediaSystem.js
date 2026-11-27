@@ -17,8 +17,18 @@ const _msCamPos = new THREE.Vector3();
 const _msCamFwd = new THREE.Vector3();
 const _msCamUp = new THREE.Vector3();
 const _msTmpPos = new THREE.Vector3();
+const _msTmpDir = new THREE.Vector3();
+const _msLightPos = new THREE.Vector3();
+const _msFrustum = new THREE.Frustum();
+const _msProjScreenMat = new THREE.Matrix4();
+const _msOccRaycaster = new THREE.Raycaster();
+const _msSolidOccluders = [];
+const _msFftBuf = new Uint8Array(64);
 
+let _msAmbiCanvas = null;
+let _msAmbiCtx = null;
 let _msSharedPlaneGeo = null;
+let _msSharedReactRingGeo = null;
 let _msUnlockBound = false;
 let _msUnlockedOnce = false;
 
@@ -46,7 +56,12 @@ export function createDefaultMediaScreenData() {
     loopMode: 'queue',          // 'none' | 'queue' | 'one'
     shuffle: false,
     queueIndex: 0,
-    queue: []                   // [{ id, title, sourceType: 'url'|'library', url, videoId, duration }]
+    queue: [],                  // [{ id, title, sourceType: 'url'|'library', url, videoId, duration }]
+    ambilight: true,            // Динамический цветной PointLight от картинки видео
+    ambilightIntensity: 1.8,
+    ambilightDistance: 22,
+    hostOnly: false,            // Только Хост может управлять экраном в мультиплеере
+    queueCost: 0                // Цена в R$ за добавление видео в очередь (Jukebox)
   };
 }
 
@@ -65,8 +80,14 @@ export function createDefaultSoundEmitterData() {
     maxDistance: 36,
     rolloff: 1.35,
     spatial3D: true,
+    occlusion: true,            // Заглушение звука за стенами (lowpass-фильтр)
+    audioReactive: true,        // Пульсация кольца/подсветки колонки в такт басам
     playbackRate: 1.0,
-    interactKeyE: true
+    interactKeyE: true,
+    loopMode: 'queue',          // 'none' | 'queue' | 'one' (для самостоятельной колонки-радио)
+    shuffle: false,
+    queueIndex: 0,
+    queue: []                   // [{ id, title, sourceType: 'url'|'library', url, audioId, duration }]
   };
 }
 
@@ -447,6 +468,19 @@ function resolveScreenRawSource(sd) {
 
 function resolveSpeakerRawSource(ed) {
   if (!ed) return '';
+  if (Array.isArray(ed.queue) && ed.queue.length > 0) {
+    const idx = clamp(ed.queueIndex || 0, 0, ed.queue.length - 1);
+    ed.queueIndex = idx;
+    const item = ed.queue[idx];
+    if (item) {
+      if (item.sourceType === 'library' && item.audioId) {
+        const cleanId = String(item.audioId).replace(/^custom:/, '');
+        const entry = (S.customAudioLibrary || []).find(a => a && a.id === cleanId);
+        return entry ? (entry.dataURL || entry.url || '') : '';
+      }
+      return String(item.url || '').trim();
+    }
+  }
   if (ed.sourceType === 'library' && ed.audioId) {
     const cleanId = String(ed.audioId).replace(/^custom:/, '');
     const entry = (S.customAudioLibrary || []).find(a => a && a.id === cleanId);
@@ -462,8 +496,13 @@ function createSpatialChain(AC, mediaBus, spatial3D = true) {
   const gainNode = AC.createGain();
   gainNode.gain.value = 0;
 
+  const filterNode = AC.createBiquadFilter();
+  filterNode.type = 'lowpass';
+  filterNode.frequency.value = 20000;
+  filterNode.Q.value = 0.7;
+
   const pannerNode = AC.createPanner();
-  pannerNode.panningModel = spatial3D ? 'equalpower' : 'equalpower';
+  pannerNode.panningModel = 'equalpower';
   pannerNode.distanceModel = 'inverse';
   pannerNode.refDistance = 1;
   pannerNode.maxDistance = 10000;
@@ -471,10 +510,107 @@ function createSpatialChain(AC, mediaBus, spatial3D = true) {
   // а PannerNode даёт чистую 3D-панораму (лево/право/фронт/тыл)
   pannerNode.rolloffFactor = 0;
 
-  gainNode.connect(pannerNode);
+  gainNode.connect(filterNode);
+  filterNode.connect(pannerNode);
   pannerNode.connect(mediaBus);
 
-  return { gainNode, pannerNode };
+  return { gainNode, filterNode, pannerNode };
+}
+
+function sampleBassFromAnalyser(analyser) {
+  if (!analyser) return 0;
+  try {
+    analyser.getByteFrequencyData(_msFftBuf);
+    let sum = 0;
+    const bins = Math.min(7, analyser.frequencyBinCount || 7);
+    for (let i = 0; i < bins; i++) sum += _msFftBuf[i];
+    return clamp((sum / Math.max(1, bins)) / 255, 0, 1);
+  } catch (_) {
+    return 0;
+  }
+}
+
+function sampleAmbilightColorFromVideo(videoEl, outColor) {
+  if (!videoEl || videoEl.readyState < 2 || videoEl.videoWidth <= 0) return 0;
+  if (!_msAmbiCanvas) {
+    _msAmbiCanvas = document.createElement('canvas');
+    _msAmbiCanvas.width = 8;
+    _msAmbiCanvas.height = 8;
+    _msAmbiCtx = _msAmbiCanvas.getContext('2d', { willReadFrequently: true });
+  }
+  try {
+    _msAmbiCtx.drawImage(videoEl, 0, 0, 8, 8);
+    const data = _msAmbiCtx.getImageData(0, 0, 8, 8).data;
+    let r = 0, g = 0, b = 0;
+    const px = 64;
+    for (let i = 0; i < data.length; i += 4) {
+      r += data[i];
+      g += data[i + 1];
+      b += data[i + 2];
+    }
+    r = r / (px * 255);
+    g = g / (px * 255);
+    b = b / (px * 255);
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    const sat = 1.35;
+    outColor.setRGB(
+      clamp(lum + (r - lum) * sat, 0, 1),
+      clamp(lum + (g - lum) * sat, 0, 1),
+      clamp(lum + (b - lum) * sat, 0, 1)
+    );
+    return lum;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function evaluateAudioOcclusion(sourcePos, dist, ignoreIdA, ignoreIdB = '') {
+  if (dist < 1.5 || dist > 55 || _msSolidOccluders.length === 0) return 0;
+  _msTmpDir.subVectors(sourcePos, _msCamPos).divideScalar(dist);
+  _msOccRaycaster.near = 0.25;
+  _msOccRaycaster.far = Math.max(0.3, dist - 0.45);
+  _msOccRaycaster.set(_msCamPos, _msTmpDir);
+
+  const hits = _msOccRaycaster.intersectObjects(_msSolidOccluders, false);
+  let wallCount = 0;
+  for (let i = 0; i < hits.length; i++) {
+    const b = hits[i].object?.userData?.editorRef?.box;
+    if (!b || b.id === ignoreIdA || b.id === ignoreIdB) continue;
+    wallCount++;
+    if (wallCount >= 2) break;
+  }
+  return wallCount;
+}
+
+function updateSpeakerAudioReactiveVisual(box, spk, bassLevel, enabled) {
+  if (!box || !box.m) return;
+  if (!enabled || !box.m.visible) {
+    if (spk.reactRing) spk.reactRing.visible = false;
+    return;
+  }
+  if (!spk.reactRing) {
+    if (!_msSharedReactRingGeo) {
+      _msSharedReactRingGeo = new THREE.TorusGeometry(0.34, 0.045, 10, 28);
+    }
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x00e676,
+      transparent: true,
+      opacity: 0.78,
+      toneMapped: false
+    });
+    const ring = new THREE.Mesh(_msSharedReactRingGeo, mat);
+    ring.userData.noCollider = true;
+    ring.userData.editorRef = { kind: 'block', box };
+    box.m.add(ring);
+    spk.reactRing = ring;
+  }
+  const depth = Math.max(0.1, box.d || box.m.scale.z || 1);
+  spk.reactRing.visible = true;
+  spk.reactRing.position.set(0, 0, 0.5 + Math.min(0.03, 0.015 / depth));
+  const pulse = 0.85 + bassLevel * 0.42;
+  spk.reactRing.scale.set(pulse, pulse, 1);
+  spk.reactRing.material.opacity = clamp(0.35 + bassLevel * 0.65, 0.25, 1.0);
+  spk.reactRing.material.color.setHSL(0.42 - bassLevel * 0.34, 0.95, 0.55 + bassLevel * 0.12);
 }
 
 function setPannerWorldPos(panner, pos, spatial3D = true) {
@@ -537,8 +673,21 @@ function ensureScreenRuntime(box) {
     sourceNode: null,
     screenBusGain: null,
     builtInChain: null,
+    analyser: null,
     linkedSpeakers: new Set(), // Set<SpeakerRuntime> — без ограничений по количеству!
-    lastScaleSig: ''
+    lastScaleSig: '',
+    ambiColor: new THREE.Color(0x000000),
+    ambiTargetColor: new THREE.Color(0x000000),
+    ambiTimer: 0,
+    ambiLum: 0,
+    bassLevel: 0,
+    occTimer: 0,
+    occWalls: 0,
+    distToCam: 0,
+    inFrustum: true,
+    isScreenShare: false,
+    isRemoteShare: false,
+    shareStream: null
   };
 
   videoEl.addEventListener('loadeddata', () => {
@@ -623,6 +772,11 @@ function ensureScreenAudioGraph(rt) {
     rt.screenBusGain.gain.value = 1.0;
     rt.sourceNode.connect(rt.screenBusGain);
 
+    rt.analyser = AC.createAnalyser();
+    rt.analyser.fftSize = 128;
+    rt.analyser.smoothingTimeConstant = 0.72;
+    rt.screenBusGain.connect(rt.analyser);
+
     // Встроенный 3D-динамик самого экрана (работает в режиме 'auto' при 0 колонках или 'always_screen')
     rt.builtInChain = createSpatialChain(AC, mediaGain || masterGain, true);
     rt.screenBusGain.connect(rt.builtInChain.gainNode);
@@ -633,7 +787,7 @@ function ensureScreenAudioGraph(rt) {
   }
 }
 
-function syncSingleScreen(box, isActiveInWorld) {
+function syncSingleScreen(box, isActiveInWorld, dt = 0.016) {
   const sd = box.mediaScreenData || (box.mediaScreenData = createDefaultMediaScreenData());
   const rt = ensureScreenRuntime(box);
 
@@ -645,7 +799,13 @@ function syncSingleScreen(box, isActiveInWorld) {
     rt.screenGroup.visible = Boolean(box.m && box.m.visible);
   }
 
-  const rawSrc = resolveScreenRawSource(sd);
+  box.m.getWorldPosition(_msTmpPos);
+  rt.distToCam = _msTmpPos.distanceTo(_msCamPos);
+  rt.inFrustum = _msFrustum.containsPoint(_msTmpPos) || rt.distToCam < (Math.max(box.w, box.h, box.d) + 8);
+
+  const isLiveStream = Boolean(rt.isScreenShare || rt.isRemoteShare);
+  if (!isLiveStream) {
+    const rawSrc = resolveScreenRawSource(sd);
   if (rawSrc !== rt.lastRawSrc) {
     rt.lastRawSrc = rawSrc;
     rt.hasVideoFrame = false;
@@ -669,18 +829,19 @@ function syncSingleScreen(box, isActiveInWorld) {
       rt.videoEl.src = rt.resolvedSrc;
       rt.videoEl.load();
     }
+    }
   }
 
   const hasQueue = Array.isArray(sd.queue) && sd.queue.length > 0;
   const effLoopMode = sd.loopMode || (sd.loop !== false ? 'queue' : 'none');
   // При непустой очереди loop отключаем, чтобы срабатывало событие 'ended' для перехода к следующему видео
-  rt.videoEl.loop = !hasQueue && effLoopMode !== 'none';
+  rt.videoEl.loop = !isLiveStream && !hasQueue && effLoopMode !== 'none';
   const targetRate = clamp(Number(sd.playbackRate) || 1.0, 0.25, 3.0);
-  if (Math.abs(rt.videoEl.playbackRate - targetRate) > 0.02) {
+  if (!isLiveStream && Math.abs(rt.videoEl.playbackRate - targetRate) > 0.02) {
     try { rt.videoEl.playbackRate = targetRate; } catch (_) {}
   }
 
-  const shouldPlay = isActiveInWorld && Boolean(rt.resolvedSrc) && Boolean(sd.playing);
+  const shouldPlay = isActiveInWorld && (isLiveStream || (Boolean(rt.resolvedSrc) && Boolean(sd.playing)));
   rt.wantPlay = shouldPlay;
 
   if (shouldPlay) {
@@ -704,7 +865,22 @@ function syncSingleScreen(box, isActiveInWorld) {
     updateScreenSurfaceScaling(box, rt);
   }
 
-  // Пространственный расчёт встроенного динамика экрана
+  // Анализ басов и Ambilight (оптимизировано: только для видимых экранов в радиусе 55м)
+  rt.bassLevel = (shouldPlay && rt.analyser && rt.distToCam < 55) ? sampleBassFromAnalyser(rt.analyser) : 0;
+
+  if (shouldPlay && rt.hasVideoFrame && sd.ambilight !== false && rt.inFrustum && rt.distToCam < 55) {
+    rt.ambiTimer += dt;
+    if (rt.ambiTimer >= 0.12) {
+      rt.ambiTimer = 0;
+      rt.ambiLum = sampleAmbilightColorFromVideo(rt.videoEl, rt.ambiTargetColor);
+    }
+    rt.ambiColor.lerp(rt.ambiTargetColor, clamp(dt * 8, 0.05, 1));
+  } else {
+    rt.ambiLum = Math.max(0, rt.ambiLum - dt * 3);
+    rt.ambiColor.multiplyScalar(Math.max(0, 1 - dt * 4));
+  }
+
+  // Пространственный расчёт встроенного динамика экрана + Occlusion за стенами
   if (rt.builtInChain && rt.screenBusGain) {
     const { AC } = getAudioBuses();
     const outMode = sd.audioOutputMode || 'auto';
@@ -718,9 +894,19 @@ function syncSingleScreen(box, isActiveInWorld) {
       setPannerWorldPos(rt.builtInChain.pannerNode, _msTmpPos, true);
       const dist = _msTmpPos.distanceTo(_msCamPos);
       const atten = computeDistanceGain(dist, sd.builtInRefDist ?? 4, sd.builtInMaxDist ?? 32, 1.35);
+
+      rt.occTimer -= dt;
+      if (rt.occTimer <= 0) {
+        rt.occTimer = 0.18;
+        rt.occWalls = evaluateAudioOcclusion(_msTmpPos, dist, box.id);
+      }
+      const occGain = rt.occWalls >= 2 ? 0.32 : (rt.occWalls === 1 ? 0.52 : 1.0);
+      const occFreq = rt.occWalls >= 2 ? 420 : (rt.occWalls === 1 ? 750 : 20000);
+
       const screenMaster = sd.muted ? 0 : clamp(Number(sd.masterVolume ?? 1.0), 0, 1.5);
-      const vol = clamp(Number(sd.builtInVolume) ?? 0.9, 0, 2.0) * screenMaster * atten;
+      const vol = clamp(Number(sd.builtInVolume) ?? 0.9, 0, 2.0) * screenMaster * atten * occGain;
       rt.builtInChain.gainNode.gain.setTargetAtTime(vol, AC.currentTime, 0.04);
+      rt.builtInChain.filterNode?.frequency.setTargetAtTime(occFreq, AC.currentTime, 0.08);
     } else if (AC) {
       rt.builtInChain.gainNode.gain.setTargetAtTime(0, AC.currentTime, 0.04);
     }
@@ -772,6 +958,11 @@ function ensureSpeakerRuntime(box) {
     audioEl: null,
     audioSourceNode: null,
     standaloneChain: null,
+    analyser: null,
+    bassLevel: 0,
+    occTimer: 0,
+    occWalls: 0,
+    reactRing: null,
     lastRawSrc: null,
     resolvedSrc: '',
     wantPlay: false
@@ -788,11 +979,63 @@ function ensureStandaloneAudioGraph(spk) {
     el.crossOrigin = 'anonymous';
     el.preload = 'auto';
     el.loop = true;
+
+    el.addEventListener('ended', () => {
+      if (!_msSpeakerRuntimes.has(spk.blockId)) return;
+      const ed = spk.box?.soundEmitterData;
+      if (!ed || ed.mode === 'screen_link') return;
+      const q = Array.isArray(ed.queue) ? ed.queue : [];
+      const lm = ed.loopMode || (ed.loop !== false ? 'queue' : 'none');
+      if (lm === 'one') {
+        try { el.currentTime = 0; el.play().catch(() => {}); } catch (_) {}
+        return;
+      }
+      if (q.length > 0) {
+        if (ed.shuffle && q.length > 1) {
+          let ni = ed.queueIndex || 0;
+          while (ni === (ed.queueIndex || 0)) ni = Math.floor(Math.random() * q.length);
+          ed.queueIndex = ni;
+          ed.playing = true;
+          syncSingleSpeaker(spk.box, !spk.box.isDisabled);
+          return;
+        }
+        const ni = (ed.queueIndex || 0) + 1;
+        if (ni < q.length) {
+          ed.queueIndex = ni;
+          ed.playing = true;
+          syncSingleSpeaker(spk.box, !spk.box.isDisabled);
+        } else if (lm === 'queue') {
+          ed.queueIndex = 0;
+          ed.playing = true;
+          syncSingleSpeaker(spk.box, !spk.box.isDisabled);
+        } else {
+          ed.playing = false;
+        }
+      } else if (lm === 'queue') {
+        try { el.currentTime = 0; el.play().catch(() => {}); } catch (_) {}
+      } else {
+        ed.playing = false;
+      }
+    });
+    el.addEventListener('error', () => {
+      if (spk.lastRawSrc && !spk._directFallbackTried && !isYouTubeOrStreamPageUrl(spk.lastRawSrc) && spk.resolvedSrc !== spk.lastRawSrc) {
+        spk._directFallbackTried = true;
+        spk.resolvedSrc = spk.lastRawSrc;
+        el.src = spk.resolvedSrc;
+        el.load();
+        if (spk.wantPlay) el.play().catch(() => {});
+      }
+    });
     spk.audioEl = el;
   }
   if (!spk.standaloneChain) {
     try {
       spk.audioSourceNode = AC.createMediaElementSource(spk.audioEl);
+      spk.analyser = AC.createAnalyser();
+      spk.analyser.fftSize = 128;
+      spk.analyser.smoothingTimeConstant = 0.72;
+      spk.audioSourceNode.connect(spk.analyser);
+
       spk.standaloneChain = createSpatialChain(AC, mediaGain || masterGain, true);
       spk.audioSourceNode.connect(spk.standaloneChain.gainNode);
     } catch (err) {
@@ -803,7 +1046,7 @@ function ensureStandaloneAudioGraph(spk) {
   return true;
 }
 
-function syncSingleSpeaker(box, isActiveInWorld) {
+function syncSingleSpeaker(box, isActiveInWorld, dt = 0.016) {
   const ed = box.soundEmitterData || (box.soundEmitterData = createDefaultSoundEmitterData());
   const spk = ensureSpeakerRuntime(box);
   const { AC, mediaGain, masterGain } = getAudioBuses();
@@ -850,14 +1093,31 @@ function syncSingleSpeaker(box, isActiveInWorld) {
         setPannerWorldPos(spk.screenLinkChain.pannerNode, _msTmpPos, ed.spatial3D !== false);
         const dist = _msTmpPos.distanceTo(_msCamPos);
         const atten = computeDistanceGain(dist, ed.refDistance ?? 4, ed.maxDistance ?? 36, ed.rolloff ?? 1.35);
+
+        let occGain = 1.0;
+        let occFreq = 20000;
+        if (ed.occlusion !== false) {
+          spk.occTimer -= dt;
+          if (spk.occTimer <= 0) {
+            spk.occTimer = 0.18;
+            spk.occWalls = evaluateAudioOcclusion(_msTmpPos, dist, box.id, targetScreenId);
+          }
+          occGain = spk.occWalls >= 2 ? 0.3 : (spk.occWalls === 1 ? 0.5 : 1.0);
+          occFreq = spk.occWalls >= 2 ? 420 : (spk.occWalls === 1 ? 750 : 20000);
+        }
+
         const scrSd = screenRt.box?.mediaScreenData;
         const screenMaster = scrSd?.muted ? 0 : clamp(Number(scrSd?.masterVolume ?? 1.0), 0, 1.5);
-        const vol = clamp(Number(ed.volume) ?? 1.0, 0, 2.0) * screenMaster * atten;
+        const vol = clamp(Number(ed.volume) ?? 1.0, 0, 2.0) * screenMaster * atten * occGain;
         spk.screenLinkChain.gainNode.gain.setTargetAtTime(vol, AC.currentTime, 0.04);
+        spk.screenLinkChain.filterNode?.frequency.setTargetAtTime(occFreq, AC.currentTime, 0.08);
+        spk.bassLevel = screenRt.bassLevel || 0;
       } else {
         spk.screenLinkChain.gainNode.gain.setTargetAtTime(0, AC.currentTime, 0.04);
+        spk.bassLevel = 0;
       }
     }
+    updateSpeakerAudioReactiveVisual(box, spk, spk.bassLevel, Boolean(ed.audioReactive && isActiveInWorld));
     return;
   }
 
@@ -883,7 +1143,9 @@ function syncSingleSpeaker(box, isActiveInWorld) {
   spk.wantPlay = shouldPlay;
 
   if (spk.audioEl) {
-    spk.audioEl.loop = ed.loop !== false;
+    const hasSpkQueue = Array.isArray(ed.queue) && ed.queue.length > 0;
+    const effLm = ed.loopMode || (ed.loop !== false ? 'queue' : 'none');
+    spk.audioEl.loop = !hasSpkQueue && effLm !== 'none';
     const rate = clamp(Number(ed.playbackRate) || 1.0, 0.25, 3.0);
     if (Math.abs(spk.audioEl.playbackRate - rate) > 0.02) {
       try { spk.audioEl.playbackRate = rate; } catch (_) {}
@@ -907,12 +1169,29 @@ function syncSingleSpeaker(box, isActiveInWorld) {
       setPannerWorldPos(spk.standaloneChain.pannerNode, _msTmpPos, ed.spatial3D !== false);
       const dist = _msTmpPos.distanceTo(_msCamPos);
       const atten = computeDistanceGain(dist, ed.refDistance ?? 4, ed.maxDistance ?? 36, ed.rolloff ?? 1.35);
-      const vol = clamp(Number(ed.volume) ?? 1.0, 0, 2.0) * atten;
+
+      let occGain = 1.0;
+      let occFreq = 20000;
+      if (ed.occlusion !== false) {
+        spk.occTimer -= dt;
+        if (spk.occTimer <= 0) {
+          spk.occTimer = 0.18;
+          spk.occWalls = evaluateAudioOcclusion(_msTmpPos, dist, box.id);
+        }
+        occGain = spk.occWalls >= 2 ? 0.3 : (spk.occWalls === 1 ? 0.5 : 1.0);
+        occFreq = spk.occWalls >= 2 ? 420 : (spk.occWalls === 1 ? 750 : 20000);
+      }
+
+      const vol = clamp(Number(ed.volume) ?? 1.0, 0, 2.0) * atten * occGain;
       spk.standaloneChain.gainNode.gain.setTargetAtTime(vol, AC.currentTime, 0.04);
+      spk.standaloneChain.filterNode?.frequency.setTargetAtTime(occFreq, AC.currentTime, 0.08);
+      spk.bassLevel = dist < 45 ? sampleBassFromAnalyser(spk.analyser) : 0;
     } else {
       spk.standaloneChain.gainNode.gain.setTargetAtTime(0, AC.currentTime, 0.04);
+      spk.bassLevel = 0;
     }
   }
+  updateSpeakerAudioReactiveVisual(box, spk, spk.bassLevel, Boolean(ed.audioReactive && isActiveInWorld));
 }
 
 /* ---------- ОБНОВЛЕНИЕ СЛУШАТЕЛЯ И ОБЩИЙ ЦИКЛ ---------- */
@@ -948,6 +1227,21 @@ export function updateMediaSystem(dt) {
   if (!Array.isArray(S.allBlocks)) return;
   syncWebAudioListenerToCamera();
 
+  // Обновляем frustum камеры и список твёрдых стен для Audio Occlusion один раз на кадр
+  if (camera) {
+    camera.updateMatrixWorld();
+    _msProjScreenMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _msFrustum.setFromProjectionMatrix(_msProjScreenMat);
+  }
+  _msSolidOccluders.length = 0;
+  for (let i = 0; i < S.allBlocks.length; i++) {
+    const b = S.allBlocks[i];
+    if (!b || !b.m || !b.m.visible || b.isDisabled || b._depletedDisabled) continue;
+    if (b.matterState === 'solid' && b.components?.physics?.enabled !== false) {
+      _msSolidOccluders.push(b.m);
+    }
+  }
+
   const activeScreenIds = new Set();
   const activeSpeakerIds = new Set();
 
@@ -957,7 +1251,7 @@ export function updateMediaSystem(dt) {
     if (!b || !b.m || !b.components?.mediaScreen?.enabled) continue;
     activeScreenIds.add(b.id);
     const isOff = Boolean(b.isDisabled || (S.state === 'play' && b._depletedDisabled));
-    syncSingleScreen(b, !isOff && S.state !== 'menu');
+    syncSingleScreen(b, !isOff && S.state !== 'menu', dt);
   }
 
   // Проход 2: 3D-колонки (как привязанные к экранам, так и самостоятельные)
@@ -966,7 +1260,7 @@ export function updateMediaSystem(dt) {
     if (!b || !b.m || !b.components?.soundEmitter?.enabled) continue;
     activeSpeakerIds.add(b.id);
     const isOff = Boolean(b.isDisabled || (S.state === 'play' && b._depletedDisabled));
-    syncSingleSpeaker(b, !isOff && S.state !== 'menu');
+    syncSingleSpeaker(b, !isOff && S.state !== 'menu', dt);
   }
 
   // Очистка осиротевших рантаймов (если компонент отключили или блок удалили)
@@ -1073,8 +1367,15 @@ function disposeSpeakerById(blockId) {
   detachSpeakerFromScreen(spk);
   stopStandaloneSpeakerAudio(spk);
   try { spk.audioSourceNode?.disconnect(); } catch (_) {}
+  try { spk.analyser?.disconnect(); } catch (_) {}
   try { spk.standaloneChain?.gainNode?.disconnect(); } catch (_) {}
+  try { spk.standaloneChain?.filterNode?.disconnect(); } catch (_) {}
   try { spk.standaloneChain?.pannerNode?.disconnect(); } catch (_) {}
+  if (spk.reactRing) {
+    if (spk.reactRing.parent) spk.reactRing.parent.remove(spk.reactRing);
+    spk.reactRing.material?.dispose?.();
+    spk.reactRing = null;
+  }
   _msSpeakerRuntimes.delete(blockId);
 }
 
@@ -1085,10 +1386,16 @@ function disposeScreenById(blockId) {
   for (const spk of Array.from(rt.linkedSpeakers)) {
     detachSpeakerFromScreen(spk);
   }
-  try { rt.videoEl.pause(); rt.videoEl.removeAttribute('src'); rt.videoEl.load(); } catch (_) {}
+  if (rt.shareStream) {
+    try { rt.shareStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+    rt.shareStream = null;
+  }
+  try { rt.videoEl.pause(); rt.videoEl.srcObject = null; rt.videoEl.removeAttribute('src'); rt.videoEl.load(); } catch (_) {}
   try { rt.sourceNode?.disconnect(); } catch (_) {}
+  try { rt.analyser?.disconnect(); } catch (_) {}
   try { rt.screenBusGain?.disconnect(); } catch (_) {}
   try { rt.builtInChain?.gainNode?.disconnect(); } catch (_) {}
+  try { rt.builtInChain?.filterNode?.disconnect(); } catch (_) {}
   try { rt.builtInChain?.pannerNode?.disconnect(); } catch (_) {}
   if (rt.screenGroup && rt.screenGroup.parent) {
     rt.screenGroup.parent.remove(rt.screenGroup);
@@ -1389,4 +1696,308 @@ export function cycleScreenPlaybackRate(box, steps = [0.5, 0.75, 1.0, 1.25, 1.5,
   const idx = steps.findIndex(v => Math.abs(v - cur) < 0.05);
   sd.playbackRate = steps[(idx + 1) % steps.length];
   sfx.click?.();
+}
+
+/* ---------- ПОИСК YOUTUBE, AMBILIGHT, БАСЫ, СТРИМ ЭКРАНА ПК И ОЧЕРЕДИ КОЛОНОК ---------- */
+
+export async function searchYouTubeVideos(query, limit = 6) {
+  const q = String(query || '').trim();
+  if (!q) return [];
+  const base = getMediaProxyBaseUrl();
+  const resp = await fetch(`${base}/api/media/search?limit=${limit}&q=${encodeURIComponent(q)}`);
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.ok) {
+    throw new Error(data?.error || `HTTP ${resp.status}`);
+  }
+  return Array.isArray(data.items) ? data.items : [];
+}
+
+export function collectMediaAmbilightCandidates(pushRealLightCandidate) {
+  if (typeof pushRealLightCandidate !== 'function') return;
+  for (const rt of _msScreenRuntimes.values()) {
+    const box = rt.box;
+    const sd = box?.mediaScreenData;
+    if (!box || !box.m || !box.m.visible || !sd || sd.ambilight === false) continue;
+    if (!rt.wantPlay || rt.ambiLum < 0.03 || !rt.inFrustum || rt.distToCam > 55) continue;
+
+    // Ставим источник света чуть перед лицевой стороной экрана, чтобы он мягко освещал комнату
+    const faceSign = sd.face === 'back' ? -1 : 1;
+    const fwdOff = (box.d || 0.4) * 0.5 + 1.1;
+    _msLightPos.set(0, 0, faceSign * fwdOff).applyQuaternion(box.m.quaternion).add(box.m.position);
+
+    const baseInt = clamp(Number(sd.ambilightIntensity) || 1.8, 0.2, 5.0);
+    const intensity = baseInt * clamp(rt.ambiLum * 1.65, 0.25, 1.35);
+    const dist = clamp(Number(sd.ambilightDistance) || 22, 4, 65);
+    pushRealLightCandidate(_msLightPos, '#' + rt.ambiColor.getHexString(), intensity, dist, 1.0);
+  }
+}
+
+export function getBlockAudioLevel(blockId) {
+  const scr = _msScreenRuntimes.get(blockId);
+  if (scr) return scr.bassLevel || 0;
+  const spk = _msSpeakerRuntimes.get(blockId);
+  if (spk) {
+    if (spk.attachedScreenRt) return spk.attachedScreenRt.bassLevel || 0;
+    return spk.bassLevel || 0;
+  }
+  return 0;
+}
+
+export function canLocalPlayerControlScreen(box) {
+  if (!box || !box.mediaScreenData) return true;
+  if (S.state === 'edit') return true;
+  if (!box.mediaScreenData.hostOnly) return true;
+  if (S.mpState?.isHost) return true;
+  if (Object.keys(S.remotePlayers || {}).length === 0) return true;
+  return false;
+}
+
+export function tryPayScreenQueueCost(box) {
+  if (!box || S.state !== 'play' || !S.player) return true;
+  const sdCost = Math.max(0, Number(box.mediaScreenData?.queueCost) || 0);
+  const compCost = (box.components?.cost?.enabled && box.costData) ? Math.max(0, Number(box.costData.amount) || 0) : 0;
+  const price = sdCost > 0 ? sdCost : compCost;
+  if (price <= 0) return true;
+
+  if ((S.player.cash || 0) < price) {
+    sfx.oof?.();
+    showBanner(`💰 Нужно ${price} R$, чтобы добавить видео в очередь!`, '#ffce3a');
+    return false;
+  }
+  S.player.cash -= price;
+  sfx.cash?.();
+  if (window.__debixUpdateShopUI) window.__debixUpdateShopUI();
+  showBanner(`🎵 Оплачено ${price} R$ за заказ видео!`, '#00e676');
+  return true;
+}
+
+export async function startScreenShareForBlock(box) {
+  if (!box || !box.components?.mediaScreen?.enabled) return false;
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
+    showBanner('⚠️ Браузер не поддерживает трансляцию экрана (нужен localhost или HTTPS).', '#ffce3a');
+    return false;
+  }
+  initAudio();
+  _msUnlockedOnce = true;
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { cursor: 'always' },
+      audio: true
+    });
+    const rt = ensureScreenRuntime(box);
+    stopScreenShareForBlock(box, false);
+
+    rt.isScreenShare = true;
+    rt.isRemoteShare = false;
+    rt.shareStream = stream;
+    rt.videoEl.srcObject = stream;
+    rt.videoEl.muted = false;
+    rt.hasVideoFrame = true;
+    box.mediaScreenData.playing = true;
+    ensureScreenAudioGraph(rt);
+    rt.videoEl.play().catch(() => {});
+
+    const vTrack = stream.getVideoTracks()[0];
+    if (vTrack) {
+      vTrack.onended = () => stopScreenShareForBlock(box, true);
+    }
+
+    if (window.__debixBroadcastScreenShare) {
+      window.__debixBroadcastScreenShare(box.id, stream);
+    }
+    sfx.coil?.();
+    showBanner(`🖥️ Трансляция экрана ПК запущена на «${box.label}»!`, '#00e676');
+    return true;
+  } catch (err) {
+    if (err && err.name !== 'NotAllowedError') {
+      showBanner('❌ Не удалось запустить трансляцию: ' + err.message, '#ff4757');
+    }
+    return false;
+  }
+}
+
+export function stopScreenShareForBlock(box, notifyNet = true) {
+  if (!box) return;
+  const rt = _msScreenRuntimes.get(box.id);
+  if (!rt || (!rt.isScreenShare && !rt.isRemoteShare)) return;
+  const wasLocal = rt.isScreenShare;
+  if (rt.shareStream) {
+    try { rt.shareStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+    rt.shareStream = null;
+  }
+  rt.isScreenShare = false;
+  rt.isRemoteShare = false;
+  rt.videoEl.srcObject = null;
+  rt.lastRawSrc = null;
+  syncSingleScreen(box, !box.isDisabled);
+  if (notifyNet && wasLocal && window.__debixStopScreenShare) {
+    window.__debixStopScreenShare(box.id);
+  }
+}
+
+export function attachRemoteMediaStreamToScreen(blockId, mediaStream) {
+  const box = S.allBlocks.find(b => b && b.id === blockId && b.components?.mediaScreen?.enabled);
+  if (!box) return false;
+  const rt = ensureScreenRuntime(box);
+  rt.isRemoteShare = true;
+  rt.isScreenShare = false;
+  rt.shareStream = mediaStream;
+  rt.videoEl.srcObject = mediaStream;
+  rt.hasVideoFrame = true;
+  box.mediaScreenData.playing = true;
+  ensureScreenAudioGraph(rt);
+  rt.videoEl.play().catch(() => {});
+  showBanner(`🖥️ Подключена трансляция экрана на «${box.label}»!`, '#56f0ff');
+  return true;
+}
+
+export function getScreenSyncState(box) {
+  const rt = _msScreenRuntimes.get(box?.id);
+  const sd = box?.mediaScreenData;
+  if (!rt || !sd || rt.isScreenShare || rt.isRemoteShare) return null;
+  return {
+    blockId: box.id,
+    playing: Boolean(sd.playing),
+    time: Number((rt.videoEl?.currentTime || 0).toFixed(2)),
+    rate: Number(sd.playbackRate) || 1.0,
+    queueIndex: sd.queueIndex || 0,
+    queueLen: Array.isArray(sd.queue) ? sd.queue.length : 0,
+    url: sd.url || ''
+  };
+}
+
+export function applyScreenSyncState(box, st) {
+  if (!box || !st || !box.mediaScreenData) return;
+  const sd = box.mediaScreenData;
+  const rt = _msScreenRuntimes.get(box.id);
+  if (!rt || rt.isScreenShare || rt.isRemoteShare) return;
+
+  if (typeof st.queueIndex === 'number' && st.queueIndex !== sd.queueIndex) {
+    sd.queueIndex = st.queueIndex;
+    rt.lastRawSrc = null;
+  }
+  if (typeof st.playing === 'boolean') sd.playing = st.playing;
+  if (typeof st.rate === 'number') sd.playbackRate = clamp(st.rate, 0.25, 3.0);
+
+  if (rt.videoEl && Number.isFinite(st.time) && rt.videoEl.readyState >= 1) {
+    const diff = Math.abs((rt.videoEl.currentTime || 0) - st.time);
+    if (diff > 1.2) {
+      try { rt.videoEl.currentTime = st.time; } catch (_) {}
+    }
+  }
+  syncSingleScreen(box, !box.isDisabled);
+}
+
+/* ---------- ОЧЕРЕДИ И ПЛЕЙЛИСТЫ ДЛЯ САМОСТОЯТЕЛЬНЫХ 3D-КОЛОНОК (БУМБОКС / РАДИО) ---------- */
+
+export async function addUrlOrPlaylistToSpeakerQueue(box, rawUrl, opts = {}) {
+  if (!box) return 0;
+  const ed = box.soundEmitterData || (box.soundEmitterData = createDefaultSoundEmitterData());
+  if (!Array.isArray(ed.queue)) ed.queue = [];
+
+  const wasEmpty = ed.queue.length === 0;
+  const info = await fetchMediaPlaylistInfo(rawUrl);
+  const incoming = Array.isArray(info.items) ? info.items : [];
+  if (incoming.length === 0) return 0;
+
+  if (opts.replaceQueue) {
+    ed.queue = [];
+    ed.queueIndex = 0;
+  }
+
+  const startOffset = ed.queue.length;
+  for (let i = 0; i < incoming.length; i++) {
+    const it = incoming[i];
+    ed.queue.push({
+      id: 'sq_' + Date.now() + '_' + i + '_' + Math.floor(Math.random() * 999),
+      title: it.title || it.url || `Трек #${i + 1}`,
+      sourceType: 'url',
+      url: it.url,
+      audioId: '',
+      duration: Number(it.duration) || 0
+    });
+  }
+
+  if (opts.replaceQueue || opts.playNow || wasEmpty) {
+    ed.queueIndex = startOffset;
+    ed.playing = true;
+  }
+
+  syncSingleSpeaker(box, !box.isDisabled);
+  if (window.__debixSyncBlockUpsert && !S.isApplyingRemoteSync) {
+    window.__debixSyncBlockUpsert(box, false);
+  }
+  sfx.cash?.();
+  showBanner(
+    info.isPlaylist
+      ? `📻 В колонку добавлен плейлист «${info.title}» (${incoming.length} треков)!`
+      : `📻 Трек «${incoming[0].title}» добавлен в колонку!`,
+    '#00e676'
+  );
+  return incoming.length;
+}
+
+export function playSpeakerQueueIndex(box, idx) {
+  const ed = box?.soundEmitterData;
+  if (!ed || !Array.isArray(ed.queue) || ed.queue.length === 0) return;
+  ed.queueIndex = clamp(Number(idx) || 0, 0, ed.queue.length - 1);
+  ed.playing = true;
+  const spk = _msSpeakerRuntimes.get(box.id);
+  if (spk) spk.lastRawSrc = null;
+  syncSingleSpeaker(box, !box.isDisabled);
+  if (window.__debixSyncBlockUpsert && !S.isApplyingRemoteSync) {
+    window.__debixSyncBlockUpsert(box, false);
+  }
+  sfx.click?.();
+}
+
+export function nextSpeakerTrack(box) {
+  const ed = box?.soundEmitterData;
+  if (!ed || !Array.isArray(ed.queue) || ed.queue.length === 0) return;
+  if (ed.shuffle && ed.queue.length > 1) {
+    let ni = ed.queueIndex || 0;
+    while (ni === (ed.queueIndex || 0)) ni = Math.floor(Math.random() * ed.queue.length);
+    playSpeakerQueueIndex(box, ni);
+    return;
+  }
+  playSpeakerQueueIndex(box, ((ed.queueIndex || 0) + 1) % ed.queue.length);
+}
+
+export function prevSpeakerTrack(box) {
+  const ed = box?.soundEmitterData;
+  if (!ed || !Array.isArray(ed.queue) || ed.queue.length === 0) return;
+  playSpeakerQueueIndex(box, ((ed.queueIndex || 0) - 1 + ed.queue.length) % ed.queue.length);
+}
+
+export function removeSpeakerQueueItem(box, idx) {
+  const ed = box?.soundEmitterData;
+  if (!ed || !Array.isArray(ed.queue) || idx < 0 || idx >= ed.queue.length) return;
+  const wasCur = idx === (ed.queueIndex || 0);
+  ed.queue.splice(idx, 1);
+  if (ed.queue.length === 0) ed.queueIndex = 0;
+  else if (idx < (ed.queueIndex || 0)) ed.queueIndex = Math.max(0, (ed.queueIndex || 0) - 1);
+  else if ((ed.queueIndex || 0) >= ed.queue.length) ed.queueIndex = ed.queue.length - 1;
+  if (wasCur) {
+    const spk = _msSpeakerRuntimes.get(box.id);
+    if (spk) spk.lastRawSrc = null;
+  }
+  syncSingleSpeaker(box, !box.isDisabled);
+  if (window.__debixSyncBlockUpsert && !S.isApplyingRemoteSync) {
+    window.__debixSyncBlockUpsert(box, false);
+  }
+  sfx.oof?.();
+}
+
+export function clearSpeakerQueue(box) {
+  const ed = box?.soundEmitterData;
+  if (!ed) return;
+  ed.queue = [];
+  ed.queueIndex = 0;
+  const spk = _msSpeakerRuntimes.get(box.id);
+  if (spk) spk.lastRawSrc = null;
+  syncSingleSpeaker(box, !box.isDisabled);
+  if (window.__debixSyncBlockUpsert && !S.isApplyingRemoteSync) {
+    window.__debixSyncBlockUpsert(box, false);
+  }
+  sfx.oof?.();
 }

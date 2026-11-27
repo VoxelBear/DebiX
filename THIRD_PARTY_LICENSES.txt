@@ -1,0 +1,23 @@
+DebiX — Third-Party Software Notices and Licenses
+==================================================
+
+This project uses or interacts with the following third-party open-source components:
+
+1. Three.js
+   - Project: https://threejs.org/
+   - License: MIT License
+
+2. ws (WebSocket library for Node.js)
+   - Project: https://github.com/websockets/ws
+   - License: MIT License
+
+3. yt-dlp (External Optional Media Resolver)
+   - Project: https://github.com/yt-dlp/yt-dlp
+   - License: The Unlicense (Public Domain)
+   - Notice: yt-dlp is NOT bundled with or redistributed inside the DebiX repository
+     or DebiX-Launcher.exe. When media streaming features are used, DebiX Launcher
+     downloads the official prebuilt binary directly from the upstream GitHub Releases
+     page (https://github.com/yt-dlp/yt-dlp/releases) and verifies its SHA-256 checksum
+     against the official SHA2-256SUMS published by the yt-dlp maintainers.
+     Prebuilt yt-dlp binaries include third-party runtime libraries (such as Python
+     and OpenSSL) governed by their respective licenses.

@@ -19,7 +19,8 @@ import {
 import {
   syncBlockMediaVisuals,
   clearAllMediaRuntime,
-  resetAllMediaRuntime
+  resetAllMediaRuntime,
+  collectMediaAmbilightCandidates
 } from './MediaSystem.js';
 
 const MAX_ACTIVE_POINT_LIGHTS = 12;
@@ -904,6 +905,7 @@ export function updateWorldLights(camPos) {
   if (S.workbenchPreviewGroup) collectGroupRealLights(S.workbenchPreviewGroup);
   if (S.studioMannequinRig) collectEntityRealLights(S.studioMannequinRig);
   collectBurningLightCandidates(pushRealLightCandidate);
+  collectMediaAmbilightCandidates(pushRealLightCandidate);
 
   if (pointCandidates.length > MAX_ACTIVE_POINT_LIGHTS) {
     pointCandidates.sort((a, b) => a.distSq - b.distSq);
