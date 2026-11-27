@@ -1,9 +1,9 @@
 {
   "app": "DebiX",
-  "version": "0.0.8.1",
-  "commitSha": "ea208f7762998d0be8cd334299dbd75b9eac1372",
-  "timestamp": 1795768498174,
-  "notes": "Вшит в игру yt-dlp.exe ",
+  "version": "0.0.9.2",
+  "commitSha": "f03033a3669850544f16837eedaad1741c3543e4",
+  "timestamp": 1795773977001,
+  "notes": "Медиа-система, автозагрузка yt-dlp и исправления лаунчера",
   "files": {
     "index.html": {
       "sha256": "6ff35e4355d0b4841e92504c39b4ed4dc5ca532891197c1b6b249bb0fbe0e770",
@@ -14,16 +14,12 @@
       "size": 24511
     },
     "launcher.html": {
-      "sha256": "93e96cdbaf397a1b2fe37fb8e1f96a9d7f402b24fd4195d4d21346b3e2e49400",
-      "size": 20843
+      "sha256": "6441da79914826cd4ad336fa27b953c57e5980c2152b1d01223112f184d26dbf",
+      "size": 24334
     },
     "package.json": {
-      "sha256": "f81179b6b3553b0338f2dc842b980edb5578fde4643c4aa4fb8a85782c314180",
-      "size": 424
-    },
-    "THIRD_PARTY_LICENSES.txt": {
-      "sha256": "6db954a1f3ff99715ac6bf29e22b677ead23883f41b2370ba664c14cfd7d59ec",
-      "size": 1094
+      "sha256": "55dec13d762d58e188cd1c6709d754ff33c8c703e48bd2b265bd75dbe075eb4e",
+      "size": 466
     },
     "css/base.css": {
       "sha256": "7f4a6f946b15b667a2a96b7d70375d307825fad5291b139f246e0c974cb48b43",
@@ -154,5 +150,5 @@
       "size": 17171
     }
   },
-  "signature": "nl0/+nQ49BFxnIdXx9MSEwdkwFzrpGxlzlXOiI2McjD9E5fdWj0YsKgYocaRiB6aexbAw04z9ZrHwqBuvHxyAA=="
+  "signature": "sZ3f+EPbXCAsOJQ7QDFVFem0KE3CN204o6GDPLuM1hY/eMgqJx8disPfHCeqeKrjxipGp7v5UPQ+heuCMWhjDg=="
 }
