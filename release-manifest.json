@@ -1,8 +1,8 @@
 {
   "app": "DebiX",
-  "version": "0.0.9.2",
-  "commitSha": "f03033a3669850544f16837eedaad1741c3543e4",
-  "timestamp": 1795773977001,
+  "version": "0.0.9.3",
+  "commitSha": "78384e48013ff4f7280aa3a93ba2834db54a71c9",
+  "timestamp": 1795775386726,
   "notes": "Медиа-система, автозагрузка yt-dlp и исправления лаунчера",
   "files": {
     "index.html": {
@@ -10,8 +10,8 @@
       "size": 25309
     },
     "lan-server.js": {
-      "sha256": "0c8dd0af0a24cec9e452ade7e75dfd4a5f8a710cf53026b6295db95cc653b11f",
-      "size": 24511
+      "sha256": "b37420eea598d38ba6f3ffbf5448d8d135091d45c17be736e13fcf17a9dc0d2f",
+      "size": 32565
     },
     "launcher.html": {
       "sha256": "6441da79914826cd4ad336fa27b953c57e5980c2152b1d01223112f184d26dbf",
@@ -150,5 +150,5 @@
       "size": 17171
     }
   },
-  "signature": "sZ3f+EPbXCAsOJQ7QDFVFem0KE3CN204o6GDPLuM1hY/eMgqJx8disPfHCeqeKrjxipGp7v5UPQ+heuCMWhjDg=="
+  "signature": "PXij25wpANuKNvqUcWLI1phC2uuS4ND/rYUDdfaR/8GZ++ypiRzMWI9/sTd8z1bNbtR6utpjkUhhmyl9YZXQBQ=="
 }
