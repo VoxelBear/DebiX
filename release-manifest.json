@@ -1,25 +1,29 @@
 {
   "app": "DebiX",
-  "version": "0.0.8",
-  "commitSha": "81e0fca761ac9af575ef2ae1bc3a10f032b97f29",
-  "timestamp": 1795700149130,
-  "notes": "Воспроизведение медиа ффайлов через прямые ссылки",
+  "version": "0.0.8.1",
+  "commitSha": "ea208f7762998d0be8cd334299dbd75b9eac1372",
+  "timestamp": 1795768498174,
+  "notes": "Вшит в игру yt-dlp.exe ",
   "files": {
     "index.html": {
       "sha256": "6ff35e4355d0b4841e92504c39b4ed4dc5ca532891197c1b6b249bb0fbe0e770",
       "size": 25309
     },
     "lan-server.js": {
-      "sha256": "ad2fe9c8959ae44bd6db87ed7564f1cebb32099ef9b5aea086751375bf8e2337",
-      "size": 21240
+      "sha256": "0c8dd0af0a24cec9e452ade7e75dfd4a5f8a710cf53026b6295db95cc653b11f",
+      "size": 24511
     },
     "launcher.html": {
-      "sha256": "47f8e525ac254e03c319a9e4215be818df66788611ba23a5cbee3fa969dcf4e9",
-      "size": 18446
+      "sha256": "93e96cdbaf397a1b2fe37fb8e1f96a9d7f402b24fd4195d4d21346b3e2e49400",
+      "size": 20843
     },
     "package.json": {
       "sha256": "f81179b6b3553b0338f2dc842b980edb5578fde4643c4aa4fb8a85782c314180",
       "size": 424
+    },
+    "THIRD_PARTY_LICENSES.txt": {
+      "sha256": "6db954a1f3ff99715ac6bf29e22b677ead23883f41b2370ba664c14cfd7d59ec",
+      "size": 1094
     },
     "css/base.css": {
       "sha256": "7f4a6f946b15b667a2a96b7d70375d307825fad5291b139f246e0c974cb48b43",
@@ -50,16 +54,16 @@
       "size": 29128
     },
     "src/core/MediaScreenUI.js": {
-      "sha256": "1e9905402475b629964042cbbdfe1aa8dc962a997fe1567c285e9b2edf421025",
-      "size": 32948
+      "sha256": "e9e89bfe99b88ce4ca20d4f21b3f0a567c1b9f0d22c6ca77bede9fdac442c8fb",
+      "size": 44180
     },
     "src/core/MediaSystem.js": {
-      "sha256": "efd3d9442210660622793f7b6d2d64da99113f5f0c760190b751c4c4086678e2",
-      "size": 49102
+      "sha256": "0f328bc22dc22e26b0e93c0739be106dcc4a566749fad16d487bba1a69459ad6",
+      "size": 72406
     },
     "src/core/MultiplayerManager.js": {
-      "sha256": "4fc960dc1c9c915afd7fc66d057acd748bd3bb1a523bb8f69f251f138d991d27",
-      "size": 141474
+      "sha256": "5ffdfb3d5b21aae97f28117737c969b223de85a111b8023d4bf17cb6107cc170",
+      "size": 145802
     },
     "src/core/ParticleSystem.js": {
       "sha256": "17ebbec6a67ec8c96f55f297f8306d44ed9ce14849f5dec7d54b0ea31d2e5662",
@@ -70,8 +74,8 @@
       "size": 12389
     },
     "src/core/ScriptEngine.js": {
-      "sha256": "f622aee8875aa659e836d0e7334209a5602a5b0035acc63f6c910a7d89cc071d",
-      "size": 98958
+      "sha256": "2b47824a43dfbf2f0f14a961c4ec8916f79a5de918fee78ee06a1f00123d9e05",
+      "size": 106755
     },
     "src/core/Serializer.js": {
       "sha256": "d26d5639caa0314659d7057afb566dfe1eb5361d350841c23098540cab675c29",
@@ -102,8 +106,8 @@
       "size": 52183
     },
     "src/core/WorldRegistry.js": {
-      "sha256": "6c934c9a8f8e5a36561856458352caf225085c83728905557a770823c4a45534",
-      "size": 67532
+      "sha256": "2f335006639ae2d6b85ca81e77d5449f5fd0f23e33ca5cef3a94cae4b37a4869",
+      "size": 67626
     },
     "src/games/HeavenQueueGame.js": {
       "sha256": "3ce43a321418b1054c4900aec451042a514fbb73d23b90e34a9c1a9045352b60",
@@ -122,20 +126,20 @@
       "size": 44909
     },
     "src/player/PhysicsAndCombat.js": {
-      "sha256": "a5086315beb0cb421d95157c6778b4f17769a76aeb61870f6a3a79bc1501fd49",
-      "size": 295182
+      "sha256": "19a5d51fdc87692246709966838cedd7e0e0b9558997a3287805e1676efcdbfc",
+      "size": 297555
     },
     "src/player/PlayerController.js": {
-      "sha256": "8a901572e86f0660d40ac9ab614ef69118b874c4900a48c40a4f768da794c07b",
-      "size": 48750
+      "sha256": "c3e2f37e01f6083adda6882b88feca42f35e0448b5b48291981c8a7ffade40a6",
+      "size": 49130
     },
     "src/studio/HierarchyAndSpawn.js": {
       "sha256": "905a7152fb46737aa8e32bab88e2dc835f1604683733d3ced64c65b2b85acc2e",
       "size": 186688
     },
     "src/studio/InspectorPanel.js": {
-      "sha256": "16024608a5bf26cab2d0e7c8066658f219e2c9f322b208010a247fdd513187a4",
-      "size": 377011
+      "sha256": "ba0c19e0c38db710ffe454c6b1b0248cf968f8d22e6dd38d32f0606cc31d3df3",
+      "size": 387185
     },
     "src/studio/PaintStudio2D.js": {
       "sha256": "6ae5c93e0bf956d868105d141d003210d43d9c28740d4bdf658b6f369dc12f44",
@@ -150,5 +154,5 @@
       "size": 17171
     }
   },
-  "signature": "yg/DNauT3Tfke8rr/ZwXdCwq76mqeleqtTExq2qhVbU20Ahie41q5DzprRJvyEHai3YAdup3DkYRhqHsobU+AQ=="
+  "signature": "nl0/+nQ49BFxnIdXx9MSEwdkwFzrpGxlzlXOiI2McjD9E5fdWj0YsKgYocaRiB6aexbAw04z9ZrHwqBuvHxyAA=="
 }
