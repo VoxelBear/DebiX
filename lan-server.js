@@ -90,76 +90,78 @@ function resolvePlaylistViaYtDlp(rawUrl) {
       startVideoId = u.searchParams.get('v') || '';
     } catch (_) {}
 
-    const bin = findYtDlpBinary();
-    const args = [
-      '--flat-playlist',
-      '--dump-single-json',
-      '--no-warnings',
-      '--js-runtimes', 'node',
-      '--playlist-end', '100',
-      rawUrl
-    ];
+    getYtDlpJsRuntimeArgs().then((jsArgs) => {
+      const bin = findYtDlpBinary();
+      const args = [
+        '--flat-playlist',
+        '--dump-single-json',
+        '--no-warnings',
+        ...jsArgs,
+        '--playlist-end', '100',
+        rawUrl
+      ];
 
-    execFile(bin, args, { timeout: 30000, maxBuffer: 12 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
-      if (err) {
-        const msg = err.code === 'ENOENT'
-          ? 'yt-dlp не найден! Положи yt-dlp.exe рядом с lan-server.js (или в tools/).'
-          : (stderr || err.message || 'Ошибка чтения плейлиста').trim();
-        console.warn('⚠️ [PlaylistResolve]', msg);
-        reject(new Error(msg));
-        return;
-      }
+      execFile(bin, args, { timeout: 30000, maxBuffer: 12 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+        if (err) {
+          const msg = err.code === 'ENOENT'
+            ? 'yt-dlp не найден! Положи yt-dlp.exe рядом с lan-server.js (или в tools/).'
+            : (stderr || err.message || 'Ошибка чтения плейлиста').trim();
+          console.warn('⚠️ [PlaylistResolve]', msg);
+          reject(new Error(msg));
+          return;
+        }
 
-      let data = null;
-      try {
-        data = JSON.parse(String(stdout || '').trim());
-      } catch (parseErr) {
-        reject(new Error('Не удалось разобрать JSON плейлиста: ' + parseErr.message));
-        return;
-      }
+        let data = null;
+        try {
+          data = JSON.parse(String(stdout || '').trim());
+        } catch (parseErr) {
+          reject(new Error('Не удалось разобрать JSON плейлиста: ' + parseErr.message));
+          return;
+        }
 
-      const items = [];
-      const isPlaylist = data._type === 'playlist' && Array.isArray(data.entries);
+        const items = [];
+        const isPlaylist = data._type === 'playlist' && Array.isArray(data.entries);
 
-      if (isPlaylist) {
-        for (const ent of data.entries) {
-          if (!ent) continue;
-          const t = String(ent.title || '').trim();
-          if (t === '[Deleted video]' || t === '[Private video]') continue;
-          let itemUrl = ent.webpage_url || ent.url || '';
-          if (itemUrl && !/^https?:\/\//i.test(itemUrl)) {
-            const vidId = ent.id || itemUrl;
-            itemUrl = `https://www.youtube.com/watch?v=${vidId}`;
-          } else if (!itemUrl && ent.id) {
-            itemUrl = `https://www.youtube.com/watch?v=${ent.id}`;
+        if (isPlaylist) {
+          for (const ent of data.entries) {
+            if (!ent) continue;
+            const t = String(ent.title || '').trim();
+            if (t === '[Deleted video]' || t === '[Private video]') continue;
+            let itemUrl = ent.webpage_url || ent.url || '';
+            if (itemUrl && !/^https?:\/\//i.test(itemUrl)) {
+              const vidId = ent.id || itemUrl;
+              itemUrl = `https://www.youtube.com/watch?v=${vidId}`;
+            } else if (!itemUrl && ent.id) {
+              itemUrl = `https://www.youtube.com/watch?v=${ent.id}`;
+            }
+            if (!itemUrl) continue;
+            items.push({
+              url: itemUrl,
+              videoKey: ent.id || '',
+              title: (t || itemUrl).slice(0, 72),
+              duration: Number(ent.duration) || 0
+            });
           }
-          if (!itemUrl) continue;
+        } else {
           items.push({
-            url: itemUrl,
-            videoKey: ent.id || '',
-            title: (t || itemUrl).slice(0, 72),
-            duration: Number(ent.duration) || 0
+            url: data.webpage_url || rawUrl,
+            videoKey: data.id || startVideoId || '',
+            title: String(data.title || 'Видео').slice(0, 72),
+            duration: Number(data.duration) || 0
           });
         }
-      } else {
-        items.push({
-          url: data.webpage_url || rawUrl,
-          videoKey: data.id || startVideoId || '',
-          title: String(data.title || 'Видео').slice(0, 72),
-          duration: Number(data.duration) || 0
-        });
-      }
 
-      const payload = {
-        ok: true,
-        isPlaylist,
-        title: String(data.title || (isPlaylist ? 'Плейлист' : 'Видео')).slice(0, 72),
-        startVideoId,
-        items
-      };
-      playlistResolveCache.set(rawUrl, { payload, expiresAt: Date.now() + 10 * 60 * 1000 });
-      console.log(`📋 [PlaylistResolve] «${payload.title}» — ${items.length} видео`);
-      resolve(payload);
+        const payload = {
+          ok: true,
+          isPlaylist,
+          title: String(data.title || (isPlaylist ? 'Плейлист' : 'Видео')).slice(0, 72),
+          startVideoId,
+          items
+        };
+        playlistResolveCache.set(rawUrl, { payload, expiresAt: Date.now() + 10 * 60 * 1000 });
+        console.log(`📋 [PlaylistResolve] «${payload.title}» — ${items.length} видео`);
+        resolve(payload);
+      });
     });
   });
 }
@@ -180,53 +182,55 @@ function searchYouTubeViaYtDlp(query, limit = 6) {
       return;
     }
 
-    const bin = findYtDlpBinary();
-    const args = [
-      '--flat-playlist',
-      '--dump-single-json',
-      '--no-warnings',
-      '--js-runtimes', 'node',
-      `ytsearch${Math.min(10, Math.max(1, limit))}:${cleanQ}`
-    ];
+    getYtDlpJsRuntimeArgs().then((jsArgs) => {
+      const bin = findYtDlpBinary();
+      const args = [
+        '--flat-playlist',
+        '--dump-single-json',
+        '--no-warnings',
+        ...jsArgs,
+        `ytsearch${Math.min(10, Math.max(1, limit))}:${cleanQ}`
+      ];
 
-    execFile(bin, args, { timeout: 25000, maxBuffer: 6 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
-      if (err) {
-        const msg = err.code === 'ENOENT'
-          ? 'yt-dlp не найден! Положи yt-dlp.exe рядом с lan-server.js.'
-          : (stderr || err.message || 'Ошибка поиска YouTube').trim();
-        console.warn('⚠️ [MediaSearch]', msg);
-        reject(new Error(msg));
-        return;
-      }
-      let data = null;
-      try {
-        data = JSON.parse(String(stdout || '').trim());
-      } catch (parseErr) {
-        reject(new Error('Ошибка разбора ответа поиска: ' + parseErr.message));
-        return;
-      }
-      const entries = Array.isArray(data?.entries) ? data.entries : [];
-      const items = [];
-      for (const ent of entries) {
-        if (!ent) continue;
-        let url = ent.webpage_url || ent.url || '';
-        if (url && !/^https?:\/\//i.test(url)) {
-          url = `https://www.youtube.com/watch?v=${ent.id || url}`;
-        } else if (!url && ent.id) {
-          url = `https://www.youtube.com/watch?v=${ent.id}`;
+      execFile(bin, args, { timeout: 25000, maxBuffer: 6 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+        if (err) {
+          const msg = err.code === 'ENOENT'
+            ? 'yt-dlp не найден! Положи yt-dlp.exe рядом с lan-server.js.'
+            : (stderr || err.message || 'Ошибка поиска YouTube').trim();
+          console.warn('⚠️ [MediaSearch]', msg);
+          reject(new Error(msg));
+          return;
         }
-        if (!url) continue;
-        items.push({
-          id: ent.id || '',
-          url,
-          title: String(ent.title || 'Видео').slice(0, 80),
-          channel: String(ent.channel || ent.uploader || '').slice(0, 40),
-          duration: Number(ent.duration) || 0
-        });
-      }
-      searchResolveCache.set(cacheKey, { items, expiresAt: Date.now() + 10 * 60 * 1000 });
-      console.log(`🔍 [MediaSearch] «${cleanQ}» -> ${items.length} результатов`);
-      resolve(items);
+        let data = null;
+        try {
+          data = JSON.parse(String(stdout || '').trim());
+        } catch (parseErr) {
+          reject(new Error('Ошибка разбора ответа поиска: ' + parseErr.message));
+          return;
+        }
+        const entries = Array.isArray(data?.entries) ? data.entries : [];
+        const items = [];
+        for (const ent of entries) {
+          if (!ent) continue;
+          let url = ent.webpage_url || ent.url || '';
+          if (url && !/^https?:\/\//i.test(url)) {
+            url = `https://www.youtube.com/watch?v=${ent.id || url}`;
+          } else if (!url && ent.id) {
+            url = `https://www.youtube.com/watch?v=${ent.id}`;
+          }
+          if (!url) continue;
+          items.push({
+            id: ent.id || '',
+            url,
+            title: String(ent.title || 'Видео').slice(0, 80),
+            channel: String(ent.channel || ent.uploader || '').slice(0, 40),
+            duration: Number(ent.duration) || 0
+          });
+        }
+        searchResolveCache.set(cacheKey, { items, expiresAt: Date.now() + 10 * 60 * 1000 });
+        console.log(`🔍 [MediaSearch] «${cleanQ}» -> ${items.length} результатов`);
+        resolve(items);
+      });
     });
   });
 }
@@ -242,6 +246,207 @@ function findYtDlpBinary() {
     if (fs.existsSync(p)) return p;
   }
   return 'yt-dlp';
+}
+
+/* ---------- АВТОПОИСК JS-РАНТАЙМА ДЛЯ YT-DLP (DENO / NODE >= 22 / QUICKJS-NG) ---------- */
+const QUICKJS_DOWNLOAD_URL = 'https://github.com/quickjs-ng/quickjs/releases/latest/download/qjs-windows-x86_64.exe';
+const QUICKJS_MAX_BYTES = 20 * 1024 * 1024;
+
+let cachedJsRuntimeArgs = null;
+let jsRuntimeCacheExpiresAt = 0;
+let jsRuntimeResolvePromise = null;
+
+function parseMajorMinor(text) {
+  const m = String(text || '').match(/v?(\d+)\.(\d+)/i);
+  return m ? { major: parseInt(m[1], 10), minor: parseInt(m[2], 10) } : null;
+}
+
+function isVersionAtLeast(ver, minMajor, minMinor = 0) {
+  if (!ver) return false;
+  return ver.major > minMajor || (ver.major === minMajor && ver.minor >= minMinor);
+}
+
+function probeExecutable(binPath, args) {
+  return new Promise((resolve) => {
+    execFile(binPath, args, { timeout: 2500, windowsHide: true }, (err, stdout, stderr) => {
+      if (err) return resolve(null);
+      resolve(String(stdout || stderr || '').trim());
+    });
+  });
+}
+
+function downloadQuickJsBinary(url, destPath, redirectsLeft = 6) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, {
+      headers: { 'User-Agent': 'DebiX-Media-Server/1.0', 'Cache-Control': 'no-cache' },
+      timeout: 25000
+    }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        if (redirectsLeft <= 0) return reject(new Error('Too many redirects'));
+        const nextUrl = new URL(res.headers.location, url).toString();
+        return resolve(downloadQuickJsBinary(nextUrl, destPath, redirectsLeft - 1));
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode}`));
+      }
+
+      const total = parseInt(res.headers['content-length'] || '0', 10) || 0;
+      if (total > QUICKJS_MAX_BYTES) {
+        res.destroy();
+        return reject(new Error('QuickJS binary exceeds safety size limit'));
+      }
+
+      const partPath = `${destPath}.part`;
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      const out = fs.createWriteStream(partPath);
+      let bytes = 0;
+
+      res.on('data', (chunk) => {
+        bytes += chunk.length;
+        if (bytes > QUICKJS_MAX_BYTES) {
+          res.destroy();
+          out.destroy();
+          try { fs.unlinkSync(partPath); } catch (_) {}
+          return reject(new Error('QuickJS download exceeded safety limit'));
+        }
+      });
+
+      res.pipe(out);
+
+      out.on('finish', () => {
+        try {
+          if (bytes < 100 * 1024) throw new Error('Downloaded file too small');
+          const fd = fs.openSync(partPath, 'r');
+          const magic = Buffer.alloc(2);
+          fs.readSync(fd, magic, 0, 2, 0);
+          fs.closeSync(fd);
+          if (magic[0] !== 0x4D || magic[1] !== 0x5A) {
+            throw new Error('Invalid Windows executable header');
+          }
+          if (fs.existsSync(destPath)) {
+            try { fs.unlinkSync(destPath); } catch (_) {}
+          }
+          fs.renameSync(partPath, destPath);
+          resolve(destPath);
+        } catch (err) {
+          try { fs.unlinkSync(partPath); } catch (_) {}
+          reject(err);
+        }
+      });
+
+      out.on('error', (err) => {
+        try { fs.unlinkSync(partPath); } catch (_) {}
+        reject(err);
+      });
+      res.on('error', (err) => {
+        out.destroy();
+        try { fs.unlinkSync(partPath); } catch (_) {}
+        reject(err);
+      });
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('QuickJS download timeout'));
+    });
+  });
+}
+
+async function detectOrInstallJsRuntimeArgs() {
+  const isWin = process.platform === 'win32';
+  const ext = isWin ? '.exe' : '';
+  const userProfile = process.env.USERPROFILE || process.env.HOME || '';
+
+  const denoCandidates = [
+    path.join(__dirname, 'tools', `deno${ext}`),
+    path.join(__dirname, `deno${ext}`),
+    ...(userProfile ? [path.join(userProfile, '.deno', 'bin', `deno${ext}`)] : []),
+    'deno'
+  ];
+  for (const bin of denoCandidates) {
+    if (bin !== 'deno' && !fs.existsSync(bin)) continue;
+    const out = await probeExecutable(bin, ['--version']);
+    if (isVersionAtLeast(parseMajorMinor(out), 2, 3)) {
+      console.log(`⚡ [MediaJS] Используется JS-рантайм: deno (${bin})`);
+      return ['--js-runtimes', bin === 'deno' ? 'deno' : `deno:${path.resolve(bin)}`];
+    }
+  }
+
+  if (!process.pkg && isVersionAtLeast(parseMajorMinor(process.versions.node), 22, 0)) {
+    console.log(`⚡ [MediaJS] Используется текущий Node.js v${process.versions.node}`);
+    return ['--js-runtimes', `node:${path.resolve(process.execPath)}`];
+  }
+
+  const nodeCandidates = [
+    path.join(__dirname, 'tools', `node${ext}`),
+    ...(isWin ? [
+      path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'nodejs', 'node.exe'),
+      path.join(process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)', 'nodejs', 'node.exe')
+    ] : []),
+    'node'
+  ];
+  for (const bin of nodeCandidates) {
+    if (bin !== 'node' && !fs.existsSync(bin)) continue;
+    const out = await probeExecutable(bin, ['--version']);
+    if (isVersionAtLeast(parseMajorMinor(out), 22, 0)) {
+      console.log(`⚡ [MediaJS] Используется JS-рантайм: node (${bin}, ${out})`);
+      return ['--js-runtimes', bin === 'node' ? 'node' : `node:${path.resolve(bin)}`];
+    }
+  }
+
+  const qjsCandidates = [
+    path.join(__dirname, 'tools', `qjs${ext}`),
+    path.join(__dirname, `qjs${ext}`),
+    'qjs'
+  ];
+  for (const bin of qjsCandidates) {
+    if (bin !== 'qjs' && !fs.existsSync(bin)) continue;
+    const out = await probeExecutable(bin, ['-e', '1']);
+    if (out !== null) {
+      console.log(`⚡ [MediaJS] Используется JS-рантайм: quickjs (${bin})`);
+      return ['--js-runtimes', bin === 'qjs' ? 'quickjs' : `quickjs:${path.resolve(bin)}`];
+    }
+  }
+
+  if (isWin && process.arch === 'x64') {
+    const targetQjs = path.join(__dirname, 'tools', 'qjs.exe');
+    try {
+      console.log('⬇️ [MediaJS] Node 22+/Deno не найдены — загрузка официального QuickJS-NG в tools/qjs.exe...');
+      await downloadQuickJsBinary(QUICKJS_DOWNLOAD_URL, targetQjs);
+      const ok = await probeExecutable(targetQjs, ['-e', '1']);
+      if (ok !== null) {
+        console.log(`✅ [MediaJS] Официальный QuickJS-NG установлен: ${targetQjs}`);
+        return ['--js-runtimes', `quickjs:${path.resolve(targetQjs)}`];
+      }
+    } catch (err) {
+      console.warn('⚠️ [MediaJS] Не удалось скачать QuickJS-NG:', err.message);
+    }
+  }
+
+  console.warn('⚠️ [MediaJS] Подходящий JS-рантайм (Deno 2.3+ / Node 22+ / QuickJS) не найден — yt-dlp запустится в базовом режиме.');
+  return [];
+}
+
+function getYtDlpJsRuntimeArgs() {
+  if (cachedJsRuntimeArgs && Date.now() < jsRuntimeCacheExpiresAt) {
+    return Promise.resolve(cachedJsRuntimeArgs);
+  }
+  if (!jsRuntimeResolvePromise) {
+    jsRuntimeResolvePromise = detectOrInstallJsRuntimeArgs()
+      .then((args) => {
+        cachedJsRuntimeArgs = args;
+        jsRuntimeCacheExpiresAt = args.length > 0 ? Infinity : (Date.now() + 5 * 60 * 1000);
+        return args;
+      })
+      .catch(() => [])
+      .finally(() => {
+        jsRuntimeResolvePromise = null;
+      });
+  }
+  return jsRuntimeResolvePromise;
 }
 
 function isYtDlpNeededUrl(rawUrl) {
@@ -272,48 +477,50 @@ function resolveStreamViaYtDlp(rawUrl, kind = 'video') {
       return;
     }
 
-    const bin = findYtDlpBinary();
-    // Исключаем HLS (m3u8) и DASH-сегменты: браузерный <video>/<audio> требует прямой HTTP-поток
-    const noHls = '[protocol^=http][protocol!*=m3u8][protocol!*=dash]';
-    const fmt = kind === 'audio'
-      ? `bestaudio${noHls}[ext=m4a]/bestaudio${noHls}[ext=webm]/bestaudio${noHls}/bestaudio/best`
-      : `best${noHls}[ext=mp4][acodec!=none][vcodec!=none]/18/best${noHls}[acodec!=none][vcodec!=none]/best${noHls}[ext=mp4][vcodec!=none]/best${noHls}[vcodec!=none]`;
+    getYtDlpJsRuntimeArgs().then((jsArgs) => {
+      const bin = findYtDlpBinary();
+      // Исключаем HLS (m3u8) и DASH-сегменты: браузерный <video>/<audio> требует прямой HTTP-поток
+      const noHls = '[protocol^=http][protocol!*=m3u8][protocol!*=dash]';
+      const fmt = kind === 'audio'
+        ? `bestaudio${noHls}[ext=m4a]/bestaudio${noHls}[ext=webm]/bestaudio${noHls}/bestaudio/best`
+        : `best${noHls}[ext=mp4][acodec!=none][vcodec!=none]/18/best${noHls}[acodec!=none][vcodec!=none]/best${noHls}[ext=mp4][vcodec!=none]/best${noHls}[vcodec!=none]`;
 
-    const args = [
-      '--no-playlist',
-      '--no-warnings',
-      '--js-runtimes', 'node',
-      '-f', fmt,
-      '--print', '%(url)s',
-      '--print', '%(http_headers.User-Agent)s',
-      rawUrl
-    ];
+      const args = [
+        '--no-playlist',
+        '--no-warnings',
+        ...jsArgs,
+        '-f', fmt,
+        '--print', '%(url)s',
+        '--print', '%(http_headers.User-Agent)s',
+        rawUrl
+      ];
 
-    execFile(bin, args, { timeout: 25000, windowsHide: true }, (err, stdout, stderr) => {
-      if (err) {
-        const msg = err.code === 'ENOENT'
-          ? 'yt-dlp не найден! Положи yt-dlp.exe рядом с lan-server.js (или в tools/).'
-          : (stderr || err.message || 'Ошибка yt-dlp').trim();
-        console.warn(`⚠️ [MediaResolve:${kind}]`, msg);
-        reject(new Error(msg));
-        return;
-      }
-      const lines = String(stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      const streamUrl = lines.find(s => /^https?:\/\//i.test(s));
-      if (!streamUrl) {
-        console.warn(`⚠️ [MediaResolve:${kind}] yt-dlp не вернул прямой URL:`, stdout, stderr);
-        reject(new Error('yt-dlp не вернул прямую ссылку на медиапоток'));
-        return;
-      }
-      const uaLine = lines.find(s => s !== streamUrl && s !== 'NA');
-      const result = {
-        streamUrl,
-        userAgent: uaLine || '',
-        expiresAt: Date.now() + 25 * 60 * 1000
-      };
-      mediaResolveCache.set(cacheKey, result);
-      console.log(`🎬 [MediaResolve:${kind}] Поток готов для ${rawUrl.slice(0, 60)}`);
-      resolve(result);
+      execFile(bin, args, { timeout: 25000, windowsHide: true }, (err, stdout, stderr) => {
+        if (err) {
+          const msg = err.code === 'ENOENT'
+            ? 'yt-dlp не найден! Положи yt-dlp.exe рядом с lan-server.js (или в tools/).'
+            : (stderr || err.message || 'Ошибка yt-dlp').trim();
+          console.warn(`⚠️ [MediaResolve:${kind}]`, msg);
+          reject(new Error(msg));
+          return;
+        }
+        const lines = String(stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        const streamUrl = lines.find(s => /^https?:\/\//i.test(s));
+        if (!streamUrl) {
+          console.warn(`⚠️ [MediaResolve:${kind}] yt-dlp не вернул прямой URL:`, stdout, stderr);
+          reject(new Error('yt-dlp не вернул прямую ссылку на медиапоток'));
+          return;
+        }
+        const uaLine = lines.find(s => s !== streamUrl && s !== 'NA');
+        const result = {
+          streamUrl,
+          userAgent: uaLine || '',
+          expiresAt: Date.now() + 25 * 60 * 1000
+        };
+        mediaResolveCache.set(cacheKey, result);
+        console.log(`🎬 [MediaResolve:${kind}] Поток готов для ${rawUrl.slice(0, 60)}`);
+        resolve(result);
+      });
     });
   });
 }
@@ -695,4 +902,6 @@ setInterval(broadcastRoomList, 10000);
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Сервер DebiX (HTTP + WebSocket + Серверы + Мастерская UGC) запущен на порту ${PORT}!`);
   console.log(`🌐 Друзья в Radmin VPN могут ввести твой IP (26.x.x.x) или открыть http://ТВОЙ_IP_RADMIN:${PORT} в браузере!`);
+  // Неблокирующая проверка/докачка JS-рантайма для yt-dlp в фоне
+  getYtDlpJsRuntimeArgs().catch(() => {});
 });
