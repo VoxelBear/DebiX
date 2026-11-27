@@ -15,10 +15,12 @@
     "assets": [
       "launcher.html",
       "lan-server.js",
+      "icon.png",
       "node_modules/ws/**/*"
     ]
   },
   "devDependencies": {
-    "pkg": "^5.8.1"
+    "pkg": "^5.8.1",
+    "rcedit": "^5.0.2"
   }
 }

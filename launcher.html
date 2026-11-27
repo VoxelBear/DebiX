@@ -352,6 +352,18 @@
         </div>
     </div>
 
+    <div id="launcherUpdateBanner" style="display: none; padding: 12px 32px; background: linear-gradient(90deg, rgba(59, 130, 246, 0.22), rgba(16, 185, 129, 0.18)); border-bottom: 1px solid rgba(96, 165, 250, 0.35); align-items: center; justify-content: space-between; gap: 16px;">
+        <div style="min-width: 0;">
+            <div id="launcherUpdateTitle" style="font-size: 12px; font-weight: 800; color: #93c5fd;">
+                ✨ Доступна новая версия лаунчера
+            </div>
+            <div id="launcherUpdateNotes" style="font-size: 11px; color: #cbd5e1; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></div>
+        </div>
+        <button id="btnUpdateLauncher" class="btn btn-update" style="padding: 9px 16px; font-size: 12px; flex-shrink: 0;">
+            ⬆️ Обновить лаунчер
+        </button>
+    </div>
+
     <div class="launcher-body">
         <div class="panel-box">
             <div class="panel-title">
@@ -413,7 +425,6 @@
             <div style="display: flex; gap: 10px;">
                 <button id="btnCheck" class="btn btn-secondary">🔄 Проверить обновления</button>
                 <button id="btnUpdate" class="btn btn-update" style="display: none;">⬇️ Скачать обновление</button>
-                <button id="btnQuit" class="btn btn-secondary" title="Остановить сервер и закрыть лаунчер">✖ Выход</button>
             </div>
             <button id="btnPlay" class="btn btn-play">▶ ИГРАТЬ В DEBIX</button>
         </div>
@@ -480,13 +491,46 @@
             });
         }
 
-        const isBusy = st.status === 'checking' || st.status === 'updating' || Boolean(st.ytDlpBusy);
+        // Если лаунчер подменил .exe и перезапускается — закрываем старое окно, новое откроется само
+        if (st.status === 'launcher_restarting') {
+            $('btnCheck').disabled = true;
+            $('btnUpdate').disabled = true;
+            $('btnPlay').disabled = true;
+            if ($('btnYtDlp')) $('btnYtDlp').disabled = true;
+            if ($('btnUpdateLauncher')) $('btnUpdateLauncher').disabled = true;
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            setTimeout(() => { try { window.close(); } catch (e) {} }, 550);
+            return;
+        }
+
+        // Плашка доступного обновления самого DebiX-Launcher.exe
+        const lu = st.launcherUpdate;
+        const luBanner = $('launcherUpdateBanner');
+        if (lu && lu.available) {
+            luBanner.style.display = 'flex';
+            const mb = lu.size ? ` (${(lu.size / (1024 * 1024)).toFixed(1)} МБ)` : '';
+            $('launcherUpdateTitle').textContent = `✨ Доступен DebiX Launcher v${lu.version}${mb} — подпись Ed25519 подтверждена`;
+            $('launcherUpdateNotes').textContent = lu.notes || 'Обновление клиента лаунчера с автоматическим перезапуском.';
+        } else {
+            luBanner.style.display = 'none';
+        }
+
+        const isBusy = st.status === 'checking' || st.status === 'updating' || Boolean(st.ytDlpBusy) || Boolean(st.launcherUpdating);
         $('btnCheck').disabled = isBusy;
         $('btnUpdate').disabled = isBusy;
         $('btnYtDlp').disabled = isBusy;
+        $('btnUpdateLauncher').disabled = isBusy || Boolean(st.gameServerRunning);
+        $('btnUpdateLauncher').textContent = st.launcherUpdating
+            ? '⏳ Обновление...'
+            : (st.gameServerRunning ? 'Закройте игру для обновления' : '⬆️ Обновить лаунчер');
 
         const ytEl = $('ytDlpStatusText');
-        if (st.ytDlpBusy || st.ytDlpStatus === 'downloading') {
+        if (typeof st.ytDlpStatus === 'undefined') {
+            ytEl.style.color = '#94a3b8';
+            ytEl.textContent = 'Требуется новый DebiX-Launcher.exe';
+            $('btnYtDlp').style.display = 'none';
+        } else if (st.ytDlpBusy || st.ytDlpStatus === 'downloading') {
+            $('btnYtDlp').style.display = 'inline-flex';
             ytEl.style.color = '#60a5fa';
             ytEl.textContent = '⏳ Загрузка с github.com/yt-dlp/yt-dlp...';
             $('btnYtDlp').textContent = '⏳ ...';
@@ -515,7 +559,7 @@
 
         $('btnPlay').disabled = isBusy || changes.length > 0;
         $('btnPlay').textContent = st.gameServerRunning
-            ? '🟢 СЕРВЕР ЗАПУЩЕН — ОТКРЫТЬ ИГРУ'
+            ? '🟢 ОТКРЫТЬ ИГРУ (✕ ОСТАНОВИТ СЕРВЕР)'
             : '▶ ИГРАТЬ В DEBIX';
     }
 
@@ -545,6 +589,12 @@
         await fetchStatus();
     });
 
+    $('btnUpdateLauncher').addEventListener('click', async () => {
+        $('btnUpdateLauncher').disabled = true;
+        await fetch('/api/launcher/self-update', { method: 'POST' });
+        await fetchStatus();
+    });
+
     let isLaunchingGame = false;
 
     $('btnPlay').addEventListener('click', async () => {
@@ -565,11 +615,17 @@
         }
     });
 
-    $('btnQuit').addEventListener('click', async () => {
-        try {
-            await fetch('/api/launcher/quit', { method: 'POST' });
-        } catch (e) {}
-        window.close();
+    // Держим SSE-канал открытым: при закрытии окна крестиком (✕) лаунчер и lan-server.js выключаются полностью
+    let lifecycleStream = null;
+    try {
+        lifecycleStream = new EventSource('/api/launcher/events');
+    } catch (e) {}
+
+    window.addEventListener('pagehide', () => {
+        try { if (lifecycleStream) lifecycleStream.close(); } catch (e) {}
+        if (navigator.sendBeacon) {
+            navigator.sendBeacon('/api/launcher/closing');
+        }
     });
 
     fetchStatus();
